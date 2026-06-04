@@ -181,21 +181,21 @@ body {
     var(--surface);
 }
 
-.hero-brand {
-  display: flex;
-  justify-content: center;
-  padding: 1.75rem 1.5rem 0;
-}
-
 .hero-inner {
   max-width: 1400px;
   margin: 0 auto;
-  padding: 1.25rem 1.5rem 2rem;
+  padding: 2.5rem 1.5rem 2rem;
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   justify-content: space-between;
   gap: 1.5rem;
+}
+
+.hero-title-row {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
 }
 
 .eyebrow {
@@ -209,9 +209,10 @@ body {
 
 .hero-logo {
   display: block;
+  flex-shrink: 0;
   width: 168px;
   height: auto;
-  max-width: min(168px, 40vw);
+  max-width: min(168px, 36vw);
   object-fit: contain;
   object-position: center;
 }
@@ -1467,8 +1468,9 @@ body {
 }
 
 @media (max-width: 640px) {
-  .hero-brand {
-    padding-top: 1.25rem;
+  .hero-title-row {
+    flex-wrap: wrap;
+    gap: 0.75rem;
   }
 
   .hero-logo {
@@ -1476,7 +1478,7 @@ body {
   }
 
   .hero-inner {
-    padding: 1rem 1rem 1.5rem;
+    padding: 1.5rem 1rem;
   }
   .dashboard-tiles {
     padding-left: 1rem;
