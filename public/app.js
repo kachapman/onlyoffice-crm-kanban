@@ -201,6 +201,20 @@ function setTileBodyCollapsed(tileId, collapsed) {
   if (collapsed) state.tileLayout.collapsed[tileId] = true;
   else delete state.tileLayout.collapsed[tileId];
   saveLayoutToStorage();
+  mountDashboardTiles();
+}
+
+/** Collapsed tiles first; feed and tasks stay at the very top when collapsed. */
+function sortTilesForDisplay(order, nodes) {
+  const known = order.filter((id) => nodes.has(id));
+  const pinFirst = ["tile-feed", "tile-tasks"];
+  const collapsed = known.filter((id) => tileBodyCollapsed(id));
+  const expanded = known.filter((id) => !tileBodyCollapsed(id));
+  const collapsedSorted = [
+    ...pinFirst.filter((id) => collapsed.includes(id)),
+    ...collapsed.filter((id) => !pinFirst.includes(id)),
+  ];
+  return [...collapsedSorted, ...expanded];
 }
 
 function applyTileBodyCollapsed(tileEl, tileId) {
@@ -619,11 +633,13 @@ function mountDashboardTiles() {
     if (child.dataset.tileId) nodes.set(child.dataset.tileId, child);
   }
   root.innerHTML = "";
-  for (const tileId of state.tileLayout.order) {
+  const displayOrder = sortTilesForDisplay(state.tileLayout.order, nodes);
+  for (const tileId of displayOrder) {
     const node = nodes.get(tileId);
     if (node) {
       root.appendChild(node);
       applyTileLayoutClasses(node, tileId);
+      applyTileBodyCollapsed(node, tileId);
     }
   }
 }

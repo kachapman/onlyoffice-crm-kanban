@@ -524,7 +524,7 @@ body {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-auto-rows: auto;
-  grid-auto-flow: row;
+  grid-auto-flow: row dense;
   gap: 1.25rem;
   align-items: start;
 }
@@ -553,10 +553,20 @@ body {
   max-height: none;
 }
 
-.dashboard-tile.tile-double .feed-list {
+.dashboard-tile.tile-double .feed-list,
+.dashboard-tile.tile-double .tasks-by-user {
   max-height: none;
   flex: 1;
   min-height: 0;
+}
+
+.dashboard-tile.tile-body-collapsed[data-tile-id="tile-feed"],
+.dashboard-tile.tile-body-collapsed[data-tile-id="tile-tasks"] {
+  order: -10;
+}
+
+.dashboard-tile.tile-body-collapsed:not([data-tile-id="tile-feed"]):not([data-tile-id="tile-tasks"]) {
+  order: -5;
 }
 
 .dashboard-tile.tile-double.board-group-tile {
@@ -689,33 +699,46 @@ body {
   color: var(--accent);
 }
 
+.dashboard-tile.feed-panel,
+.dashboard-tile.tasks-panel {
+  display: flex;
+  flex-direction: column;
+}
+
 .dashboard-tile .panel-header {
+  flex-shrink: 0;
   padding: 0.85rem 1rem 0;
-  margin-bottom: 0;
+  margin-bottom: 0.65rem;
 }
 
-.dashboard-tile .feed-list {
+.dashboard-tile .feed-list,
+.dashboard-tile .tasks-by-user {
+  list-style: none;
   margin: 0 1rem 1rem;
+  padding: 0;
+  flex: 1;
+  min-height: 120px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
 }
 
-.dashboard-tile.tasks-panel .panel-header {
-  padding: 0.85rem 1rem 0;
+.dashboard-tile .tasks-by-user .board-loading {
+  padding: 0.65rem 0.85rem;
+  margin: 0;
 }
 
-.dashboard-tile.tasks-panel .tasks-by-user {
-  margin: 0 0 1rem;
-  padding: 0 1rem;
-}
-
-.dashboard-tile.tasks-panel .tasks-user-block {
-  padding: 0.75rem 0;
-  border-left: none;
-  border-right: none;
-  border-radius: 0;
+.dashboard-tile .tasks-user-block {
+  padding: 0.65rem 0.85rem;
+  margin: 0;
   background: transparent;
+  border: none;
+  border-radius: 0;
 }
 
-.dashboard-tile.tasks-panel .tasks-user-block + .tasks-user-block {
+.dashboard-tile .tasks-user-block + .tasks-user-block {
   border-top: 1px solid var(--border);
 }
 
@@ -743,10 +766,6 @@ body {
   margin-bottom: 0.65rem;
 }
 
-.feed-panel .panel-header {
-  padding-right: 1rem;
-}
-
 .panel-header h2 {
   margin: 0;
   font-size: 1rem;
@@ -762,32 +781,6 @@ body {
   margin-left: auto;
   font-size: 0.75rem;
   opacity: 0.85;
-}
-
-.feed-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  max-height: 220px;
-  overflow-y: auto;
-  flex: 1;
-  min-height: 120px;
-}
-
-.feed-panel.dashboard-tile {
-  display: flex;
-  flex-direction: column;
-}
-
-.feed-panel .panel-header {
-  flex-shrink: 0;
-}
-
-.feed-panel .feed-list {
-  margin: 0 1rem 1rem;
 }
 
 .feed-list li {
@@ -854,14 +847,14 @@ body {
 .tasks-by-user {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 0;
 }
 
 .tasks-user-block {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 0.75rem 1rem;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0.65rem 0.85rem;
 }
 
 .tasks-user-block h3 {
