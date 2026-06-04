@@ -64,6 +64,7 @@ function groupFilterSummary(group) {
   if (group.dealStatus && group.dealStatus !== "all") {
     parts.push(group.dealStatus === "open" ? "Open deals" : "Closed deals");
   }
+  if (group.showOnlyRedOpportunities) parts.push("Red opportunities only");
   return parts.join(" · ");
 }
 
@@ -939,6 +940,7 @@ function newGroup(overrides = {}) {
     visibleStageIds: [],
     stageColumnsConfigured: false,
     showEmptyStages: true,
+    showOnlyRedOpportunities: false,
     opportunities: [],
     ...overrides,
   };
@@ -1116,12 +1118,37 @@ async function fetchOpportunitiesForGroup(group) {
     items = items.filter((o) => oppMatchesSelectedTags(o, group.tagTitles, catalog));
   }
 
+  if (group.showOnlyRedOpportunities) {
+    items = items.filter(isRedOpportunity);
+  }
+
   return items;
 }
 
+function opportunityDueDateRaw(opp) {
+  return (
+    opp.expectedCloseDate?.value ??
+    opp.expectedCloseDate ??
+    opp.ExpectedCloseDate?.value ??
+    opp.ExpectedCloseDate ??
+    null
+  );
+}
+
 function oppDueDateMs(opp) {
-  const d = opp.expectedCloseDate?.value ?? opp.expectedCloseDate ?? opp.ExpectedCloseDate?.value;
-  return new Date(d || 0).getTime();
+  return new Date(opportunityDueDateRaw(opp) || 0).getTime();
+}
+
+/** Due today or earlier — matches CRM “red” overdue opportunities. */
+function isRedOpportunity(opp) {
+  const raw = opportunityDueDateRaw(opp);
+  if (raw == null || raw === "") return false;
+  const due = new Date(raw);
+  if (Number.isNaN(due.getTime())) return false;
+  const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate()).getTime();
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  return dueDay <= today;
 }
 
 function oppCreatedMs(opp) {
@@ -1888,6 +1915,12 @@ function renderBoardGroups() {
               </label>
             </div>
             <div class="field">
+              <label class="checkbox-filter">
+                <input type="checkbox" class="show-only-red" />
+                Show only red opportunities
+              </label>
+            </div>
+            <div class="field">
               <label>Tags</label>
               <div class="tag-multiselect"></div>
             </div>
@@ -1961,6 +1994,17 @@ function renderBoardGroups() {
         saveGroupsToStorage();
         updateGroupFilterSummary(group);
         renderGroupBoard(group, $(".board", section));
+      });
+    }
+
+    const showOnlyRed = $(".show-only-red", section);
+    if (showOnlyRed) {
+      showOnlyRed.checked = !!group.showOnlyRedOpportunities;
+      showOnlyRed.addEventListener("change", () => {
+        group.showOnlyRedOpportunities = showOnlyRed.checked;
+        saveGroupsToStorage();
+        updateGroupFilterSummary(group);
+        refreshGroup(group);
       });
     }
 
