@@ -414,6 +414,27 @@ body {
   font-weight: 600;
 }
 
+.card-details {
+  margin-top: 0.45rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.card-description {
+  margin: 0 0 0.35rem;
+  color: var(--text);
+}
+
+.card-detail-line {
+  margin: 0.15rem 0 0;
+}
+
+.card-detail-label {
+  color: var(--muted);
+  font-weight: 600;
+}
+
 .card-stage-pill {
   display: inline-block;
   margin-top: 0.35rem;
