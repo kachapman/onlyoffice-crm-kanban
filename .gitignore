@@ -1,0 +1,22 @@
+# Secrets and local config
+.env
+*.local.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Build artifacts (OnlyOffice module)
+onlyoffice-module/**/bin/
+onlyoffice-module/**/obj/
+*.user
+*.suo

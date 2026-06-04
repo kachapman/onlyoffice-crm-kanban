@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vanguard CRM — Opportunity Board</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="login-screen" class="login-screen hidden">
+    <div class="login-card">
+      <h1 class="login-title">Vanguard CRM board</h1>
+      <p class="login-sub">Sign in with your OnlyOffice account at <strong>office.vanguardadj.com</strong>.</p>
+      <form id="login-form">
+        <label>
+          Portal URL
+          <input type="url" id="portal-url" value="https://office.vanguardadj.com" required />
+        </label>
+        <label>
+          Username
+          <input type="text" id="username" autocomplete="username" required />
+        </label>
+        <label>
+          Password
+          <input type="password" id="password" autocomplete="current-password" required />
+        </label>
+        <p id="login-error" class="error-text hidden"></p>
+        <button type="submit" class="btn btn-primary btn-block">Sign in</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="app" class="app hidden">
+    <header class="hero">
+      <div class="hero-inner">
+        <div class="hero-copy">
+          <p class="eyebrow">Vanguard · OnlyOffice CRM</p>
+          <h1 class="hero-title">Opportunity <em>board</em></h1>
+          <p class="hero-desc">
+            View CRM opportunities in multiple filtered groups. Open deals in CRM in a new tab; mark tasks complete here.
+          </p>
+        </div>
+        <div class="hero-actions">
+          <button type="button" id="add-group-btn" class="btn btn-primary">Add group</button>
+          <button type="button" id="refresh-btn" class="btn btn-secondary">Refresh all</button>
+          <button type="button" id="logout-btn" class="btn btn-ghost">Sign out</button>
+        </div>
+      </div>
+    </header>
+
+    <section class="global-meta">
+      <span id="status-text">Ready</span>
+      <span id="portal-label" class="portal-label"></span>
+    </section>
+
+    <div id="dashboard-tiles" class="dashboard-tiles" aria-label="Dashboard tiles"></div>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+
+  <div id="confirm-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+    <div class="modal-backdrop" data-confirm-dismiss></div>
+    <div class="modal-card">
+      <h2 id="confirm-modal-title" class="modal-title">Confirm</h2>
+      <p id="confirm-modal-message" class="modal-message"></p>
+      <div class="modal-actions">
+        <button type="button" id="confirm-modal-cancel" class="btn btn-secondary">Cancel</button>
+        <button type="button" id="confirm-modal-ok" class="btn btn-danger">Remove</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>

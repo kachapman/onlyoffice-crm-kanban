@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms</value></resheader>
+  <data name="ProductName"><value>Opportunity Board</value></data>
+  <data name="ProductDescription"><value>Kanban view of CRM opportunities</value></data>
+  <data name="ExtendedProductDescription"><value>Filter and group CRM deals; drag cards to change pipeline stage</value></data>
+  <data name="ProductAdminOpportunities"><value>View board|Move opportunities between stages</value></data>
+  <data name="ProductUserOpportunities"><value>View board</value></data>
+  <data name="Search"><value>Opportunity Board</value></data>
+  <data name="BoardTitle"><value>Pipeline board</value></data>
+  <data name="BoardDescription"><value>Live CRM opportunities grouped by your filters. Drag between columns when grouped by stage.</value></data>
+  <data name="Refresh"><value>Refresh</value></data>
+  <data name="OpenCrm"><value>Open CRM</value></data>
+  <data name="SearchLabel"><value>Search</value></data>
+  <data name="GroupBy"><value>Group by</value></data>
+  <data name="GroupStage"><value>Pipeline stage</value></data>
+  <data name="GroupResponsible"><value>Responsible</value></data>
+  <data name="GroupOutcome"><value>Outcome</value></data>
+  <data name="StageType"><value>Stage type</value></data>
+  <data name="All"><value>All</value></data>
+  <data name="OpenOnly"><value>Open only</value></data>
+  <data name="ClosedWon"><value>Closed and won</value></data>
+  <data name="ClosedLost"><value>Closed and lost</value></data>
+  <data name="Stage"><value>Stage</value></data>
+  <data name="AllStages"><value>All stages</value></data>
+  <data name="Tags"><value>Tags</value></data>
+  <data name="TagsHint"><value>comma-separated</value></data>
+  <data name="ContactId"><value>Contact ID</value></data>
+  <data name="FromDate"><value>From</value></data>
+  <data name="ToDate"><value>To</value></data>
+  <data name="Loading"><value>Loading…</value></data>
+</root>

@@ -1,0 +1,52 @@
+OnlyOffice Workspace — Opportunity Board custom module
+========================================================
+
+This module hosts the CRM kanban inside your portal so any user with access
+can open it from any machine at:
+
+  https://YOUR-PORTAL/Products/OpportunityBoard/Default.aspx
+
+No separate Python server is required for production.
+
+Prerequisites
+-------------
+- ONLYOFFICE Community Server source or installation tree
+- Windows build environment: Visual Studio / MSBuild, .NET Framework 4.8
+- CRM module enabled on the portal
+
+Install steps
+-------------
+1. Clone Community Server (if you have not already):
+   https://github.com/ONLYOFFICE/CommunityServer
+
+2. Copy this folder into Products:
+   FROM: onlyoffice-module/ASC.Web.OpportunityBoard
+   TO:   CommunityServer/web/studio/ASC.Web.Studio/Products/OpportunityBoard
+
+3. Register the project in build/msbuild/build.proj (order matters — add near Sample):
+   <ProjectToBuild Include="$(ASCDir)web\studio\ASC.Web.Studio\Products\OpportunityBoard\ASC.Web.OpportunityBoard.csproj"/>
+
+4. Build:
+   run build/Build.bat
+   (or build ASC.Web.OpportunityBoard.csproj in Visual Studio; output goes to web/studio/ASC.Web.Studio/bin/)
+
+5. Enable the module:
+   Portal → Settings → Modules & Tools (Management.aspx?type=2)
+   Enable "Opportunity Board"
+
+6. Open the board:
+   Header app menu → Opportunity Board
+   or direct URL above
+
+Optional: custom API module
+---------------------------
+You do NOT need ASC.Api.* for this board — it uses the built-in CRM REST API
+via Teamlab (getCrmOpportunities, getCrmDealMilestones, updateCrmOpportunityMilestone).
+See: https://helpcenter.onlyoffice.com/workspace/development/add-custom-modules.aspx
+
+Local dev fallback (standalone)
+-------------------------------
+The crm-kanban/server.py proxy in the parent folder is only for offline UI testing
+without rebuilding Community Server. Production should use the Workspace module.
+
+Product ID (do not change after deploy): 7C4E9A2B-1D3F-4E8A-9B2C-5D6F7A8B9C0D

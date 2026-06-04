@@ -1,0 +1,31 @@
+Opportunity Board — Docker / DigitalOcean one-click deploy
+============================================================
+
+Your setup: OnlyOffice Community Server in Docker on Ubuntu (DO droplet).
+
+The custom module (ASC.Web.OpportunityBoard) must be COMPILED on Windows or
+with MSBuild against the same Community Server version as your container, then
+the built DLL + aspx/js/css copied into the running container or a custom image.
+
+High-level path:
+1. On a build machine: clone CommunityServer, install module, run build/Build.bat
+2. Copy from web/studio/ASC.Web.Studio/bin/ and Products/OpportunityBoard/ into the container
+3. Restart the portal container
+4. Enable module: Settings → Modules & Tools → Opportunity Board
+
+Defaults for your requirements (also in local test app):
+- Group by: Pipeline stage or Tag
+- Deals chips: Open / Closed / All
+- Sort: Stage (default), title, value, expected close
+- Server filter: tags (comma-separated), opportunityStagesid, stageType
+
+Docker-specific tips:
+- Find container: docker ps
+- Portal files often under /var/www/onlyoffice or similar — inspect image docs
+- Persist custom Products/OpportunityBoard in a volume so upgrades do not wipe it
+- For HTTPS office.vanguardadj.com the module URL will be:
+  https://office.vanguardadj.com/Products/OpportunityBoard/Default.aspx
+
+Until the module is deployed, use the local test portal:
+  cd /home/zionad/crm-kanban && ./start.sh
+  → http://127.0.0.1:8765 (sign in with same Vanguard credentials)
