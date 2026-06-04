@@ -5,8 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Vanguard Adjusting Dashboard</title>
   <meta name="description" content="CRM Viewer and organizer for Opportunities, Notifications and Tasks." />
-  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png" />
-  <link rel="apple-touch-icon" sizes="192x192" href="favicon-192.png" />
+  <link rel="icon" href="favicon.ico?v=3" sizes="any" />
+  <link rel="icon" type="image/png" sizes="64x64" href="favicon-64.png?v=3" />
+  <link rel="icon" type="image/png" sizes="48x48" href="favicon-48.png?v=3" />
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png?v=3" />
+  <link rel="apple-touch-icon" sizes="192x192" href="favicon-192.png?v=3" />
   <meta property="og:type" content="website" />
   <meta property="og:title" content="Vanguard Adjusting Dashboard" />
   <meta property="og:description" content="CRM Viewer and organizer for Opportunities, Notifications and Tasks." />
@@ -46,10 +49,11 @@
 
   <div id="app" class="app hidden">
     <header class="hero">
+      <button type="button" id="logout-btn" class="btn btn-ghost hero-sign-out">Sign out</button>
       <div class="hero-inner">
         <div class="hero-copy">
           <p class="eyebrow">Vanguard · OnlyOffice CRM</p>
-          <h1 class="hero-title">Opportunity <em>dashboard</em></h1>
+          <h1 class="hero-title">Workspace <em>dashboard</em></h1>
           <p class="hero-desc">
             CRM Viewer and organizer for Opportunities, Notifications and Tasks.
           </p>
@@ -66,9 +70,9 @@
             />
             <div id="global-opp-search-results" class="global-opp-search-results hidden" role="listbox"></div>
           </div>
-          <button type="button" id="add-group-btn" class="btn btn-primary">Add group</button>
+          <button type="button" id="new-opportunity-btn" class="btn btn-primary">New Opportunity</button>
+          <button type="button" id="add-tile-btn" class="btn btn-secondary">Add Tile</button>
           <button type="button" id="refresh-btn" class="btn btn-secondary">Refresh all</button>
-          <button type="button" id="logout-btn" class="btn btn-ghost">Sign out</button>
         </div>
       </div>
       <div class="hero-logo-wrap" aria-hidden="true">
@@ -88,6 +92,77 @@
 
   <div id="toast" class="toast hidden" role="status"></div>
 
+  <div id="add-tile-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="add-tile-modal-title">
+    <div class="modal-backdrop" data-add-tile-dismiss></div>
+    <div class="modal-card modal-card-add-tile">
+      <h2 id="add-tile-modal-title" class="modal-title">Add tile</h2>
+      <p class="modal-message">Choose a tile type for your dashboard.</p>
+      <div id="add-tile-options" class="add-tile-options">
+        <button type="button" id="add-tile-opportunity-group" class="add-tile-option">
+          <span class="add-tile-option-title">Opportunity Group</span>
+          <span class="add-tile-option-desc">Kanban board with filters, stages, and tags — same as before.</span>
+        </button>
+        <button type="button" id="add-tile-calendar" class="add-tile-option">
+          <span class="add-tile-option-title">Calendar</span>
+          <span class="add-tile-option-desc">Monthly view of a public Proton (or other) ICS calendar feed.</span>
+        </button>
+        <button type="button" id="add-tile-notes" class="add-tile-option">
+          <span class="add-tile-option-title">Notes / To-do</span>
+          <span class="add-tile-option-desc">Simple notes with basic markdown and a copy-all button.</span>
+        </button>
+      </div>
+      <div id="add-tile-notes-form" class="add-tile-notes-form hidden">
+        <div class="field">
+          <label for="add-tile-notes-name">Tile name</label>
+          <input type="text" id="add-tile-notes-name" autocomplete="off" placeholder="Notes" />
+        </div>
+        <div class="modal-actions">
+          <button type="button" id="add-tile-notes-back" class="btn btn-secondary">Back</button>
+          <button type="button" id="add-tile-notes-create" class="btn btn-primary">Add notes tile</button>
+        </div>
+      </div>
+      <div id="add-tile-calendar-form" class="add-tile-calendar-form hidden">
+        <div class="field">
+          <label for="add-tile-calendar-name">Calendar name</label>
+          <input type="text" id="add-tile-calendar-name" autocomplete="off" placeholder="My calendar" />
+        </div>
+        <div class="field">
+          <label for="add-tile-calendar-url">Public calendar URL (ICS)</label>
+          <input
+            type="url"
+            id="add-tile-calendar-url"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="https://calendar.proton.me/api/calendar/v1/url/…/calendar.ics?…"
+          />
+          <span class="field-hint" title="Proton Calendar → Settings → Calendar → Share → Subscribe / public link">
+            Tip: In Proton Calendar, open your calendar’s <strong>Share</strong> settings and copy the public
+            <strong>ICS subscribe link</strong>, then paste it here.
+          </span>
+        </div>
+        <p id="add-tile-error" class="modal-error hidden" role="alert"></p>
+        <div class="modal-actions">
+          <button type="button" id="add-tile-calendar-back" class="btn btn-secondary">Back</button>
+          <button type="button" id="add-tile-calendar-create" class="btn btn-primary">Add calendar tile</button>
+        </div>
+      </div>
+      <div class="modal-actions" id="add-tile-modal-actions">
+        <button type="button" id="add-tile-cancel" class="btn btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="calendar-event-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="calendar-event-modal-title">
+    <div class="modal-backdrop" data-calendar-event-dismiss></div>
+    <div class="modal-card modal-card-calendar-event">
+      <h2 id="calendar-event-modal-title" class="modal-title"></h2>
+      <div id="calendar-event-modal-body" class="calendar-event-modal-body"></div>
+      <div class="modal-actions">
+        <button type="button" id="calendar-event-modal-close" class="btn btn-secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
   <div id="confirm-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
     <div class="modal-backdrop" data-confirm-dismiss></div>
     <div class="modal-card">
@@ -97,6 +172,57 @@
         <button type="button" id="confirm-modal-cancel" class="btn btn-secondary">Cancel</button>
         <button type="button" id="confirm-modal-ok" class="btn btn-danger">Remove</button>
       </div>
+    </div>
+  </div>
+
+  <div id="deal-edit-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="deal-edit-modal-title">
+    <div class="modal-backdrop" data-deal-edit-dismiss></div>
+    <div class="modal-card modal-card-form modal-card-deal-edit">
+      <div class="deal-edit-modal-head">
+        <h2 id="deal-edit-modal-title" class="modal-title">Edit deal</h2>
+        <a id="deal-edit-crm-link" class="deal-edit-crm-link" href="#" target="_blank" rel="noopener noreferrer">Open in CRM</a>
+      </div>
+      <form id="deal-edit-form" class="modal-form">
+        <div class="field">
+          <label for="deal-edit-due">Expected close date</label>
+          <input type="date" id="deal-edit-due" name="expectedCloseDate" />
+        </div>
+        <div class="field">
+          <label for="deal-edit-stage">Stage</label>
+          <select id="deal-edit-stage" name="stageId" required></select>
+        </div>
+        <div class="field">
+          <label>Tags</label>
+          <div id="deal-edit-tags" class="deal-edit-tags" aria-live="polite"></div>
+          <div class="deal-edit-tag-add">
+            <select id="deal-edit-tag-add" aria-label="Add tag">
+              <option value="">Add tag…</option>
+            </select>
+          </div>
+        </div>
+        <fieldset class="deal-edit-note-fieldset">
+          <legend class="deal-edit-note-legend">Event note <span class="field-optional">(optional)</span></legend>
+          <div id="deal-edit-note-category-field" class="field hidden">
+            <label for="deal-edit-note-category">Note type</label>
+            <select id="deal-edit-note-category" name="noteCategoryId"></select>
+          </div>
+          <div class="field">
+            <label for="deal-edit-note-body">Note</label>
+            <textarea id="deal-edit-note-body" name="noteDescription" rows="4" placeholder="Well go on, write the note already"></textarea>
+            <span class="field-hint deal-edit-attach-hint">(You can not attach files in this popup)</span>
+          </div>
+          <div class="field">
+            <label for="deal-edit-notify">Notify users</label>
+            <select id="deal-edit-notify" name="notifyUsers" multiple size="4"></select>
+            <span class="field-hint">Hold Ctrl/Cmd to select multiple</span>
+          </div>
+        </fieldset>
+        <p id="deal-edit-error" class="modal-error hidden" role="alert"></p>
+        <div class="modal-actions">
+          <button type="button" id="deal-edit-cancel" class="btn btn-secondary">Cancel</button>
+          <button type="submit" id="deal-edit-submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
     </div>
   </div>
 
@@ -139,6 +265,69 @@
         <div class="modal-actions">
           <button type="button" id="task-modal-cancel" class="btn btn-secondary">Cancel</button>
           <button type="submit" id="task-modal-submit" class="btn btn-primary">Create task</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="create-opportunity-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="create-opportunity-modal-title">
+    <div class="modal-backdrop" data-create-opp-dismiss></div>
+    <div class="modal-card modal-card-form modal-card-create-opp">
+      <h2 id="create-opportunity-modal-title" class="modal-title">Create opportunity</h2>
+      <form id="create-opportunity-form" class="modal-form">
+        <div class="field">
+          <label for="create-opp-title">Title</label>
+          <input type="text" id="create-opp-title" name="title" required autocomplete="off" placeholder="Opportunity name" />
+        </div>
+        <div class="field">
+          <label for="create-opp-description">Description</label>
+          <textarea id="create-opp-description" name="description" rows="3" placeholder="Optional description"></textarea>
+        </div>
+        <div class="field contact-field" id="create-opp-contact-field">
+          <label for="create-opp-contact-search">Contact</label>
+          <input type="search" id="create-opp-contact-search" placeholder="Search contact…" autocomplete="off" />
+          <div id="create-opp-contact-results" class="contact-results hidden"></div>
+          <div id="create-opp-contact-selected" class="contact-selected"></div>
+        </div>
+        <div class="field">
+          <label for="create-opp-responsible">Responsible</label>
+          <select id="create-opp-responsible" name="responsibleId" required></select>
+        </div>
+        <div class="field">
+          <label for="create-opp-stage">Stage</label>
+          <select id="create-opp-stage" name="stageId" required></select>
+        </div>
+        <div class="field">
+          <label for="create-opp-expected-close">Expected close date</label>
+          <input type="date" id="create-opp-expected-close" name="expectedCloseDate" />
+        </div>
+        <div class="field">
+          <label>Tags</label>
+          <div id="create-opp-tags" class="deal-edit-tags" aria-live="polite"></div>
+          <div class="deal-edit-tag-add">
+            <select id="create-opp-tag-add" aria-label="Add tag">
+              <option value="">Add tag…</option>
+            </select>
+          </div>
+        </div>
+        <div id="create-opp-custom-fields" class="create-opp-custom-fields"></div>
+        <label class="checkbox-filter modal-checkbox">
+          <input type="checkbox" id="create-opp-private" name="isPrivate" />
+          <span>Private opportunity</span>
+        </label>
+        <div class="field hidden" id="create-opp-access-field">
+          <label for="create-opp-access">Who has access</label>
+          <select id="create-opp-access" name="accessList" multiple size="4"></select>
+          <span class="field-hint">Hold Ctrl/Cmd to select multiple users</span>
+        </div>
+        <label class="checkbox-filter modal-checkbox">
+          <input type="checkbox" id="create-opp-notify" name="isNotify" checked />
+          <span>Notify responsible user</span>
+        </label>
+        <p id="create-opportunity-error" class="modal-error hidden" role="alert"></p>
+        <div class="modal-actions">
+          <button type="button" id="create-opportunity-cancel" class="btn btn-secondary">Cancel</button>
+          <button type="submit" id="create-opportunity-submit" class="btn btn-primary">Create opportunity</button>
         </div>
       </form>
     </div>

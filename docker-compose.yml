@@ -1,0 +1,17 @@
+services:
+  dashboard:
+    build: .
+    container_name: vanguard-crm-dashboard
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PORT: "8765"
+      COOKIE_SECURE: "true"
+    volumes:
+      - dashboard-data:/app/data
+    ports:
+      - "127.0.0.1:8765:8765"
+
+volumes:
+  dashboard-data:

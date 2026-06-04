@@ -4,11 +4,20 @@
 
 const DEFAULT_PORTAL = "https://office.vanguardadj.com";
 const GROUPS_STORAGE_KEY = "oo_board_groups_v2";
+const CALENDARS_STORAGE_KEY = "oo_board_calendars_v1";
+const NOTES_TILES_STORAGE_KEY = "oo_board_notes_v1";
 const LAYOUT_STORAGE_KEY = "oo_board_layout_v2";
 const HIDDEN_FEED_STORAGE_KEY = "oo_board_hidden_feed_v1";
 const FEED_KEYWORD_STORAGE_KEY = "oo_board_feed_keyword_v1";
 const GROUP_TEMPLATES_STORAGE_KEY = "oo_board_group_templates_v1";
 const FEED_DAYS = 30;
+const PANEL_TILE_AUTO_REFRESH_MS = 60 * 60 * 1000;
+const DASHBOARD_IDLE_STOP_MS = 3 * 60 * 60 * 1000;
+/** Set true when create-opportunity custom user field save is fixed (see ISSUES.md). */
+const CREATE_OPP_USER_FIELDS_ENABLED = false;
+
+let userProfileReady = false;
+let profileSaveTimer = null;
 
 const state = {
   portalUrl: localStorage.getItem("oo_portal_url") || DEFAULT_PORTAL,
@@ -25,12 +34,18 @@ const state = {
   hiddenFeedKeys: new Set(),
   feedKeywordFilter: "",
   feedNotificationsCache: [],
+  calendarTiles: [],
+  calendarCache: {},
+  notesTiles: [],
   opportunityById: new Map(),
   groupTemplates: [],
   customFieldDefs: [],
   customFieldById: new Map(),
   taskCategories: [],
   newTaskOpportunity: { id: null, title: "" },
+  dealEdit: null,
+  historyCategories: [],
+  newOpportunityDraft: null,
 };
 
 function crmOpportunityUrl(id) {
@@ -167,6 +182,7 @@ function loadHiddenFeedKeys() {
 
 function saveHiddenFeedKeys() {
   localStorage.setItem(HIDDEN_FEED_STORAGE_KEY, JSON.stringify([...state.hiddenFeedKeys]));
+  scheduleUserProfileSave();
 }
 
 function feedWindowStart() {
@@ -196,10 +212,34 @@ function feedNotificationKey(it) {
 
 function saveLayoutToStorage() {
   localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(state.tileLayout));
+  scheduleUserProfileSave();
 }
 
 function defaultTileOrder() {
-  return ["tile-feed", "tile-tasks", ...state.groups.map((g) => `group-${g.id}`)];
+  return [
+    "tile-feed",
+    "tile-tasks",
+    ...state.groups.map((g) => `group-${g.id}`),
+    ...state.calendarTiles.map((c) => calendarTileId(c)),
+    ...state.notesTiles.map((n) => notesTileId(n)),
+  ];
+}
+
+function notesTileId(notes) {
+  return `notes-${notes.id}`;
+}
+
+function calendarTileId(cal) {
+  return `calendar-${cal.id}`;
+}
+
+function isAutoRefreshTileId(tileId) {
+  return PANEL_TILE_IDS.has(tileId) || (typeof tileId === "string" && tileId.startsWith("calendar-"));
+}
+
+function getCalendarByTileId(tileId) {
+  const id = String(tileId || "").replace(/^calendar-/, "");
+  return state.calendarTiles.find((c) => c.id === id) || null;
 }
 
 function ensureTileLayout() {
@@ -260,6 +300,7 @@ function loadFeedKeywordFromStorage() {
 
 function saveFeedKeywordToStorage() {
   localStorage.setItem(FEED_KEYWORD_STORAGE_KEY, state.feedKeywordFilter || "");
+  scheduleUserProfileSave();
 }
 
 function collectDashboardTileNodes() {
@@ -388,20 +429,30 @@ function confirmDialog({ title, message, confirmLabel = "OK", danger = true }) {
   });
 }
 
+const TILE_ICON_WINDOW_RESTORE = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="8" width="12" height="12" rx="1"/><rect x="8" y="4" width="12" height="12" rx="1"/></svg>`;
+
+const TILE_ICON_WINDOW_MAXIMIZE = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="1"/></svg>`;
+
+const TILE_ICON_HEIGHT_EXPAND = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18"/><path d="m8 7 4-4 4 4"/><path d="m8 17 4 4 4-4"/></svg>`;
+
+function setTileLayoutIconButton(btn, iconHtml, title) {
+  btn.classList.add("tile-btn", "tile-btn-icon");
+  btn.innerHTML = iconHtml;
+  btn.title = title;
+  btn.setAttribute("aria-label", title);
+}
+
 function createLayoutButtons({ showDoubleHeight = true } = {}) {
   const wrap = document.createElement("div");
   wrap.className = "tile-layout-btns";
 
   const halfBtn = document.createElement("button");
   halfBtn.type = "button";
-  halfBtn.className = "tile-btn";
-  halfBtn.textContent = "Half width";
-  halfBtn.title = "Show two tiles side by side";
+  setTileLayoutIconButton(halfBtn, TILE_ICON_WINDOW_RESTORE, "Contract tile (half width)");
 
   const fullBtn = document.createElement("button");
   fullBtn.type = "button";
-  fullBtn.className = "tile-btn";
-  fullBtn.textContent = "Full width";
+  setTileLayoutIconButton(fullBtn, TILE_ICON_WINDOW_MAXIMIZE, "Expand tile (full width)");
 
   wrap.appendChild(halfBtn);
   wrap.appendChild(fullBtn);
@@ -410,9 +461,7 @@ function createLayoutButtons({ showDoubleHeight = true } = {}) {
   if (showDoubleHeight) {
     tallBtn = document.createElement("button");
     tallBtn.type = "button";
-    tallBtn.className = "tile-btn";
-    tallBtn.textContent = "Double height";
-    tallBtn.title = "Use two grid rows — pushes tiles below";
+    setTileLayoutIconButton(tallBtn, TILE_ICON_HEIGHT_EXPAND, "Double tile height (two grid rows)");
     wrap.appendChild(tallBtn);
   }
   return { wrap, halfBtn, fullBtn, tallBtn };
@@ -546,6 +595,7 @@ function bindTileChrome(tileEl, tileId) {
   }
   attachTileCollapseButton(tileEl, tileId);
   applyTileBodyCollapsed(tileEl, tileId);
+  if (isAutoRefreshTileId(tileId)) ensureTileAutoRefreshButton(tileEl, tileId);
   if (tileId === "tile-tasks") ensureTasksNewTaskButton(tileEl);
 }
 
@@ -600,6 +650,7 @@ function loadGroupTemplates() {
 
 function saveGroupTemplatesToStorage() {
   localStorage.setItem(GROUP_TEMPLATES_STORAGE_KEY, JSON.stringify(state.groupTemplates));
+  scheduleUserProfileSave();
 }
 
 function groupConfigSnapshot(group) {
@@ -842,6 +893,7 @@ function renderFeedTile() {
   applyTileLayoutClasses(tile, tileId);
   ensurePanelToolbarCount(tile, tileId);
   ensurePanelLayoutButtons(tile, tileId);
+  ensureTileAutoRefreshButton(tile, tileId);
   syncFeedFilterPlaceholder();
   const kw = $("#feed-keyword-filter", tile);
   if (kw) {
@@ -881,6 +933,7 @@ function renderTasksTile() {
   applyTileLayoutClasses(tile, tileId);
   ensurePanelToolbarCount(tile, tileId);
   ensurePanelLayoutButtons(tile, tileId);
+  ensureTileAutoRefreshButton(tile, tileId);
   ensureTasksNewTaskButton(tile);
   if (tile && !tile.dataset.tasksFilterBound) {
     tile.dataset.tasksFilterBound = "1";
@@ -900,7 +953,15 @@ function refreshDashboardTileLayouts() {
 }
 
 function parseApiError(body, status) {
-  if (body?.message) return body.message;
+  if (typeof body === "string") {
+    try {
+      body = JSON.parse(body);
+    } catch {
+      return body.slice(0, 300) || `HTTP ${status}`;
+    }
+  }
+  if (body?.message) return String(body.message);
+  if (body?.error?.message) return String(body.error.message);
   if (body?.error) return typeof body.error === "string" ? body.error : JSON.stringify(body.error);
   if (body?.detail) return typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
   return `HTTP ${status}`;
@@ -1001,6 +1062,1286 @@ function saveGroupsToStorage() {
     return rest;
   });
   localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(slim));
+  scheduleUserProfileSave();
+}
+
+function stripCalendarRuntimeFields(cal) {
+  const { _el, _loading, ...rest } = cal;
+  return rest;
+}
+
+function newCalendarTile(overrides = {}) {
+  const now = new Date();
+  return {
+    id: crypto.randomUUID(),
+    name: "Calendar",
+    feedUrl: "",
+    timezone: "",
+    viewYear: now.getFullYear(),
+    viewMonth: now.getMonth() + 1,
+    ...overrides,
+  };
+}
+
+const CALENDAR_TZ_COMMON = [
+  "America/New_York",
+  "America/Chicago",
+  "America/Denver",
+  "America/Los_Angeles",
+  "America/Phoenix",
+  "America/Anchorage",
+  "Pacific/Honolulu",
+  "America/Toronto",
+  "America/Panama",
+  "UTC",
+  "Europe/London",
+  "Europe/Paris",
+  "Asia/Tokyo",
+];
+
+const CALENDAR_TZ_FALLBACK = [
+  ...CALENDAR_TZ_COMMON,
+  "America/Detroit",
+  "America/Indiana/Indianapolis",
+  "America/Boise",
+  "America/Vancouver",
+  "Europe/Berlin",
+  "Australia/Sydney",
+];
+
+let calendarTimezoneOptionsCache = null;
+
+function getBrowserTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
+function resolveCalendarTimezone(cal) {
+  if (cal?.timezone) return cal.timezone;
+  const tid = cal ? calendarTileId(cal) : "";
+  const fromCache = tid ? state.calendarCache[tid]?.timezone : "";
+  if (fromCache) return fromCache;
+  return getBrowserTimezone();
+}
+
+function getCalendarTimezoneOptionList() {
+  if (calendarTimezoneOptionsCache) return calendarTimezoneOptionsCache;
+  let all = [];
+  try {
+    if (typeof Intl !== "undefined" && Intl.supportedValuesOf) {
+      all = Intl.supportedValuesOf("timeZone");
+    }
+  } catch {
+    /* ignore */
+  }
+  if (!all.length) all = [...CALENDAR_TZ_FALLBACK];
+  const commonSet = new Set(CALENDAR_TZ_COMMON);
+  const rest = all.filter((tz) => !commonSet.has(tz)).sort((a, b) => a.localeCompare(b));
+  calendarTimezoneOptionsCache = { common: [...CALENDAR_TZ_COMMON], rest };
+  return calendarTimezoneOptionsCache;
+}
+
+function formatTimezoneLabel(tz) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      timeZoneName: "short",
+    }).formatToParts(new Date());
+    const abbr = parts.find((p) => p.type === "timeZoneName")?.value;
+    const label = tz.replace(/_/g, " ");
+    return abbr ? `${label} (${abbr})` : label;
+  } catch {
+    return tz.replace(/_/g, " ");
+  }
+}
+
+function populateCalendarTimezoneSelect(select, selectedTz) {
+  if (!select) return;
+  const { common, rest } = getCalendarTimezoneOptionList();
+  const selected = selectedTz || getBrowserTimezone();
+  select.innerHTML = "";
+
+  const addGroup = (label, zones) => {
+    const og = document.createElement("optgroup");
+    og.label = label;
+    for (const tz of zones) {
+      const opt = document.createElement("option");
+      opt.value = tz;
+      opt.textContent = formatTimezoneLabel(tz);
+      if (tz === selected) opt.selected = true;
+      og.appendChild(opt);
+    }
+    select.appendChild(og);
+  };
+
+  addGroup("Common", common);
+  addGroup("All timezones", rest);
+  if (![...common, ...rest].includes(selected)) {
+    const opt = document.createElement("option");
+    opt.value = selected;
+    opt.textContent = formatTimezoneLabel(selected);
+    opt.selected = true;
+    select.insertBefore(opt, select.firstChild);
+  }
+}
+
+function getZonedParts(utcMs, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    hour12: false,
+  }).formatToParts(new Date(utcMs));
+  const get = (type) => {
+    const p = parts.find((x) => x.type === type);
+    return p ? parseInt(p.value, 10) : 0;
+  };
+  return {
+    year: get("year"),
+    month: get("month"),
+    day: get("day"),
+    hour: get("hour"),
+    minute: get("minute"),
+  };
+}
+
+function wallTimeInZoneToUtc(year, month, day, hour, minute, timeZone) {
+  let utc = Date.UTC(year, month - 1, day, hour, minute);
+  for (let i = 0; i < 6; i++) {
+    const p = getZonedParts(utc, timeZone);
+    const target = Date.UTC(year, month - 1, day, hour, minute);
+    const actual = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute);
+    const delta = target - actual;
+    if (Math.abs(delta) < 1000) break;
+    utc += delta;
+  }
+  return utc;
+}
+
+function eventStartUtcMs(ev) {
+  const s = ev?.start;
+  if (!s || s.allDay) return null;
+  if (s.iso && String(s.iso).endsWith("Z")) return new Date(s.iso).getTime();
+  return wallTimeInZoneToUtc(
+    s.year,
+    s.month,
+    s.day,
+    s.hour ?? 0,
+    s.minute ?? 0,
+    s.tzid || "UTC"
+  );
+}
+
+function eventEndUtcMs(ev) {
+  const e = ev?.end || ev?.start;
+  if (!e || e.allDay) return null;
+  if (e.iso && String(e.iso).endsWith("Z")) return new Date(e.iso).getTime();
+  return wallTimeInZoneToUtc(
+    e.year,
+    e.month,
+    e.day,
+    e.hour ?? 0,
+    e.minute ?? 0,
+    e.tzid || ev?.start?.tzid || "UTC"
+  );
+}
+
+function allDayRangeFloating(ev) {
+  const start = eventDateParts(ev.start);
+  if (!start || start.y == null) return null;
+  const end = eventDateParts(ev.end) || start;
+  let ey = end.y ?? start.y;
+  let em = end.m ?? start.m;
+  let ed = end.d ?? start.d;
+  if (ev.end?.allDay && ev.start?.allDay) {
+    const endMs = Date.UTC(ey, em - 1, ed);
+    const adj = new Date(endMs - 86400000);
+    ey = adj.getUTCFullYear();
+    em = adj.getUTCMonth() + 1;
+    ed = adj.getUTCDate();
+  }
+  return { start, end: { y: ey, m: em, d: ed } };
+}
+
+function todayYmdInTimezone(timeZone) {
+  return getZonedParts(Date.now(), timeZone);
+}
+
+function loadCalendarsFromStorage() {
+  try {
+    const raw = localStorage.getItem(CALENDARS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map((c) => stripCalendarRuntimeFields(c));
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return [];
+}
+
+function saveCalendarsToStorage() {
+  const slim = state.calendarTiles.map((c) => stripCalendarRuntimeFields(c));
+  localStorage.setItem(CALENDARS_STORAGE_KEY, JSON.stringify(slim));
+  scheduleUserProfileSave();
+}
+
+const CALENDAR_MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+function calendarViewMonthLabel(cal) {
+  const m = CALENDAR_MONTH_NAMES[(cal.viewMonth || 1) - 1] || "";
+  return `${m} ${cal.viewYear || ""}`.trim();
+}
+
+function shiftCalendarViewMonth(cal, delta) {
+  let y = cal.viewYear || new Date().getFullYear();
+  let m = cal.viewMonth || new Date().getMonth() + 1;
+  m += delta;
+  while (m < 1) {
+    m += 12;
+    y -= 1;
+  }
+  while (m > 12) {
+    m -= 12;
+    y += 1;
+  }
+  cal.viewYear = y;
+  cal.viewMonth = m;
+  saveCalendarsToStorage();
+}
+
+function eventDateParts(dt) {
+  if (!dt) return null;
+  return { y: dt.year, m: dt.month, d: dt.day };
+}
+
+function eventOnCalendarDay(ev, year, month, day, timeZone) {
+  if (ev.start?.allDay) {
+    const range = allDayRangeFloating(ev);
+    if (!range) return false;
+    const cell = Date.UTC(year, month - 1, day);
+    const s = Date.UTC(range.start.y, range.start.m - 1, range.start.d);
+    const e = Date.UTC(range.end.y, range.end.m - 1, range.end.d);
+    return cell >= s && cell <= e;
+  }
+  const startMs = eventStartUtcMs(ev);
+  if (!Number.isFinite(startMs)) return false;
+  let endMs = eventEndUtcMs(ev);
+  if (!Number.isFinite(endMs)) endMs = startMs + 3600000;
+  const dayStart = wallTimeInZoneToUtc(year, month, day, 0, 0, timeZone);
+  const dayEnd = wallTimeInZoneToUtc(year, month, day, 23, 59, timeZone) + 60000;
+  return startMs < dayEnd && endMs >= dayStart;
+}
+
+function eventSortKeyInTimezone(ev, timeZone) {
+  if (ev.start?.allDay) return 0;
+  const ms = eventStartUtcMs(ev);
+  if (!Number.isFinite(ms)) return 0;
+  const p = getZonedParts(ms, timeZone);
+  return p.hour * 60 + p.minute;
+}
+
+function formatEventTimeInTimezone(ev, timeZone) {
+  if (ev.start?.allDay) return "";
+  const ms = eventStartUtcMs(ev);
+  if (!Number.isFinite(ms)) return "";
+  const p = getZonedParts(ms, timeZone);
+  return `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")} `;
+}
+
+function eventsForCalendarDay(events, year, month, day, timeZone) {
+  return events
+    .filter((ev) => ev.status !== "CANCELLED" && eventOnCalendarDay(ev, year, month, day, timeZone))
+    .sort((a, b) => {
+      const sa = eventSortKeyInTimezone(a, timeZone);
+      const sb = eventSortKeyInTimezone(b, timeZone);
+      if (sa !== sb) return sa - sb;
+      return String(a.summary || "").localeCompare(String(b.summary || ""));
+    });
+}
+
+function buildCalendarMonthGrid(year, month) {
+  const first = new Date(year, month - 1, 1);
+  const startPad = first.getDay();
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const cells = [];
+  const prevMonthDays = new Date(year, month - 1, 0).getDate();
+  for (let i = startPad - 1; i >= 0; i--) {
+    const d = prevMonthDays - i;
+    const pm = month === 1 ? 12 : month - 1;
+    const py = month === 1 ? year - 1 : year;
+    cells.push({ year: py, month: pm, day: d, outside: true });
+  }
+  for (let d = 1; d <= daysInMonth; d++) {
+    cells.push({ year, month, day: d, outside: false });
+  }
+  while (cells.length % 7 !== 0) {
+    const last = cells[cells.length - 1];
+    let ny = last.year;
+    let nm = last.month;
+    let nd = last.day + 1;
+    if (nd > new Date(ny, nm, 0).getDate()) {
+      nd = 1;
+      nm += 1;
+      if (nm > 12) {
+        nm = 1;
+        ny += 1;
+      }
+    }
+    cells.push({ year: ny, month: nm, day: nd, outside: true });
+  }
+  while (cells.length < 42) {
+    const last = cells[cells.length - 1];
+    let ny = last.year;
+    let nm = last.month;
+    let nd = last.day + 1;
+    if (nd > new Date(ny, nm, 0).getDate()) {
+      nd = 1;
+      nm += 1;
+      if (nm > 12) {
+        nm = 1;
+        ny += 1;
+      }
+    }
+    cells.push({ year: ny, month: nm, day: nd, outside: true });
+  }
+  return cells;
+}
+
+function renderCalendarMonthBody(section, cal) {
+  const body = $(".calendar-month-body", section);
+  if (!body) return;
+  const tid = calendarTileId(cal);
+  const cache = state.calendarCache[tid];
+  const events = cache?.events || [];
+  const y = cal.viewYear || new Date().getFullYear();
+  const m = cal.viewMonth || new Date().getMonth() + 1;
+  const tz = resolveCalendarTimezone(cal);
+  const today = todayYmdInTimezone(tz);
+  const cells = buildCalendarMonthGrid(y, m);
+
+  const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  let html = '<div class="calendar-month-grid" role="grid" aria-label="Monthly calendar">';
+  html += '<div class="calendar-weekdays" role="row">';
+  for (const wd of weekdays) {
+    html += `<div class="calendar-weekday" role="columnheader">${escapeHtml(wd)}</div>`;
+  }
+  html += '</div><div class="calendar-days" role="rowgroup">';
+
+  for (const cell of cells) {
+    const isToday =
+      cell.year === today.year && cell.month === today.month && cell.day === today.day;
+    const dayEvents = eventsForCalendarDay(events, cell.year, cell.month, cell.day, tz);
+    const cls = [
+      "calendar-day",
+      cell.outside ? "calendar-day-outside" : "",
+      isToday ? "calendar-day-today" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    html += `<div class="${cls}" role="gridcell" data-date="${cell.year}-${String(cell.month).padStart(2, "0")}-${String(cell.day).padStart(2, "0")}">`;
+    html += `<div class="calendar-day-num">${cell.day}</div>`;
+    html += '<div class="calendar-day-events">';
+    const maxShow = 3;
+    for (let i = 0; i < Math.min(dayEvents.length, maxShow); i++) {
+      const ev = dayEvents[i];
+      const color = ev.color || "#6e4bdb";
+      const time = formatEventTimeInTimezone(ev, tz);
+      const uidAttr = escapeHtml(ev.uid || "");
+      html += `<button type="button" class="calendar-event-chip" data-event-uid="${uidAttr}" style="--event-color:${escapeHtml(color)}" title="${escapeHtml((time + ev.summary).trim())}">`;
+      html += `<span class="calendar-event-dot" aria-hidden="true"></span>`;
+      html += `<span class="calendar-event-label">${escapeHtml(time + (ev.summary || ""))}</span>`;
+      html += "</button>";
+    }
+    if (dayEvents.length > maxShow) {
+      html += `<div class="calendar-more-events">+${dayEvents.length - maxShow} more</div>`;
+    }
+    html += "</div></div>";
+  }
+  html += "</div></div>";
+  body.innerHTML = html;
+
+  const monthLabel = $(".calendar-month-label", section);
+  if (monthLabel) monthLabel.textContent = calendarViewMonthLabel(cal);
+  const countEl = $(".calendar-tile-count", section);
+  if (countEl) {
+    const inMonth = events.filter((ev) => {
+      if (ev.status === "CANCELLED") return false;
+      for (const cell of cells) {
+        if (!cell.outside && eventOnCalendarDay(ev, cell.year, cell.month, cell.day, tz)) return true;
+      }
+      return false;
+    }).length;
+    countEl.textContent = `${inMonth} events`;
+  }
+
+  bindCalendarEventClicks(section, cal);
+}
+
+function findCalendarEventByUid(cal, uid) {
+  if (!uid) return null;
+  const tid = calendarTileId(cal);
+  const events = state.calendarCache[tid]?.events || [];
+  return events.find((ev) => ev.uid === uid) || null;
+}
+
+function formatCalendarEventWhen(ev, timeZone) {
+  const pad = (n) => String(n).padStart(2, "0");
+  if (ev.start?.allDay) {
+    const s = ev.start;
+    const range = allDayRangeFloating(ev);
+    const startLabel = `${s.year}-${pad(s.month)}-${pad(s.day)}`;
+    if (range && (range.end.y !== s.year || range.end.m !== s.month || range.end.d !== s.day)) {
+      return `All day · ${startLabel} – ${range.end.y}-${pad(range.end.m)}-${pad(range.end.d)}`;
+    }
+    return `All day · ${startLabel}`;
+  }
+  const startMs = eventStartUtcMs(ev);
+  if (!Number.isFinite(startMs)) return "";
+  const sp = getZonedParts(startMs, timeZone);
+  let label = `${sp.year}-${pad(sp.month)}-${pad(sp.day)} ${pad(sp.hour)}:${pad(sp.minute)}`;
+  const endMs = eventEndUtcMs(ev);
+  if (Number.isFinite(endMs) && endMs > startMs) {
+    const ep = getZonedParts(endMs, timeZone);
+    label += ` – ${ep.year}-${pad(ep.month)}-${pad(ep.day)} ${pad(ep.hour)}:${pad(ep.minute)}`;
+  }
+  return label;
+}
+
+function openCalendarEventModal(ev, cal) {
+  const modal = $("#calendar-event-modal");
+  const titleEl = $("#calendar-event-modal-title");
+  const bodyEl = $("#calendar-event-modal-body");
+  if (!modal || !titleEl || !bodyEl) return;
+
+  const tz = resolveCalendarTimezone(cal);
+  const color = ev.color || "#6e4bdb";
+  titleEl.innerHTML = `<span class="calendar-event-modal-dot" style="background:${escapeHtml(color)}"></span>${escapeHtml(ev.summary || "Event")}`;
+
+  const rows = [];
+  const when = formatCalendarEventWhen(ev, tz);
+  if (when) rows.push({ label: "When", value: when });
+  if (ev.status && ev.status !== "CONFIRMED") rows.push({ label: "Status", value: ev.status });
+  if (ev.organizer) rows.push({ label: "Organizer", value: ev.organizer });
+  if (ev.location) {
+    const loc = ev.location;
+    if (/^https?:\/\//i.test(loc)) {
+      rows.push({
+        label: "Location",
+        html: `<a href="${escapeHtml(loc)}" target="_blank" rel="noopener noreferrer">${escapeHtml(loc)}</a>`,
+      });
+    } else {
+      rows.push({ label: "Location", value: loc });
+    }
+  }
+  if (ev.url) {
+    rows.push({
+      label: "Link",
+      html: `<a href="${escapeHtml(ev.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(ev.url)}</a>`,
+    });
+  }
+  const calName = state.calendarCache[calendarTileId(cal)]?.name;
+  if (calName) rows.push({ label: "Calendar", value: calName });
+  if (ev.categories?.length) rows.push({ label: "Categories", value: ev.categories.join(", ") });
+  if (ev.recurrence || ev.rrule) {
+    rows.push({ label: "Repeats", value: ev.recurrence || ev.rrule });
+  }
+  if (ev.attendees?.length) {
+    const list = ev.attendees
+      .map((a) => escapeHtml(a.label || a.name || a.email || ""))
+      .filter(Boolean)
+      .join("<br/>");
+    if (list) {
+      rows.push({ label: "Attendees", html: `<div class="calendar-event-attendees">${list}</div>` });
+    }
+  }
+  if (ev.transparency) {
+    const t = String(ev.transparency).toUpperCase();
+    rows.push({
+      label: "Show as",
+      value: t === "TRANSPARENT" ? "Free" : t === "OPAQUE" ? "Busy" : ev.transparency,
+    });
+  }
+  if (ev.visibility) rows.push({ label: "Visibility", value: ev.visibility });
+  if (ev.priority != null && ev.priority !== "") {
+    rows.push({ label: "Priority", value: String(ev.priority) });
+  }
+  if (ev.geo) rows.push({ label: "Location (coordinates)", value: ev.geo });
+  if (ev.created) rows.push({ label: "Created", value: ev.created });
+  if (ev.lastModified) rows.push({ label: "Modified", value: ev.lastModified });
+  if (ev.dtstamp && ev.dtstamp !== ev.lastModified) rows.push({ label: "Stamp", value: ev.dtstamp });
+  if (ev.sequence != null && ev.sequence !== "") rows.push({ label: "Sequence", value: String(ev.sequence) });
+
+  let bodyHtml = "";
+  for (const row of rows) {
+    bodyHtml += `<div class="calendar-event-detail-row"><span class="calendar-event-detail-label">${escapeHtml(row.label)}</span>`;
+    if (row.html) bodyHtml += `<div class="calendar-event-detail-value">${row.html}</div>`;
+    else bodyHtml += `<div class="calendar-event-detail-value">${escapeHtml(row.value)}</div>`;
+    bodyHtml += "</div>";
+  }
+  if (ev.description) {
+    bodyHtml += `<div class="calendar-event-detail-row calendar-event-detail-description"><span class="calendar-event-detail-label">Description</span>`;
+    bodyHtml += `<div class="calendar-event-detail-value calendar-event-detail-desc-text">${escapeHtml(ev.description)}</div></div>`;
+  }
+  if (!bodyHtml) bodyHtml = '<p class="calendar-event-detail-empty">No additional details.</p>';
+  if (ev.uid) {
+    bodyHtml += `<p class="calendar-event-detail-uid" title="Event UID">${escapeHtml(ev.uid)}</p>`;
+  }
+  bodyEl.innerHTML = bodyHtml;
+  modal.classList.remove("hidden");
+}
+
+function closeCalendarEventModal() {
+  $("#calendar-event-modal")?.classList.add("hidden");
+}
+
+function bindCalendarEventClicks(section, cal) {
+  if (!section || section.dataset.calendarEventsBound) return;
+  section.dataset.calendarEventsBound = "1";
+  section.addEventListener("click", (e) => {
+    const chip = e.target.closest(".calendar-event-chip");
+    if (!chip) return;
+    e.stopPropagation();
+    const uid = chip.dataset.eventUid;
+    const ev = findCalendarEventByUid(cal, uid);
+    if (ev) openCalendarEventModal(ev, cal);
+  });
+}
+
+function bindCalendarEventModal() {
+  const modal = $("#calendar-event-modal");
+  if (!modal || modal.dataset.bound) return;
+  modal.dataset.bound = "1";
+  $("#calendar-event-modal-close")?.addEventListener("click", closeCalendarEventModal);
+  modal.querySelectorAll("[data-calendar-event-dismiss]").forEach((el) => {
+    el.addEventListener("click", closeCalendarEventModal);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !modal.classList.contains("hidden")) closeCalendarEventModal();
+  });
+}
+
+async function fetchCalendarFeed(feedUrl) {
+  const q = new URLSearchParams({ url: feedUrl }).toString();
+  const res = await fetch(`/api/calendar/feed?${q}`, { credentials: "same-origin" });
+  const text = await res.text();
+  let body;
+  try {
+    body = text ? JSON.parse(text) : {};
+  } catch {
+    const snippet = text.slice(0, 300) || res.statusText;
+    if (res.status === 404 && /<!DOCTYPE/i.test(text)) {
+      throw new Error(
+        "Calendar API not found. Restart the dashboard server (./start.sh) so it loads the latest server.py."
+      );
+    }
+    throw new Error(res.ok ? "Invalid JSON from server" : snippet);
+  }
+  if (!res.ok) throw new Error(parseApiError(body, res.status));
+  return body;
+}
+
+async function loadCalendarForTile(cal, { quiet = false } = {}) {
+  const tid = calendarTileId(cal);
+  const section = cal._el;
+  if (section) section.classList.toggle("calendar-loading", true);
+  try {
+    const data = await fetchCalendarFeed(cal.feedUrl);
+    state.calendarCache[tid] = {
+      name: data.name,
+      timezone: data.timezone,
+      events: Array.isArray(data.events) ? data.events : [],
+      fetchedAt: Date.now(),
+    };
+    if (data.name && (!cal.name || cal.name === "Calendar")) {
+      cal.name = data.name;
+      saveCalendarsToStorage();
+      const nameInput = section?.querySelector(".calendar-tile-name");
+      if (nameInput) nameInput.value = cal.name;
+      if (section) section.dataset.tileLabel = cal.name;
+    }
+    if (!cal.timezone && data.timezone) {
+      cal.timezone = data.timezone;
+      saveCalendarsToStorage();
+    }
+    const tzSelect = section?.querySelector(".calendar-tz-select");
+    if (tzSelect) {
+      populateCalendarTimezoneSelect(tzSelect, resolveCalendarTimezone(cal));
+    }
+    if (section) renderCalendarMonthBody(section, cal);
+  } catch (err) {
+    if (!quiet) showToast(err.message, true);
+    const body = section?.querySelector(".calendar-month-body");
+    if (body) {
+      body.innerHTML = `<p class="calendar-error">${escapeHtml(err.message || "Could not load calendar")}</p>`;
+    }
+    throw err;
+  } finally {
+    if (section) section.classList.remove("calendar-loading");
+  }
+}
+
+function bindCalendarTileChrome(section, cal, tileId) {
+  if (section.querySelector(":scope > .group-tile-bar")) return;
+
+  const toolbar = document.createElement("div");
+  toolbar.className = "tile-toolbar group-tile-bar calendar-tile-bar";
+  toolbar.draggable = true;
+  toolbar.dataset.tileId = tileId;
+
+  const hint = document.createElement("span");
+  hint.className = "tile-drag-hint";
+  hint.textContent = "⋮⋮";
+  hint.setAttribute("aria-hidden", "true");
+
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.className = "group-tile-name calendar-tile-name";
+  nameInput.placeholder = "Calendar label";
+  nameInput.value = cal.name || "";
+  nameInput.setAttribute("aria-label", "Calendar label");
+
+  const countEl = document.createElement("span");
+  countEl.className = "group-tile-count calendar-tile-count";
+  countEl.textContent = "0 events";
+
+  const nav = document.createElement("div");
+  nav.className = "calendar-month-nav";
+  const prevBtn = document.createElement("button");
+  prevBtn.type = "button";
+  prevBtn.className = "btn btn-ghost btn-calendar-nav";
+  prevBtn.textContent = "‹";
+  prevBtn.title = "Previous month";
+  const monthLabel = document.createElement("span");
+  monthLabel.className = "calendar-month-label";
+  monthLabel.textContent = calendarViewMonthLabel(cal);
+  const nextBtn = document.createElement("button");
+  nextBtn.type = "button";
+  nextBtn.className = "btn btn-ghost btn-calendar-nav";
+  nextBtn.textContent = "›";
+  nextBtn.title = "Next month";
+  nav.appendChild(prevBtn);
+  nav.appendChild(monthLabel);
+  nav.appendChild(nextBtn);
+
+  const tzWrap = document.createElement("label");
+  tzWrap.className = "calendar-tz-label";
+  const tzSelect = document.createElement("select");
+  tzSelect.className = "calendar-tz-select";
+  tzSelect.title = "Display timezone";
+  tzSelect.setAttribute("aria-label", "Calendar timezone");
+  populateCalendarTimezoneSelect(tzSelect, resolveCalendarTimezone(cal));
+  tzWrap.appendChild(tzSelect);
+
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.className = "btn btn-danger btn-remove-calendar";
+  removeBtn.textContent = "Remove";
+
+  const { wrap, halfBtn, fullBtn, tallBtn } = createLayoutButtons();
+
+  toolbar.appendChild(hint);
+  toolbar.appendChild(nameInput);
+  toolbar.appendChild(countEl);
+  toolbar.appendChild(nav);
+  toolbar.appendChild(tzWrap);
+  toolbar.appendChild(removeBtn);
+  toolbar.appendChild(wrap);
+
+  section.prepend(toolbar);
+  bindTileLayoutButtons(section, tileId, halfBtn, fullBtn, tallBtn);
+  bindTileDragDrop(section, tileId, toolbar);
+  attachTileCollapseButton(section, tileId);
+  ensureTileAutoRefreshButton(section, tileId);
+
+  const syncMonth = () => {
+    monthLabel.textContent = calendarViewMonthLabel(cal);
+    renderCalendarMonthBody(section, cal);
+  };
+
+  prevBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    shiftCalendarViewMonth(cal, -1);
+    syncMonth();
+  });
+  nextBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    shiftCalendarViewMonth(cal, 1);
+    syncMonth();
+  });
+
+  tzSelect.addEventListener("click", (e) => e.stopPropagation());
+  tzSelect.addEventListener("change", (e) => {
+    e.stopPropagation();
+    cal.timezone = tzSelect.value;
+    saveCalendarsToStorage();
+    renderCalendarMonthBody(section, cal);
+  });
+
+  nameInput.addEventListener("input", () => {
+    cal.name = nameInput.value;
+    section.dataset.tileLabel = cal.name || "Calendar";
+    saveCalendarsToStorage();
+  });
+  nameInput.addEventListener("change", () => {
+    cal.name = nameInput.value.trim() || "Calendar";
+    nameInput.value = cal.name;
+    section.dataset.tileLabel = cal.name;
+    saveCalendarsToStorage();
+  });
+
+  removeBtn.addEventListener("click", async () => {
+    const label = cal.name?.trim() || "this calendar";
+    const ok = await confirmDialog({
+      title: "Remove calendar tile?",
+      message: `Remove “${label}” from the dashboard?`,
+      confirmLabel: "Remove",
+      danger: true,
+    });
+    if (!ok) return;
+    const tid = calendarTileId(cal);
+    state.calendarTiles = state.calendarTiles.filter((c) => c.id !== cal.id);
+    delete state.calendarCache[tid];
+    state.tileLayout.order = state.tileLayout.order.filter((id) => id !== tid);
+    delete state.tileLayout.widths[tid];
+    delete state.tileLayout.heights[tid];
+    saveCalendarsToStorage();
+    saveLayoutToStorage();
+    renderBoardGroups();
+  });
+}
+
+function renderCalendarTiles(dash) {
+  for (const cal of state.calendarTiles) {
+    const tileId = calendarTileId(cal);
+    const section = document.createElement("section");
+    section.className = "dashboard-tile board-group board-group-tile calendar-tile";
+    section.dataset.tileId = tileId;
+    section.dataset.tileLabel = cal.name || "Calendar";
+    section.dataset.calendarId = cal.id;
+    section.innerHTML = `<div class="calendar-month-body"><p class="calendar-loading-hint">Loading calendar…</p></div>`;
+    dash.appendChild(section);
+    bindCalendarTileChrome(section, cal, tileId);
+    cal._el = section;
+    applyTileLayoutClasses(section, tileId);
+    applyTileBodyCollapsed(section, tileId);
+    const tid = calendarTileId(cal);
+    if (state.calendarCache[tid]) {
+      renderCalendarMonthBody(section, cal);
+    } else {
+      loadCalendarForTile(cal, { quiet: true }).catch(() => {});
+    }
+  }
+}
+
+function stripNotesRuntimeFields(notes) {
+  const { _el, _saveTimer, ...rest } = notes;
+  return rest;
+}
+
+function newNotesTile(overrides = {}) {
+  return {
+    id: crypto.randomUUID(),
+    name: "Notes",
+    content: "",
+    viewMode: "edit",
+    updatedAt: null,
+    ...overrides,
+  };
+}
+
+function formatNotesUpdatedLabel(iso) {
+  if (!iso) return "Not saved yet";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+function syncNotesUpdatedFooter(section, notes) {
+  if (!section) return;
+  const footer = $(".notes-tile-footer", section);
+  const label = $(".notes-updated-label", section);
+  if (!footer || !label) return;
+  const text = formatNotesUpdatedLabel(notes.updatedAt);
+  label.textContent = text ? `Last updated ${text}` : "Not saved yet";
+  footer.title = text ? `Last saved to server: ${text}` : "Saves automatically to the server";
+}
+
+function touchNotesTile(notes) {
+  notes.updatedAt = new Date().toISOString();
+  syncNotesUpdatedFooter(notes._el, notes);
+}
+
+function buildUserProfilePayload() {
+  const slimGroups = state.groups.map((g) => {
+    const { opportunities, ...rest } = stripGroupRuntimeFields(g);
+    return rest;
+  });
+  return {
+    updatedAt: new Date().toISOString(),
+    groups: slimGroups,
+    tileLayout: state.tileLayout,
+    calendarTiles: state.calendarTiles.map((c) => stripCalendarRuntimeFields(c)),
+    notesTiles: state.notesTiles.map((n) => stripNotesRuntimeFields(n)),
+    groupTemplates: state.groupTemplates,
+    hiddenFeedKeys: [...state.hiddenFeedKeys],
+    feedKeywordFilter: state.feedKeywordFilter || "",
+  };
+}
+
+function applyUserProfile(profile) {
+  if (!profile || typeof profile !== "object") return;
+
+  const groups = Array.isArray(profile.groups) ? profile.groups : [];
+  state.groups = groups.length
+    ? groups.map((g) => ({ ...newGroup(), ...stripGroupRuntimeFields(g), opportunities: [] }))
+    : loadGroupsFromStorage().map((g) => ({ ...newGroup(), ...stripGroupRuntimeFields(g), opportunities: [] }));
+
+  const layout = profile.tileLayout;
+  if (layout && typeof layout === "object") {
+    state.tileLayout = {
+      order: Array.isArray(layout.order) ? layout.order : [],
+      widths: layout.widths && typeof layout.widths === "object" ? layout.widths : {},
+      heights: layout.heights && typeof layout.heights === "object" ? layout.heights : {},
+      collapsed: layout.collapsed && typeof layout.collapsed === "object" ? layout.collapsed : {},
+    };
+  } else {
+    state.tileLayout = loadLayoutFromStorage();
+  }
+
+  state.calendarTiles = Array.isArray(profile.calendarTiles)
+    ? profile.calendarTiles.map((c) => ({ ...newCalendarTile(), ...stripCalendarRuntimeFields(c) }))
+    : [];
+
+  state.notesTiles = Array.isArray(profile.notesTiles)
+    ? profile.notesTiles.map((n) => ({ ...newNotesTile(), ...stripNotesRuntimeFields(n) }))
+    : [];
+
+  state.groupTemplates = Array.isArray(profile.groupTemplates) ? profile.groupTemplates : [];
+  state.hiddenFeedKeys = new Set(
+    Array.isArray(profile.hiddenFeedKeys) ? profile.hiddenFeedKeys.map(String) : []
+  );
+  state.feedKeywordFilter = String(profile.feedKeywordFilter || "");
+}
+
+function persistProfileToLocalStorage() {
+  const payload = buildUserProfilePayload();
+  localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(payload.groups));
+  localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(payload.tileLayout));
+  localStorage.setItem(CALENDARS_STORAGE_KEY, JSON.stringify(payload.calendarTiles));
+  localStorage.setItem(NOTES_TILES_STORAGE_KEY, JSON.stringify(payload.notesTiles));
+  localStorage.setItem(GROUP_TEMPLATES_STORAGE_KEY, JSON.stringify(payload.groupTemplates));
+  localStorage.setItem(HIDDEN_FEED_STORAGE_KEY, JSON.stringify(payload.hiddenFeedKeys));
+  localStorage.setItem(FEED_KEYWORD_STORAGE_KEY, payload.feedKeywordFilter);
+}
+
+function profileHasDashboardData(profile) {
+  if (!profile) return false;
+  return (
+    (Array.isArray(profile.groups) && profile.groups.length > 0) ||
+    (Array.isArray(profile.calendarTiles) && profile.calendarTiles.length > 0) ||
+    (Array.isArray(profile.notesTiles) && profile.notesTiles.length > 0) ||
+    (Array.isArray(profile.tileLayout?.order) && profile.tileLayout.order.length > 0)
+  );
+}
+
+function loadLocalUserProfileBundle() {
+  return {
+    groups: loadGroupsFromStorage(),
+    tileLayout: loadLayoutFromStorage(),
+    calendarTiles: loadCalendarsFromStorage(),
+    notesTiles: loadNotesTilesFromStorage(),
+    groupTemplates: loadGroupTemplates(),
+    hiddenFeedKeys: [...loadHiddenFeedKeys()],
+    feedKeywordFilter: localStorage.getItem(FEED_KEYWORD_STORAGE_KEY) || "",
+  };
+}
+
+async function loadUserProfileFromServer() {
+  userProfileReady = false;
+  let serverProfile = null;
+  try {
+    const headers = { Accept: "application/json" };
+    if (state.portalUrl) headers["X-OnlyOffice-Portal"] = state.portalUrl;
+    const res = await fetch("/api/user-profile", { credentials: "same-origin", headers });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data && typeof data === "object") serverProfile = data;
+  } catch {
+    /* fall back */
+  }
+
+  const localBundle = loadLocalUserProfileBundle();
+
+  if (profileHasDashboardData(serverProfile)) {
+    applyUserProfile(serverProfile);
+    persistProfileToLocalStorage();
+    userProfileReady = true;
+    return;
+  }
+
+  if (
+    localBundle.groups.length ||
+    localBundle.calendarTiles.length ||
+    localBundle.notesTiles.length ||
+    localBundle.tileLayout?.order?.length
+  ) {
+    applyUserProfile(localBundle);
+    try {
+      await saveUserProfileToServer({ quiet: true });
+    } catch {
+      /* keep local */
+    }
+    userProfileReady = true;
+    return;
+  }
+
+  applyUserProfile({
+    groups: [
+      newGroup({ name: "Open pipeline", dealStatus: "open", groupBy: "stage" }),
+      newGroup({ name: "Tagged deals", dealStatus: "all", groupBy: "tag", tagTitles: [] }),
+    ],
+    tileLayout: { order: [], widths: {}, heights: {}, collapsed: {} },
+    calendarTiles: [],
+    notesTiles: [],
+    groupTemplates: [],
+    hiddenFeedKeys: [],
+    feedKeywordFilter: "",
+  });
+  persistProfileToLocalStorage();
+  userProfileReady = true;
+}
+
+async function saveUserProfileToServer({ quiet = false } = {}) {
+  if (!userProfileReady) return;
+  persistProfileToLocalStorage();
+  try {
+    const headers = { Accept: "application/json", "Content-Type": "application/json" };
+    if (state.portalUrl) headers["X-OnlyOffice-Portal"] = state.portalUrl;
+    const res = await fetch("/api/user-profile", {
+      method: "PUT",
+      credentials: "same-origin",
+      headers,
+      body: JSON.stringify(buildUserProfilePayload()),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Could not save dashboard settings");
+    if (Array.isArray(data.notesTiles)) {
+      const byId = new Map(data.notesTiles.map((t) => [t.id, t]));
+      for (const n of state.notesTiles) {
+        const saved = byId.get(n.id);
+        if (saved?.updatedAt) {
+          n.updatedAt = saved.updatedAt;
+          syncNotesUpdatedFooter(n._el, n);
+        }
+      }
+    }
+  } catch (err) {
+    if (!quiet) showToast(err.message, true);
+    throw err;
+  }
+}
+
+function scheduleUserProfileSave() {
+  if (!userProfileReady) return;
+  if (profileSaveTimer) clearTimeout(profileSaveTimer);
+  profileSaveTimer = setTimeout(() => {
+    profileSaveTimer = null;
+    saveUserProfileToServer({ quiet: true }).catch(() => {});
+  }, 800);
+}
+
+function loadNotesTilesFromStorage() {
+  try {
+    const raw = localStorage.getItem(NOTES_TILES_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map((n) => stripNotesRuntimeFields(n));
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return [];
+}
+
+function saveNotesTilesToStorage() {
+  const slim = state.notesTiles.map((n) => stripNotesRuntimeFields(n));
+  localStorage.setItem(NOTES_TILES_STORAGE_KEY, JSON.stringify(slim));
+  scheduleUserProfileSave();
+}
+
+function renderBasicMarkdown(text) {
+  const lines = String(text || "").split(/\r?\n/);
+  const out = [];
+  let inUl = false;
+  let inOl = false;
+
+  const closeLists = () => {
+    if (inUl) {
+      out.push("</ul>");
+      inUl = false;
+    }
+    if (inOl) {
+      out.push("</ol>");
+      inOl = false;
+    }
+  };
+
+  const inlineFormat = (raw) => {
+    let s = escapeHtml(raw);
+    s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label, url) => {
+      const href = escapeHtml(url.trim());
+      if (!/^https?:\/\//i.test(href) && !/^mailto:/i.test(href)) return escapeHtml(label);
+      return `<a href="${href}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
+    });
+    return s;
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trimEnd();
+    if (!trimmed.trim()) {
+      closeLists();
+      continue;
+    }
+    const hm = trimmed.match(/^(#{1,3})\s+(.+)$/);
+    if (hm) {
+      closeLists();
+      const level = hm[1].length;
+      out.push(`<h${level} class="notes-md-h${level}">${inlineFormat(hm[2])}</h${level}>`);
+      continue;
+    }
+    if (/^>\s?/.test(trimmed)) {
+      closeLists();
+      out.push(`<blockquote class="notes-md-quote">${inlineFormat(trimmed.replace(/^>\s?/, ""))}</blockquote>`);
+      continue;
+    }
+    const ulm = trimmed.match(/^[-*+]\s+(.+)$/);
+    if (ulm) {
+      if (!inUl) {
+        closeLists();
+        out.push("<ul class=\"notes-md-list\">");
+        inUl = true;
+      }
+      out.push(`<li>${inlineFormat(ulm[1])}</li>`);
+      continue;
+    }
+    const olm = trimmed.match(/^\d+\.\s+(.+)$/);
+    if (olm) {
+      if (!inOl) {
+        closeLists();
+        out.push("<ol class=\"notes-md-list\">");
+        inOl = true;
+      }
+      out.push(`<li>${inlineFormat(olm[1])}</li>`);
+      continue;
+    }
+    closeLists();
+    out.push(`<p>${inlineFormat(trimmed)}</p>`);
+  }
+  closeLists();
+  return out.join("") || '<p class="notes-md-empty">Nothing to preview yet.</p>';
+}
+
+function scheduleNotesTileSave(notes) {
+  touchNotesTile(notes);
+  saveNotesTilesToStorage();
+}
+
+function syncNotesTileBody(section, notes) {
+  const editor = $(".notes-editor", section);
+  const preview = $(".notes-preview", section);
+  if (!editor || !preview) return;
+  const isPreview = notes.viewMode === "preview";
+  editor.classList.toggle("hidden", isPreview);
+  preview.classList.toggle("hidden", !isPreview);
+  if (!isPreview) {
+    if (editor.value !== notes.content) editor.value = notes.content || "";
+  } else {
+    preview.innerHTML = renderBasicMarkdown(notes.content);
+  }
+}
+
+function bindNotesTileChrome(section, notes, tileId) {
+  if (section.querySelector(":scope > .group-tile-bar")) return;
+
+  const toolbar = document.createElement("div");
+  toolbar.className = "tile-toolbar group-tile-bar notes-tile-bar";
+  toolbar.draggable = true;
+  toolbar.dataset.tileId = tileId;
+
+  const hint = document.createElement("span");
+  hint.className = "tile-drag-hint";
+  hint.textContent = "⋮⋮";
+  hint.setAttribute("aria-hidden", "true");
+
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.className = "group-tile-name notes-tile-name";
+  nameInput.placeholder = "Notes label";
+  nameInput.value = notes.name || "";
+  nameInput.setAttribute("aria-label", "Notes label");
+
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "btn btn-ghost btn-notes-copy";
+  copyBtn.textContent = "Copy all";
+  copyBtn.title = "Copy all text to clipboard";
+
+  const editBtn = document.createElement("button");
+  editBtn.type = "button";
+  editBtn.className = "btn btn-ghost btn-notes-mode";
+  editBtn.dataset.mode = "edit";
+  editBtn.textContent = "Edit";
+
+  const previewBtn = document.createElement("button");
+  previewBtn.type = "button";
+  previewBtn.className = "btn btn-ghost btn-notes-mode";
+  previewBtn.dataset.mode = "preview";
+  previewBtn.textContent = "Preview";
+
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.className = "btn btn-danger btn-remove-notes";
+  removeBtn.textContent = "Remove";
+
+  const { wrap, halfBtn, fullBtn, tallBtn } = createLayoutButtons();
+
+  toolbar.appendChild(hint);
+  toolbar.appendChild(nameInput);
+  toolbar.appendChild(copyBtn);
+  toolbar.appendChild(editBtn);
+  toolbar.appendChild(previewBtn);
+  toolbar.appendChild(removeBtn);
+  toolbar.appendChild(wrap);
+
+  section.prepend(toolbar);
+  bindTileLayoutButtons(section, tileId, halfBtn, fullBtn, tallBtn);
+  bindTileDragDrop(section, tileId, toolbar);
+  attachTileCollapseButton(section, tileId);
+
+  const syncModeButtons = () => {
+    const isPreview = notes.viewMode === "preview";
+    editBtn.classList.toggle("tile-btn-active", !isPreview);
+    previewBtn.classList.toggle("tile-btn-active", isPreview);
+    syncNotesTileBody(section, notes);
+  };
+
+  copyBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const text = notes.content || "";
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast("Copied to clipboard");
+    } catch {
+      showToast("Could not copy to clipboard", true);
+    }
+  });
+
+  editBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    notes.viewMode = "edit";
+    saveNotesTilesToStorage();
+    syncModeButtons();
+    $(".notes-editor", section)?.focus();
+  });
+
+  previewBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    notes.viewMode = "preview";
+    saveNotesTilesToStorage();
+    syncModeButtons();
+  });
+
+  nameInput.addEventListener("input", () => {
+    notes.name = nameInput.value;
+    section.dataset.tileLabel = notes.name || "Notes";
+    scheduleNotesTileSave(notes);
+  });
+  nameInput.addEventListener("change", () => {
+    notes.name = nameInput.value.trim() || "Notes";
+    nameInput.value = notes.name;
+    section.dataset.tileLabel = notes.name;
+    scheduleNotesTileSave(notes);
+  });
+
+  const editor = $(".notes-editor", section);
+  editor?.addEventListener("input", () => {
+    notes.content = editor.value;
+    scheduleNotesTileSave(notes);
+  });
+
+  removeBtn.addEventListener("click", async () => {
+    const label = notes.name?.trim() || "this notes tile";
+    const ok = await confirmDialog({
+      title: "Remove notes tile?",
+      message: `Remove “${label}” from the dashboard?`,
+      confirmLabel: "Remove",
+      danger: true,
+    });
+    if (!ok) return;
+    const tid = notesTileId(notes);
+    state.notesTiles = state.notesTiles.filter((n) => n.id !== notes.id);
+    state.tileLayout.order = state.tileLayout.order.filter((id) => id !== tid);
+    delete state.tileLayout.widths[tid];
+    delete state.tileLayout.heights[tid];
+    saveLayoutToStorage();
+    scheduleUserProfileSave();
+    renderBoardGroups();
+  });
+
+  syncModeButtons();
+}
+
+function renderNotesTiles(dash) {
+  for (const notes of state.notesTiles) {
+    const tileId = notesTileId(notes);
+    const section = document.createElement("section");
+    section.className = "dashboard-tile board-group board-group-tile notes-tile";
+    section.dataset.tileId = tileId;
+    section.dataset.tileLabel = notes.name || "Notes";
+    section.dataset.notesId = notes.id;
+    section.innerHTML = `
+      <div class="notes-tile-body">
+        <textarea class="notes-editor" placeholder="Write notes or to-dos… Markdown: **bold**, *italic*, \`code\`, # headings, - lists, [links](url)" spellcheck="true"></textarea>
+        <div class="notes-preview hidden" aria-live="polite"></div>
+        <div class="notes-tile-footer" aria-live="polite"><span class="notes-updated-label"></span></div>
+      </div>
+    `;
+    dash.appendChild(section);
+    bindNotesTileChrome(section, notes, tileId);
+    notes._el = section;
+    const editor = $(".notes-editor", section);
+    if (editor) editor.value = notes.content || "";
+    syncNotesTileBody(section, notes);
+    syncNotesUpdatedFooter(section, notes);
+    applyTileLayoutClasses(section, tileId);
+    applyTileBodyCollapsed(section, tileId);
+  }
 }
 
 function normalizeTagTitle(tag) {
@@ -1143,6 +2484,248 @@ function oppDueDateMs(opp) {
   return new Date(opportunityDueDateRaw(opp) || 0).getTime();
 }
 
+function formatOppDueLabel(opp) {
+  const raw = opportunityDueDateRaw(opp);
+  if (!raw) return "";
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function dueDateToInputValue(raw) {
+  if (!raw) return "";
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return "";
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function toApiExpectedCloseDate(dateInputValue) {
+  if (!dateInputValue) return null;
+  const d = new Date(`${dateInputValue}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
+/** CRM ApiDateTime values in PUT bodies are ISO strings (see OnlyOffice community examples). */
+function crmDateTimeFromApi(raw) {
+  if (raw == null || raw === "") return null;
+  if (typeof raw === "object") return raw.value ?? raw.Value ?? null;
+  return String(raw);
+}
+
+function serializeCrmTimestamp(dateInputValue) {
+  if (!dateInputValue) return null;
+  const d = new Date(`${dateInputValue}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
+async function fetchOpportunityForUpdate(oppId) {
+  const data = await api(`/api/2.0/crm/opportunity/${oppId}`);
+  return data?.response ?? data?.result ?? data;
+}
+
+function buildOpportunityPutBody(opp, overrides = {}) {
+  const oppId = Number(opp.id ?? opp.ID);
+  const members = [];
+  if (Array.isArray(opp.members)) {
+    for (const m of opp.members) {
+      const mid = m.id ?? m.ID;
+      if (mid != null) members.push(Number(mid));
+    }
+  }
+
+  const accessList = [];
+  if (Array.isArray(opp.accessList)) {
+    for (const u of opp.accessList) {
+      const uid = u.id ?? u.ID;
+      if (uid != null) accessList.push(String(uid));
+    }
+  }
+
+  const responsible = opp.responsible?.id ?? opp.responsible?.ID ?? state.currentUserId;
+
+  const body = {
+    opportunityid: oppId,
+    contactid: Number(opp.contact?.id ?? opp.contact?.ID ?? opp.contactId ?? 0) || 0,
+    members,
+    title: opp.title || opp.Title || "",
+    description: opp.description ?? opp.Description ?? "",
+    responsibleid: String(responsible || ""),
+    bidType: Number(opp.bidType ?? opp.BidType ?? 0),
+    bidValue: Number(opp.bidValue ?? opp.BidValue ?? 0),
+    bidCurrencyAbbr:
+      opp.bidCurrency?.abbreviation ?? opp.bidCurrency?.Abbreviation ?? opp.bidCurrencyAbbr ?? "USD",
+    perPeriodValue: Number(opp.perPeriodValue ?? opp.PerPeriodValue ?? 1),
+    stageid: Number(opp.stage?.id ?? opp.stage?.ID ?? opp.stageId ?? 0),
+    successProbability: Number(
+      opp.successProbability ?? opp.SuccessProbability ?? opp.stage?.successProbability ?? 0
+    ),
+    actualCloseDate: crmDateTimeFromApi(opp.actualCloseDate ?? opp.ActualCloseDate),
+    expectedCloseDate: crmDateTimeFromApi(opp.expectedCloseDate ?? opp.ExpectedCloseDate),
+    isPrivate: !!(opp.isPrivate ?? opp.IsPrivate),
+    accessList,
+    isNotify: false,
+  };
+
+  if (overrides.expectedCloseDate !== undefined) body.expectedCloseDate = overrides.expectedCloseDate;
+  if (overrides.stageid !== undefined) body.stageid = overrides.stageid;
+  if (overrides.successProbability !== undefined) {
+    body.successProbability = overrides.successProbability;
+  }
+  return body;
+}
+
+async function updateOpportunityDueDate(oppId, dateInputValue) {
+  const opp = await fetchOpportunityForUpdate(oppId);
+  const body = buildOpportunityPutBody(opp, {
+    expectedCloseDate: dateInputValue ? serializeCrmTimestamp(dateInputValue) : null,
+  });
+  await api(`/api/2.0/crm/opportunity/${oppId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+async function updateOpportunityStage(oppId, stageId) {
+  const sid = Number(stageId);
+  if (!Number.isFinite(sid) || sid <= 0) throw new Error("Invalid stage");
+
+  const stage = state.stages.find((s) => Number(s.id ?? s.ID) === sid);
+  const opp = await fetchOpportunityForUpdate(oppId);
+  const overrides = { stageid: sid };
+  const stageProb = stage?.successProbability ?? stage?.SuccessProbability;
+  if (stageProb != null && !Number.isNaN(Number(stageProb))) {
+    overrides.successProbability = Number(stageProb);
+  }
+
+  const body = buildOpportunityPutBody(opp, overrides);
+  await api(`/api/2.0/crm/opportunity/${oppId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+async function addOpportunityTag(oppId, tagTitle) {
+  const tagName = normalizeTagTitle(tagTitle);
+  if (!tagName) return;
+  await api(`/api/2.0/crm/opportunity/${oppId}/tag`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tagName }),
+  });
+}
+
+async function removeOpportunityTag(oppId, tagTitle) {
+  const tagName = normalizeTagTitle(tagTitle);
+  if (!tagName) return;
+  await api(`/api/2.0/crm/opportunity/${oppId}/tag`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tagName }),
+  });
+}
+
+async function loadHistoryCategories() {
+  if (state.historyCategories.length) return state.historyCategories;
+  try {
+    const data = await api("/api/2.0/crm/history/category");
+    state.historyCategories = unwrap(data);
+  } catch {
+    state.historyCategories = [];
+  }
+
+  if (!state.historyCategories.length) {
+    try {
+      const params = new URLSearchParams({
+        startIndex: "0",
+        count: "80",
+        entityType: "opportunity",
+      });
+      const data = await api(`/api/2.0/crm/history/filter?${params}`);
+      const byId = new Map();
+      for (const ev of unwrapHistoryEvents(data)) {
+        const cat = ev.category ?? ev.Category;
+        const id = cat?.id ?? cat?.ID;
+        if (id == null) continue;
+        byId.set(Number(id), {
+          id,
+          title: cat.title || cat.Title || `Category ${id}`,
+        });
+      }
+      state.historyCategories = [...byId.values()];
+    } catch {
+      /* no categories */
+    }
+  }
+
+  return state.historyCategories;
+}
+
+function resolveHistoryCategoryId(selectedValue) {
+  const picked = Number(selectedValue);
+  if (Number.isFinite(picked) && picked > 0) return picked;
+
+  const cats = state.historyCategories;
+  const preferred = cats.find((c) => /note|event|comment/i.test(String(c.title || c.Title || "")));
+  if (preferred) return Number(preferred.id ?? preferred.ID);
+
+  const first = cats[0];
+  if (first) return Number(first.id ?? first.ID);
+
+  throw new Error(
+    "No event note category found in CRM. Configure history categories under CRM settings, then try again."
+  );
+}
+
+function populateDealEditNoteCategorySelect() {
+  const sel = $("#deal-edit-note-category");
+  const field = $("#deal-edit-note-category-field");
+  if (!sel) return;
+
+  sel.innerHTML = "";
+  const cats = state.historyCategories;
+  if (!cats.length) {
+    if (field) field.classList.add("hidden");
+    return;
+  }
+
+  if (field) field.classList.toggle("hidden", cats.length <= 1);
+
+  for (const cat of cats) {
+    const opt = document.createElement("option");
+    opt.value = String(cat.id ?? cat.ID ?? "");
+    opt.textContent = cat.title || cat.Title || opt.value;
+    sel.appendChild(opt);
+  }
+
+  const preferred = cats.findIndex((c) => /note|event|comment/i.test(String(c.title || c.Title || "")));
+  sel.selectedIndex = preferred >= 0 ? preferred : 0;
+}
+
+function dealEditStepError(step, err) {
+  const msg = err?.message || String(err);
+  return new Error(`${step}: ${msg}`);
+}
+
+function dealTagsChanged(initialTags, nextTags) {
+  const catalog = buildTagCatalog();
+  const initialKeys = new Set(initialTags.map((t) => tagLookupKey(t, catalog)).filter(Boolean));
+  const nextKeys = new Set(nextTags.map((t) => tagLookupKey(t, catalog)).filter(Boolean));
+  if (initialKeys.size !== nextKeys.size) return true;
+  for (const k of nextKeys) if (!initialKeys.has(k)) return true;
+  return false;
+}
+
+function resolveOppStageId(opp) {
+  return opp.stage?.id ?? opp.stage?.ID ?? opp.stageId ?? opp.StageId ?? "";
+}
+
 /** Due today or earlier — matches CRM “red” overdue opportunities. */
 function isRedOpportunity(opp) {
   const raw = opportunityDueDateRaw(opp);
@@ -1166,15 +2749,32 @@ function oppCreatedMs(opp) {
   return new Date(d || 0).getTime();
 }
 
+function isOpenOpportunity(opp) {
+  const st = opp.stage?.status ?? opp.stage?.stageType;
+  if (st === 1 || st === 2 || st === "ClosedAndWon" || st === "ClosedAndLost") return false;
+  return st === 0 || st === "Open" || st == null || st === "";
+}
+
+function countOpenOpportunities() {
+  const seen = new Set();
+  let n = 0;
+  for (const group of state.groups) {
+    for (const opp of group.opportunities || []) {
+      const id = opp.id ?? opp.ID;
+      if (id == null || seen.has(String(id))) continue;
+      if (!isOpenOpportunity(opp)) continue;
+      seen.add(String(id));
+      n += 1;
+    }
+  }
+  return n;
+}
+
 function applyClientDealStatus(opportunities, dealStatus) {
   if (dealStatus === "all") return opportunities;
   return opportunities.filter((opp) => {
-    const st = opp.stage?.status ?? opp.stage?.stageType;
-    const isOpen = st === 0 || st === "Open";
-    if (dealStatus === "open") return isOpen;
-    if (dealStatus === "closed") {
-      return st === 1 || st === 2 || st === "ClosedAndWon" || st === "ClosedAndLost";
-    }
+    if (dealStatus === "open") return isOpenOpportunity(opp);
+    if (dealStatus === "closed") return !isOpenOpportunity(opp);
     return true;
   });
 }
@@ -1364,7 +2964,56 @@ function formatMoney(opp) {
 }
 
 function customFieldLabel(field) {
-  return normalizeTagTitle(field?.title ?? field?.Title ?? field?.name ?? field?.label ?? field?.fieldTitle);
+  return normalizeTagTitle(
+    field?.label ?? field?.Label ?? field?.title ?? field?.Title ?? field?.name ?? field?.fieldTitle
+  );
+}
+
+function customFieldTypeCode(def) {
+  const ft = def?.fieldType ?? def?.FieldType ?? def?.fieldTypeTitle ?? def?.FieldTypeTitle;
+  if (typeof ft === "number" && ft >= 0 && ft <= 5) return ft;
+  if (typeof ft === "string") {
+    const s = ft.toLowerCase().replace(/\s+/g, "");
+    if (s.includes("textarea")) return 1;
+    if (s.includes("selectbox") || s === "select") return 2;
+    if (s.includes("checkbox") || s === "check") return 3;
+    if (s.includes("heading") || s === "head") return 4;
+    if (s.includes("date")) return 5;
+    if (s.includes("textfield") || s === "text") return 0;
+  }
+  return 0;
+}
+
+/** User fields hidden from the create-opportunity modal (still exist in CRM). */
+const CREATE_OPP_EXCLUDED_USER_FIELDS = new Set(
+  [
+    "Same Adjuster",
+    "Photo Drive Link",
+    "Shared Spreadsheet",
+    "Trades",
+    "Final RCV",
+    "Zip Code",
+    "State",
+    "City",
+    "Members",
+    "Member",
+  ].map((n) => normalizeUserFieldLabelKey(n))
+);
+
+function normalizeUserFieldLabelKey(label) {
+  return String(label || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isCreateOppExcludedUserField(def) {
+  const label = customFieldLabel(def);
+  if (!label) return false;
+  const key = normalizeUserFieldLabelKey(label);
+  if (CREATE_OPP_EXCLUDED_USER_FIELDS.has(key)) return true;
+  if (key === "members" || key === "member") return true;
+  return false;
 }
 
 function fieldNameMatches(label, patterns) {
@@ -1375,29 +3024,31 @@ function fieldNameMatches(label, patterns) {
   });
 }
 
-async function loadOpportunityCustomFieldDefs() {
+async function loadOpportunityCustomFieldDefs(force = false) {
+  if (!force && state.customFieldDefs.length) return state.customFieldDefs;
+
   state.customFieldDefs = [];
   state.customFieldById = new Map();
-  const paths = [
-    "/api/2.0/crm/setting/customfield/filter?entityType=Opportunity",
-    "/api/2.0/crm/setting/customfield/filter?entityType=opportunity",
-    "/api/2.0/crm/customfield/filter?entityType=Opportunity",
-  ];
+  // Only opportunity definitions IDs are valid Keys for create/update (see CRMApi.Deals.cs).
+  const paths = ["/api/2.0/crm/opportunity/customfield/definitions"];
   for (const path of paths) {
     try {
       const list = unwrap(await api(path));
       if (list.length) {
-        state.customFieldDefs = list;
-        for (const f of list) {
-          const id = f.id ?? f.ID ?? f.fieldId;
+        state.customFieldDefs = list
+          .slice()
+          .sort((a, b) => (a.position ?? a.Position ?? 0) - (b.position ?? b.Position ?? 0));
+        for (const f of state.customFieldDefs) {
+          const id = customFieldDefinitionId(f);
           if (id != null) state.customFieldById.set(String(id), f);
         }
-        return;
+        return state.customFieldDefs;
       }
     } catch {
       /* try next path */
     }
   }
+  return state.customFieldDefs;
 }
 
 const CHECKLIST_STAGE_TITLE = "New Supplement Project - Estimate Needed";
@@ -1524,6 +3175,19 @@ function renderCard(opp, group, showStagePill) {
   card.className = "card";
   card.dataset.opportunityId = opp.id;
 
+  const editBtn = document.createElement("button");
+  editBtn.type = "button";
+  editBtn.className = "card-edit-btn";
+  editBtn.title = "Edit deal";
+  editBtn.setAttribute("aria-label", "Edit deal");
+  editBtn.textContent = "✎";
+  editBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openDealEditModal(opp, group).catch((err) => showToast(err.message, true));
+  });
+  card.appendChild(editBtn);
+
   const title = document.createElement("h3");
   title.className = "card-title";
   const link = document.createElement("a");
@@ -1590,6 +3254,14 @@ function renderCard(opp, group, showStagePill) {
     warn.className = "card-checklist-warn";
     warn.textContent = "Missing Checklist info";
     card.appendChild(warn);
+  }
+
+  const dueLabel = formatOppDueLabel(opp);
+  if (dueLabel) {
+    const due = document.createElement("p");
+    due.className = "card-due" + (isRedOpportunity(opp) ? " card-due--overdue" : "");
+    due.textContent = `Due ${dueLabel}`;
+    card.appendChild(due);
   }
 
   return card;
@@ -2059,6 +3731,9 @@ function renderBoardGroups() {
     applyTileLayoutClasses(section, tileId);
     applyTileBodyCollapsed(section, tileId);
   }
+
+  renderCalendarTiles(dash);
+  renderNotesTiles(dash);
 
   ensureTileLayout();
   mountDashboardTiles();
@@ -2947,6 +4622,103 @@ async function loadNotificationFeed() {
   renderFeedNotificationList();
 }
 
+const TILE_REFRESH_ICON_HTML = `<svg class="tile-refresh-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M21 21v-5h-5"/></svg>`;
+
+let lastDashboardActivityAt = Date.now();
+let panelTileAutoRefreshTimer = null;
+
+function noteDashboardActivity() {
+  lastDashboardActivityAt = Date.now();
+}
+
+function isDashboardActivityFresh() {
+  return Date.now() - lastDashboardActivityAt < DASHBOARD_IDLE_STOP_MS;
+}
+
+function isDashboardAppVisible() {
+  const app = $("#app");
+  return app && !app.classList.contains("hidden");
+}
+
+async function refreshAutoRefreshTilesQuietly() {
+  if (!isDashboardAppVisible() || !isDashboardActivityFresh()) return;
+  const jobs = [loadNotificationFeed(), loadTasks()];
+  for (const cal of state.calendarTiles) {
+    jobs.push(loadCalendarForTile(cal, { quiet: true }));
+  }
+  await Promise.all(jobs);
+}
+
+function stopPanelTileAutoRefresh() {
+  if (panelTileAutoRefreshTimer != null) {
+    clearInterval(panelTileAutoRefreshTimer);
+    panelTileAutoRefreshTimer = null;
+  }
+}
+
+function startPanelTileAutoRefresh() {
+  stopPanelTileAutoRefresh();
+  panelTileAutoRefreshTimer = setInterval(() => {
+    refreshAutoRefreshTilesQuietly().catch((err) => showToast(err.message, true));
+  }, PANEL_TILE_AUTO_REFRESH_MS);
+}
+
+function bindDashboardActivityTracking() {
+  if (bindDashboardActivityTracking._bound) return;
+  bindDashboardActivityTracking._bound = true;
+  const mark = () => noteDashboardActivity();
+  const opts = { capture: true, passive: true };
+  document.addEventListener("mousedown", mark, opts);
+  document.addEventListener("keydown", mark, opts);
+  document.addEventListener("touchstart", mark, opts);
+  document.addEventListener("scroll", mark, opts);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) noteDashboardActivity();
+  });
+}
+
+function ensureTileAutoRefreshButton(tileEl, tileId) {
+  if (!isAutoRefreshTileId(tileId)) return;
+  const toolbar = tileEl.querySelector(":scope > .tile-toolbar, :scope > .group-tile-bar");
+  if (!toolbar || toolbar.querySelector(".btn-tile-refresh")) return;
+
+  let label = "Refresh tile";
+  if (tileId === "tile-feed") label = "Refresh notifications";
+  else if (tileId === "tile-tasks") label = "Refresh tasks";
+  else if (tileId.startsWith("calendar-")) label = "Refresh calendar";
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "tile-btn tile-btn-icon btn-tile-refresh";
+  btn.title = label;
+  btn.setAttribute("aria-label", label);
+  btn.innerHTML = TILE_REFRESH_ICON_HTML;
+  btn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (btn.disabled) return;
+    noteDashboardActivity();
+    btn.disabled = true;
+    btn.classList.add("is-refreshing");
+    try {
+      if (tileId === "tile-feed") await loadNotificationFeed();
+      else if (tileId === "tile-tasks") await loadTasks();
+      else {
+        const cal = getCalendarByTileId(tileId);
+        if (cal) await loadCalendarForTile(cal);
+      }
+    } catch (err) {
+      showToast(err.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove("is-refreshing");
+    }
+  });
+
+  const countBadge = toolbar.querySelector(".tile-toolbar-count");
+  if (countBadge?.nextSibling) toolbar.insertBefore(btn, countBadge.nextSibling);
+  else toolbar.appendChild(btn);
+}
+
 function ensureTasksNewTaskButton(tileEl) {
   if (!tileEl || tileEl.dataset.tileId !== "tile-tasks") return;
   const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
@@ -2962,6 +4734,1235 @@ function ensureTasksNewTaskButton(tileEl) {
   const layoutBtns = toolbar.querySelector(".tile-layout-btns");
   if (layoutBtns) toolbar.insertBefore(btn, layoutBtns);
   else toolbar.appendChild(btn);
+}
+
+function setDealEditError(message) {
+  const el = $("#deal-edit-error");
+  if (!el) return;
+  if (message) {
+    el.textContent = message;
+    el.classList.remove("hidden");
+  } else {
+    el.textContent = "";
+    el.classList.add("hidden");
+  }
+}
+
+function closeDealEditModal() {
+  const modal = $("#deal-edit-modal");
+  if (modal) modal.classList.add("hidden");
+  state.dealEdit = null;
+  setDealEditError("");
+}
+
+function tagIdForTitle(title, catalog = buildTagCatalog()) {
+  const key = normalizeTagTitle(title).toLowerCase();
+  return catalog.byTitleLower.get(key)?.id ?? null;
+}
+
+function renderDealEditTagChips() {
+  const wrap = $("#deal-edit-tags");
+  const addSel = $("#deal-edit-tag-add");
+  if (!wrap || !state.dealEdit) return;
+
+  wrap.innerHTML = "";
+  const catalog = buildTagCatalog();
+  const current = new Set(state.dealEdit.tags.map((t) => normalizeTagTitle(t)).filter(Boolean));
+
+  for (const title of [...current].sort((a, b) => a.localeCompare(b))) {
+    const chip = document.createElement("span");
+    chip.className = "deal-edit-tag";
+    chip.dataset.tagTitle = title;
+    chip.appendChild(document.createTextNode(title));
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.className = "deal-edit-tag-remove";
+    rm.setAttribute("aria-label", `Remove tag ${title}`);
+    rm.textContent = "×";
+    rm.addEventListener("click", () => {
+      state.dealEdit.tags = state.dealEdit.tags.filter((t) => !tagsEqual(t, title, catalog));
+      renderDealEditTagChips();
+    });
+    chip.appendChild(rm);
+    wrap.appendChild(chip);
+  }
+
+  if (addSel) {
+    const prev = addSel.value;
+    addSel.innerHTML = '<option value="">Add tag…</option>';
+    for (const tag of state.allTags) {
+      const title = normalizeTagTitle(tag.title ?? tag);
+      if (!title || current.has(title)) continue;
+      const opt = document.createElement("option");
+      opt.value = title;
+      opt.textContent = title;
+      addSel.appendChild(opt);
+    }
+    addSel.value = prev && [...addSel.options].some((o) => o.value === prev) ? prev : "";
+  }
+}
+
+function populateDealEditStageSelect(opp) {
+  const sel = $("#deal-edit-stage");
+  if (!sel) return;
+  const current = String(resolveOppStageId(opp));
+  sel.innerHTML = "";
+  for (const stage of state.stages) {
+    const opt = document.createElement("option");
+    opt.value = String(stage.id ?? stage.ID ?? "");
+    opt.textContent = stage.title || stage.Title || opt.value;
+    if (String(opt.value) === current) opt.selected = true;
+    sel.appendChild(opt);
+  }
+}
+
+function populateDealEditNotifySelect() {
+  const sel = $("#deal-edit-notify");
+  if (!sel) return;
+  sel.innerHTML = "";
+  const users = new Map();
+  for (const u of state.portalUsers) {
+    if (u.id != null) users.set(String(u.id), u.displayName || u.id);
+  }
+  if (state.currentUserId != null) {
+    users.set(String(state.currentUserId), state.currentUserName || state.currentUserId);
+  }
+  for (const [id, name] of [...users.entries()].sort((a, b) => a[1].localeCompare(b[1]))) {
+    const opt = document.createElement("option");
+    opt.value = id;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  }
+}
+
+async function loadDealEditTags(opp) {
+  let tags = getOppTagsFromRecord(opp);
+  const id = opp.id ?? opp.ID;
+  if (!tags.length && id != null) {
+    try {
+      tags = unwrapEntityTags(await api(`/api/2.0/crm/opportunity/tag/${id}`));
+      opp.tags = tags;
+    } catch {
+      /* no tags */
+    }
+  }
+  return tags;
+}
+
+async function openDealEditModal(opp, group) {
+  const modal = $("#deal-edit-modal");
+  const form = $("#deal-edit-form");
+  if (!modal || !form) return;
+
+  const id = opp.id ?? opp.ID;
+  if (id == null) throw new Error("Opportunity id missing");
+
+  setDealEditError("");
+  form.reset();
+
+  if (!state.stages.length) await loadStages();
+  if (!state.allTags.length) await loadAllTags();
+  if (!state.portalUsers.length) await loadPortalUsers();
+  await loadHistoryCategories();
+  populateDealEditNoteCategorySelect();
+
+  const tags = await loadDealEditTags(opp);
+  state.dealEdit = {
+    oppId: Number(id),
+    group,
+    oppTitle: opp.title || opp.Title || `Opportunity #${id}`,
+    initialTags: [...tags],
+    tags: [...tags],
+    initialStageId: String(resolveOppStageId(opp)),
+    initialDue: dueDateToInputValue(opportunityDueDateRaw(opp)),
+  };
+
+  const titleEl = $("#deal-edit-modal-title");
+  if (titleEl) titleEl.textContent = state.dealEdit.oppTitle;
+
+  const crmLink = $("#deal-edit-crm-link");
+  if (crmLink) crmLink.href = crmOpportunityUrl(id);
+
+  const dueInput = $("#deal-edit-due");
+  if (dueInput) dueInput.value = state.dealEdit.initialDue;
+
+  populateDealEditStageSelect(opp);
+  populateDealEditNotifySelect();
+  renderDealEditTagChips();
+
+  modal.classList.remove("hidden");
+  $("#deal-edit-due")?.focus();
+}
+
+async function createOpportunityHistoryEvent(oppId, { content, categoryId, notifyUserList }) {
+  const html = plainTextToNoteHtml(content);
+  if (!html) throw new Error("Note text is required");
+
+  const body = {
+    entityType: "opportunity",
+    entityId: oppId,
+    contactId: 0,
+    content: html,
+    categoryId,
+  };
+
+  if (notifyUserList?.length) body.notifyUserList = notifyUserList;
+
+  await api("/api/2.0/crm/history", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+function plainTextToNoteHtml(text) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return "";
+  return trimmed
+    .split(/\r?\n/)
+    .map((line) => escapeHtml(line))
+    .join("<br/>");
+}
+
+async function applyDealTagChanges(oppId, initialTags, nextTags) {
+  if (!dealTagsChanged(initialTags, nextTags)) return;
+
+  const catalog = buildTagCatalog();
+  const initialSet = new Set(initialTags.map((t) => tagLookupKey(t, catalog)).filter(Boolean));
+  const nextSet = new Set(nextTags.map((t) => tagLookupKey(t, catalog)).filter(Boolean));
+
+  const toAdd = nextTags.filter((t) => {
+    const key = tagLookupKey(t, catalog);
+    return key && !initialSet.has(key);
+  });
+  const toRemove = initialTags.filter((t) => {
+    const key = tagLookupKey(t, catalog);
+    return key && !nextSet.has(key);
+  });
+
+  for (const title of toAdd) {
+    await addOpportunityTag(oppId, title);
+  }
+
+  for (const title of toRemove) {
+    await removeOpportunityTag(oppId, title);
+  }
+}
+
+async function submitDealEditForm(e) {
+  e.preventDefault();
+  setDealEditError("");
+  const ctx = state.dealEdit;
+  if (!ctx) return;
+
+  const submitBtn = $("#deal-edit-submit");
+  if (submitBtn) submitBtn.disabled = true;
+
+  try {
+    const oppId = ctx.oppId;
+    const dueVal = $("#deal-edit-due")?.value ?? "";
+    const stageId = $("#deal-edit-stage")?.value ?? "";
+    const noteBody = $("#deal-edit-note-body")?.value?.trim() ?? "";
+    const notifySel = $("#deal-edit-notify");
+    const notifyUserList = notifySel
+      ? [...notifySel.selectedOptions].map((o) => o.value).filter(Boolean)
+      : [];
+    const dueChanged = dueVal !== ctx.initialDue;
+    const stageChanged = stageId && stageId !== ctx.initialStageId;
+
+    if (dueChanged) {
+      try {
+        await updateOpportunityDueDate(oppId, dueVal);
+      } catch (err) {
+        throw dealEditStepError("Due date", err);
+      }
+    }
+
+    if (stageChanged) {
+      try {
+        await updateOpportunityStage(oppId, stageId);
+      } catch (err) {
+        throw dealEditStepError("Stage", err);
+      }
+    }
+
+    if (dealTagsChanged(ctx.initialTags, ctx.tags)) {
+      try {
+        await applyDealTagChanges(oppId, ctx.initialTags, ctx.tags);
+      } catch (err) {
+        throw dealEditStepError("Tags", err);
+      }
+    }
+
+    if (noteBody) {
+      try {
+        const categoryId = resolveHistoryCategoryId($("#deal-edit-note-category")?.value);
+        await createOpportunityHistoryEvent(oppId, {
+          content: noteBody,
+          categoryId,
+          notifyUserList,
+        });
+      } catch (err) {
+        throw dealEditStepError("Event note", err);
+      }
+    }
+
+    const group = ctx.group;
+    closeDealEditModal();
+    showToast("Deal updated");
+    if (group) await refreshGroup(group);
+    else await refreshAll();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    setDealEditError(msg || "Could not save deal");
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
+
+function bindDealEditModal() {
+  const modal = $("#deal-edit-modal");
+  const form = $("#deal-edit-form");
+  if (!modal || !form || form.dataset.bound) return;
+  form.dataset.bound = "1";
+
+  form.addEventListener("submit", (e) => {
+    submitDealEditForm(e).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      setDealEditError(msg || "Could not save deal");
+    });
+  });
+
+  $("#deal-edit-cancel")?.addEventListener("click", closeDealEditModal);
+  modal.querySelectorAll("[data-deal-edit-dismiss]").forEach((el) => {
+    el.addEventListener("click", closeDealEditModal);
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !modal.classList.contains("hidden")) closeDealEditModal();
+  });
+
+  $("#deal-edit-tag-add")?.addEventListener("change", (e) => {
+    const title = e.target.value;
+    if (!title || !state.dealEdit) return;
+    if (!state.dealEdit.tags.some((t) => tagsEqual(t, title))) {
+      state.dealEdit.tags.push(title);
+      renderDealEditTagChips();
+    }
+    e.target.value = "";
+  });
+}
+
+function setCreateOpportunityError(message) {
+  const el = $("#create-opportunity-error");
+  if (!el) return;
+  if (message) {
+    el.textContent = message;
+    el.classList.remove("hidden");
+  } else {
+    el.textContent = "";
+    el.classList.add("hidden");
+  }
+}
+
+function closeCreateOpportunityModal() {
+  const modal = $("#create-opportunity-modal");
+  if (modal) modal.classList.add("hidden");
+  setCreateOpportunityError("");
+  state.newOpportunityDraft = null;
+}
+
+function resetNewOpportunityDraft() {
+  state.newOpportunityDraft = {
+    contactId: null,
+    contactLabel: "",
+    tags: [],
+  };
+}
+
+function createOppCustomFieldInputKind(def) {
+  const code = customFieldTypeCode(def);
+  if (code === 1) return "textarea";
+  if (code === 2) return "select";
+  if (code === 3) return "checkbox";
+  if (code === 4) return "heading";
+  if (code === 5) return "date";
+  return "text";
+}
+
+function parseCustomFieldSelectOptions(def) {
+  if (customFieldTypeCode(def) !== 2) return [];
+  const raw = def?.mask ?? def?.Mask ?? def?.valueList ?? def?.ValueList ?? def?.options ?? def?.Options;
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return raw.map((o) => String(o?.title ?? o?.Title ?? o?.value ?? o ?? "").trim()).filter(Boolean);
+  }
+  const str = String(raw).trim();
+  if (!str) return [];
+  try {
+    const parsed = JSON.parse(str);
+    if (Array.isArray(parsed)) return parsed.map((o) => String(o ?? "").trim()).filter(Boolean);
+  } catch {
+    /* mask is not a JSON option list */
+  }
+  return [];
+}
+
+function parseCustomFieldTextMaxLength(def) {
+  if (customFieldTypeCode(def) !== 0) return null;
+  const raw = def?.mask ?? def?.Mask;
+  if (!raw) return null;
+  try {
+    const parsed = typeof raw === "object" ? raw : JSON.parse(String(raw));
+    const size = Number(parsed?.size ?? parsed?.Size);
+    return Number.isFinite(size) && size > 0 ? size : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildCreateOppCustomFieldInput(def, fieldId) {
+  const kind = createOppCustomFieldInputKind(def);
+  const id = `create-opp-cf-${fieldId}`;
+
+  if (kind === "checkbox") {
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.id = id;
+    input.dataset.customFieldId = String(fieldId);
+    return input;
+  }
+
+  if (kind === "select") {
+    const input = document.createElement("select");
+    input.id = id;
+    input.dataset.customFieldId = String(fieldId);
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = "—";
+    input.appendChild(empty);
+    for (const optText of parseCustomFieldSelectOptions(def)) {
+      const opt = document.createElement("option");
+      opt.value = optText;
+      opt.textContent = optText;
+      input.appendChild(opt);
+    }
+    return input;
+  }
+
+  if (kind === "textarea") {
+    const input = document.createElement("textarea");
+    input.id = id;
+    input.dataset.customFieldId = String(fieldId);
+    input.rows = 3;
+    try {
+      const mask = JSON.parse(def.mask ?? def.Mask ?? "{}");
+      if (mask.rows) input.rows = Number(mask.rows) || 3;
+      if (mask.cols) input.style.width = "100%";
+    } catch {
+      /* default */
+    }
+    return input;
+  }
+
+  if (kind === "date") {
+    const input = document.createElement("input");
+    input.type = "date";
+    input.id = id;
+    input.dataset.customFieldId = String(fieldId);
+    return input;
+  }
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.id = id;
+  input.dataset.customFieldId = String(fieldId);
+  const maxLen = parseCustomFieldTextMaxLength(def);
+  if (maxLen) input.maxLength = maxLen;
+  return input;
+}
+
+function populateCreateOppStageSelect() {
+  const sel = $("#create-opp-stage");
+  if (!sel) return;
+  sel.innerHTML = "";
+  for (const stage of state.stages) {
+    const opt = document.createElement("option");
+    opt.value = String(stage.id ?? stage.ID ?? "");
+    opt.textContent = stage.title || stage.Title || opt.value;
+    sel.appendChild(opt);
+  }
+  if (sel.options.length) sel.selectedIndex = 0;
+}
+
+function populateCreateOppResponsibleSelect() {
+  const sel = $("#create-opp-responsible");
+  if (!sel) return;
+  sel.innerHTML = "";
+  const users = new Map();
+  for (const u of state.portalUsers) {
+    if (u.id != null) users.set(String(u.id), u.displayName || u.id);
+  }
+  if (state.currentUserId != null) {
+    users.set(String(state.currentUserId), state.currentUserName || state.currentUserId);
+  }
+  for (const [id, name] of [...users.entries()].sort((a, b) => a[1].localeCompare(b[1]))) {
+    const opt = document.createElement("option");
+    opt.value = id;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  }
+  if (state.currentUserId != null) sel.value = String(state.currentUserId);
+}
+
+function populateCreateOppAccessSelect() {
+  const sel = $("#create-opp-access");
+  if (!sel) return;
+  sel.innerHTML = "";
+  const users = new Map();
+  for (const u of state.portalUsers) {
+    if (u.id != null) users.set(String(u.id), u.displayName || u.id);
+  }
+  if (state.currentUserId != null) {
+    users.set(String(state.currentUserId), state.currentUserName || state.currentUserId);
+  }
+  for (const [id, name] of [...users.entries()].sort((a, b) => a[1].localeCompare(b[1]))) {
+    const opt = document.createElement("option");
+    opt.value = id;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  }
+  if (state.currentUserId != null) {
+    for (const opt of sel.options) {
+      if (opt.value === String(state.currentUserId)) opt.selected = true;
+    }
+  }
+}
+
+function populateCreateOppTagAddSelect() {
+  const sel = $("#create-opp-tag-add");
+  if (!sel || !state.newOpportunityDraft) return;
+  const current = new Set(state.newOpportunityDraft.tags.map((t) => normalizeTagTitle(t)).filter(Boolean));
+  sel.innerHTML = '<option value="">Add tag…</option>';
+  for (const tag of state.allTags) {
+    const title = normalizeTagTitle(tag.title ?? tag);
+    if (!title || current.has(title)) continue;
+    const opt = document.createElement("option");
+    opt.value = title;
+    opt.textContent = title;
+    sel.appendChild(opt);
+  }
+}
+
+function renderCreateOppTagChips() {
+  const wrap = $("#create-opp-tags");
+  const draft = state.newOpportunityDraft;
+  if (!wrap || !draft) return;
+  wrap.innerHTML = "";
+  const catalog = buildTagCatalog();
+  for (const title of draft.tags) {
+    const chip = document.createElement("span");
+    chip.className = "deal-edit-tag";
+    chip.appendChild(document.createTextNode(normalizeTagTitle(title)));
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.className = "deal-edit-tag-remove";
+    rm.setAttribute("aria-label", `Remove tag ${title}`);
+    rm.textContent = "×";
+    rm.addEventListener("click", () => {
+      draft.tags = draft.tags.filter((t) => !tagsEqual(t, title, catalog));
+      renderCreateOppTagChips();
+      populateCreateOppTagAddSelect();
+    });
+    chip.appendChild(rm);
+    wrap.appendChild(chip);
+  }
+  populateCreateOppTagAddSelect();
+}
+
+function updateCreateOppContactSelectedUi() {
+  const draft = state.newOpportunityDraft;
+  const selected = $("#create-opp-contact-selected");
+  const search = $("#create-opp-contact-search");
+  if (!draft || !selected) return;
+  if (draft.contactId) {
+    selected.innerHTML = `${escapeHtml(draft.contactLabel || `Contact #${draft.contactId}`)} <span class="contact-clear" role="button" tabindex="0">clear</span>`;
+    $(".contact-clear", selected)?.addEventListener("click", () => {
+      draft.contactId = null;
+      draft.contactLabel = "";
+      if (search) search.value = "";
+      updateCreateOppContactSelectedUi();
+    });
+  } else {
+    selected.textContent = "";
+  }
+}
+
+function renderCreateOppCustomFields() {
+  const wrap = $("#create-opp-custom-fields");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+
+  if (!CREATE_OPP_USER_FIELDS_ENABLED) {
+    const hint = document.createElement("p");
+    hint.className = "field-hint create-opp-user-fields-unavailable";
+    hint.title = "Custom user fields are not available yet";
+    hint.textContent = "Custom user fields are not available yet.";
+    wrap.appendChild(hint);
+    return;
+  }
+
+  if (!state.customFieldDefs.length) {
+    wrap.innerHTML =
+      '<p class="field-hint">No user fields configured for opportunities in CRM (Settings → User Fields → Opportunities).</p>';
+    return;
+  }
+
+  const legend = document.createElement("p");
+  legend.className = "create-opp-legend";
+  legend.textContent = "User fields";
+  wrap.appendChild(legend);
+
+  for (const def of state.customFieldDefs) {
+    const fieldId = customFieldDefinitionId(def);
+    if (fieldId == null) continue;
+    if (isCreateOppExcludedUserField(def)) continue;
+
+    const label = customFieldLabel(def) || `Field ${fieldId}`;
+    const kind = createOppCustomFieldInputKind(def);
+
+    if (kind === "heading") {
+      const head = document.createElement("p");
+      head.className = "create-opp-field-heading";
+      head.textContent = label;
+      wrap.appendChild(head);
+      continue;
+    }
+
+    const field = document.createElement("div");
+    field.className = "field";
+    field.dataset.customFieldId = String(fieldId);
+
+    const input = buildCreateOppCustomFieldInput(def, fieldId);
+
+    if (kind === "checkbox") {
+      const lbl = document.createElement("label");
+      lbl.className = "checkbox-filter";
+      lbl.appendChild(input);
+      lbl.appendChild(document.createTextNode(` ${label}`));
+      field.appendChild(lbl);
+    } else {
+      const lbl = document.createElement("label");
+      lbl.setAttribute("for", input.id);
+      lbl.textContent = label;
+      field.appendChild(lbl);
+      field.appendChild(input);
+    }
+    wrap.appendChild(field);
+  }
+}
+
+function customFieldDefinitionId(def) {
+  const id = def?.id ?? def?.ID ?? def?.fieldId ?? def?.FieldId;
+  if (id == null || id === "") return null;
+  const n = Number(id);
+  return Number.isFinite(n) ? n : null;
+}
+
+function formatCustomFieldValueForApi(def, rawValue) {
+  const code = customFieldTypeCode(def);
+  if (code === 3) {
+    const t = String(rawValue ?? "").trim().toLowerCase();
+    if (t === "false" || t === "0" || t === "no" || t === "off") return "false";
+    return "true";
+  }
+  if (code === 5) {
+    const raw = String(rawValue ?? "").trim();
+    if (!raw) return "";
+    const d = new Date(`${raw}T12:00:00`);
+    if (Number.isNaN(d.getTime())) return raw;
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    const y = d.getFullYear();
+    return `${m}/${day}/${y}`;
+  }
+  return String(rawValue ?? "").trim();
+}
+
+function collectCreateOppCustomFieldValues() {
+  if (!CREATE_OPP_USER_FIELDS_ENABLED) return [];
+  const values = [];
+  const wrap = $("#create-opp-custom-fields");
+  if (!wrap) return values;
+
+  for (const def of state.customFieldDefs) {
+    const fieldId = customFieldDefinitionId(def);
+    if (fieldId == null) continue;
+    if (isCreateOppExcludedUserField(def)) continue;
+    if (createOppCustomFieldInputKind(def) === "heading") continue;
+
+    const input = wrap.querySelector(`[data-custom-field-id="${String(fieldId)}"]`);
+    if (!input) continue;
+
+    let raw;
+    if (input.type === "checkbox") {
+      if (!input.checked) continue;
+      raw = "true";
+    } else {
+      raw = String(input.value ?? "").trim();
+      if (!raw) continue;
+    }
+    values.push({ fieldId, value: formatCustomFieldValueForApi(def, raw), def });
+  }
+  return values;
+}
+
+/** OnlyOffice ItemKeyValuePair<int,string> on create/update opportunity bodies. */
+function buildCustomFieldListForApi(fieldValues) {
+  return fieldValues.map(({ fieldId, value }) => ({
+    Key: Number(fieldId),
+    Value: String(value ?? ""),
+  }));
+}
+
+function extractOpportunityCustomFieldList(opp) {
+  const lists = [
+    opp.customFields,
+    opp.CustomFields,
+    opp.customFieldList,
+    opp.CustomFieldList,
+    opp.fieldValues,
+    opp.FieldValues,
+  ];
+  const out = [];
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      const fieldId = customFieldDefinitionId(item) ?? Number(item.id ?? item.ID ?? item.fieldId);
+      if (!Number.isFinite(fieldId)) continue;
+      const raw = item.value ?? item.Value ?? item.fieldValue ?? item.FieldValue;
+      if (raw == null || raw === "") continue;
+      const def = state.customFieldById.get(String(fieldId));
+      out.push({ fieldId, value: formatCustomFieldValueForApi(def, raw), def });
+    }
+  }
+  return out;
+}
+
+function mergeCustomFieldValues(existing, incoming) {
+  const byId = new Map();
+  for (const row of existing) {
+    if (row?.fieldId != null) byId.set(Number(row.fieldId), row);
+  }
+  for (const row of incoming) {
+    if (row?.fieldId != null) byId.set(Number(row.fieldId), row);
+  }
+  return [...byId.values()];
+}
+
+async function fetchOpportunityCustomFieldValues(oppId) {
+  const paths = [
+    `/api/2.0/crm/opportunity/${oppId}/customfield`,
+    `/api/2.0/crm/opportunity/${oppId}/customfields`,
+  ];
+  for (const path of paths) {
+    try {
+      const list = unwrap(await api(path));
+      if (list.length) return list;
+    } catch {
+      /* try next */
+    }
+  }
+  return [];
+}
+
+function readSavedCustomFieldValue(item) {
+  const raw = item?.fieldValue ?? item?.FieldValue ?? item?.value ?? item?.Value;
+  if (raw == null) return "";
+  return String(raw).trim();
+}
+
+function customFieldValuesMatch(want, got) {
+  const a = String(want ?? "").trim();
+  const b = String(got ?? "").trim();
+  if (!a && !b) return true;
+  if (a === b) return true;
+  if (a.toLowerCase() === b.toLowerCase()) return true;
+  if (a === "true" && (b === "True" || b === "1")) return true;
+  if (a === "false" && (b === "False" || b === "0")) return true;
+  return false;
+}
+
+async function setOpportunityCustomFieldValue(oppId, fieldId, fieldValue) {
+  const val = String(fieldValue ?? "");
+  const qs = new URLSearchParams({ fieldValue: val }).toString();
+  const path = `/api/2.0/crm/opportunity/${oppId}/customfield/${fieldId}`;
+  const attempts = [
+    () => api(`${path}?${qs}`, { method: "POST" }),
+    () =>
+      api(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fieldValue: val }),
+      }),
+    () =>
+      api(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ fieldValue: val }).toString(),
+      }),
+  ];
+  let lastErr;
+  for (const attempt of attempts) {
+    try {
+      await attempt();
+      return;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error("Could not set custom field");
+}
+
+async function updateOpportunityCustomFieldsViaPut(oppId, fieldValues) {
+  const opp = await fetchOpportunityForUpdate(oppId);
+  const existing = extractOpportunityCustomFieldList(opp);
+  const merged = mergeCustomFieldValues(existing, fieldValues);
+  const body = buildOpportunityPutBody(opp);
+  body.customFieldList = buildCustomFieldListForApi(merged);
+  await api(`/api/2.0/crm/opportunity/${oppId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+async function verifyOpportunityCustomFieldsSaved(oppId, fieldValues) {
+  const saved = await fetchOpportunityCustomFieldValues(oppId);
+  const missing = [];
+  for (const { fieldId, value, def } of fieldValues) {
+    const item = saved.find((row) => Number(row.id ?? row.ID) === Number(fieldId));
+    const got = readSavedCustomFieldValue(item);
+    if (!customFieldValuesMatch(value, got)) {
+      const label = customFieldLabel(def) || `field #${fieldId}`;
+      missing.push(label);
+    }
+  }
+  if (missing.length) {
+    throw new Error(`CRM did not store: ${missing.join(", ")}`);
+  }
+}
+
+async function applyCreateOpportunityCustomFields(oppId, fieldValues) {
+  if (!fieldValues.length) return;
+
+  const failures = [];
+  for (const row of fieldValues) {
+    try {
+      await setOpportunityCustomFieldValue(oppId, row.fieldId, row.value);
+    } catch (err) {
+      failures.push({
+        label: customFieldLabel(row.def) || `field #${row.fieldId}`,
+        message: err?.message || String(err),
+      });
+    }
+  }
+
+  let verifyErr;
+  try {
+    await verifyOpportunityCustomFieldsSaved(oppId, fieldValues);
+    return;
+  } catch (err) {
+    verifyErr = err;
+  }
+
+  try {
+    await updateOpportunityCustomFieldsViaPut(oppId, fieldValues);
+    await verifyOpportunityCustomFieldsSaved(oppId, fieldValues);
+    return;
+  } catch (putErr) {
+    if (failures.length === fieldValues.length) {
+      const detail = failures.map((f) => `${f.label}: ${f.message}`).join("; ");
+      throw new Error(detail || putErr.message || "Could not save user fields");
+    }
+    throw new Error(
+      `${verifyErr?.message || putErr.message || "User fields not saved"}. ` +
+        `Failed fields: ${failures.map((f) => f.label).join(", ") || "unknown"}`
+    );
+  }
+}
+
+function syncCreateOppPrivateFields() {
+  const isPrivate = !!$("#create-opp-private")?.checked;
+  $("#create-opp-access-field")?.classList.toggle("hidden", !isPrivate);
+}
+
+function buildOpportunityCreateBody(form) {
+  const title = form.title?.trim();
+  if (!title) throw new Error("Title is required");
+
+  const responsibleId = form.responsibleId?.trim();
+  if (!responsibleId) throw new Error("Responsible user is required");
+
+  const stageId = Number(form.stageId);
+  if (!Number.isFinite(stageId) || stageId <= 0) throw new Error("Stage is required");
+
+  const draft = state.newOpportunityDraft;
+  const contactId = draft?.contactId != null ? Number(draft.contactId) : 0;
+  const stage = state.stages.find((s) => Number(s.id ?? s.ID) === stageId);
+  const successProbability = Number(stage?.successProbability ?? stage?.SuccessProbability ?? 0);
+
+  const body = {
+    contactid: Number.isFinite(contactId) ? contactId : 0,
+    members: [],
+    title,
+    description: form.description?.trim() || "",
+    responsibleid: String(responsibleId),
+    bidType: 0,
+    bidValue: 0,
+    bidCurrencyAbbr: "USD",
+    perPeriodValue: 1,
+    stageid: stageId,
+    successProbability: Number.isFinite(successProbability) ? successProbability : 0,
+    actualCloseDate: null,
+    expectedCloseDate: form.expectedCloseDate ? serializeCrmTimestamp(form.expectedCloseDate) : null,
+    isPrivate: !!form.isPrivate,
+    accessList: [],
+    isNotify: !!form.isNotify,
+  };
+
+  if (form.isPrivate) {
+    const accessSel = $("#create-opp-access");
+    body.accessList = accessSel
+      ? [...accessSel.selectedOptions].map((o) => o.value).filter(Boolean)
+      : [];
+    if (!body.accessList.length) body.accessList = [String(responsibleId)];
+  } else {
+    body.accessList = [];
+  }
+
+  const customFields = form.customFields ?? [];
+  if (customFields.length) {
+    body.customFieldList = buildCustomFieldListForApi(customFields);
+  }
+
+  return body;
+}
+
+async function createCrmOpportunity(body) {
+  return api("/api/2.0/crm/opportunity", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+function bindCreateOppContactPicker() {
+  const input = $("#create-opp-contact-search");
+  const results = $("#create-opp-contact-results");
+  if (!input || !results || input.dataset.bound) return;
+  input.dataset.bound = "1";
+  let debounce;
+
+  input.addEventListener("input", () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(async () => {
+      const q = input.value.trim();
+      results.innerHTML = "";
+      if (q.length < 2) {
+        results.classList.add("hidden");
+        return;
+      }
+      try {
+        const contacts = await searchContacts(q);
+        results.classList.remove("hidden");
+        if (!contacts.length) {
+          results.innerHTML = '<button type="button" disabled>No matches</button>';
+          return;
+        }
+        for (const c of contacts) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = c.displayName || c.title || `Contact #${c.id}`;
+          btn.addEventListener("click", () => {
+            const draft = state.newOpportunityDraft;
+            if (!draft) return;
+            draft.contactId = Number(c.id ?? c.ID);
+            draft.contactLabel = btn.textContent;
+            input.value = "";
+            results.classList.add("hidden");
+            updateCreateOppContactSelectedUi();
+          });
+          results.appendChild(btn);
+        }
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    }, 350);
+  });
+
+  document.addEventListener("click", (e) => {
+    const wrap = $("#create-opp-contact-field");
+    if (wrap && !wrap.contains(e.target)) results.classList.add("hidden");
+  });
+}
+
+async function applyCreateOpportunityTags(oppId, tags) {
+  for (const title of tags) {
+    try {
+      await addOpportunityTag(oppId, title);
+    } catch (err) {
+      showToast(`Opportunity created; tag failed: ${title}`, true);
+    }
+  }
+}
+
+async function submitCreateOpportunityForm(e) {
+  e.preventDefault();
+  setCreateOpportunityError("");
+  const submitBtn = $("#create-opportunity-submit");
+  if (submitBtn) submitBtn.disabled = true;
+
+  try {
+    const customFields = collectCreateOppCustomFieldValues();
+    const body = buildOpportunityCreateBody({
+      title: $("#create-opp-title")?.value,
+      description: $("#create-opp-description")?.value,
+      responsibleId: $("#create-opp-responsible")?.value,
+      stageId: $("#create-opp-stage")?.value,
+      expectedCloseDate: $("#create-opp-expected-close")?.value,
+      isPrivate: $("#create-opp-private")?.checked,
+      isNotify: $("#create-opp-notify")?.checked,
+      customFields,
+    });
+
+    const data = await createCrmOpportunity(body);
+    const created = unwrapCreatedEntity(data);
+    const oppId = created?.id ?? created?.ID ?? data?.id ?? data?.ID;
+    if (oppId == null) throw new Error("Opportunity created but no id returned");
+
+    if (customFields.length) {
+      try {
+        await applyCreateOpportunityCustomFields(oppId, customFields);
+      } catch (cfErr) {
+        showToast(`Opportunity created; user fields not saved: ${cfErr.message}`, true);
+      }
+    }
+
+    const tags = state.newOpportunityDraft?.tags || [];
+    if (tags.length) await applyCreateOpportunityTags(oppId, tags);
+
+    closeCreateOpportunityModal();
+    showToast("Opportunity created");
+    await refreshAll();
+  } catch (err) {
+    setCreateOpportunityError(err.message || "Could not create opportunity");
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
+
+async function openCreateOpportunityModal() {
+  const modal = $("#create-opportunity-modal");
+  const form = $("#create-opportunity-form");
+  if (!modal || !form) return;
+
+  setCreateOpportunityError("");
+  form.reset();
+  resetNewOpportunityDraft();
+
+  if (!state.stages.length) await loadStages();
+  if (!state.allTags.length) await loadAllTags();
+  if (!state.portalUsers.length) await loadPortalUsers();
+  if (CREATE_OPP_USER_FIELDS_ENABLED) await loadOpportunityCustomFieldDefs(true);
+
+  populateCreateOppStageSelect();
+  populateCreateOppResponsibleSelect();
+  populateCreateOppAccessSelect();
+  renderCreateOppCustomFields();
+  renderCreateOppTagChips();
+  updateCreateOppContactSelectedUi();
+  syncCreateOppPrivateFields();
+
+  const notify = $("#create-opp-notify");
+  if (notify) notify.checked = true;
+
+  modal.classList.remove("hidden");
+  $("#create-opp-title")?.focus();
+}
+
+function setAddTileError(message) {
+  const el = $("#add-tile-error");
+  if (!el) return;
+  if (message) {
+    el.textContent = message;
+    el.classList.remove("hidden");
+  } else {
+    el.textContent = "";
+    el.classList.add("hidden");
+  }
+}
+
+function showAddTileChooser() {
+  $("#add-tile-options")?.classList.remove("hidden");
+  $("#add-tile-calendar-form")?.classList.add("hidden");
+  $("#add-tile-notes-form")?.classList.add("hidden");
+  $("#add-tile-modal-actions")?.classList.remove("hidden");
+  setAddTileError("");
+}
+
+function showAddTileCalendarForm() {
+  $("#add-tile-options")?.classList.add("hidden");
+  $("#add-tile-calendar-form")?.classList.remove("hidden");
+  $("#add-tile-notes-form")?.classList.add("hidden");
+  $("#add-tile-modal-actions")?.classList.add("hidden");
+  const nameInput = $("#add-tile-calendar-name");
+  const urlInput = $("#add-tile-calendar-url");
+  if (nameInput && !nameInput.value) nameInput.value = "My calendar";
+  if (urlInput) urlInput.value = "";
+  setAddTileError("");
+  urlInput?.focus();
+}
+
+function showAddTileNotesForm() {
+  $("#add-tile-options")?.classList.add("hidden");
+  $("#add-tile-calendar-form")?.classList.add("hidden");
+  $("#add-tile-notes-form")?.classList.remove("hidden");
+  $("#add-tile-modal-actions")?.classList.add("hidden");
+  const nameInput = $("#add-tile-notes-name");
+  if (nameInput && !nameInput.value) nameInput.value = "Notes";
+  nameInput?.focus();
+}
+
+function addNotesTileFromForm() {
+  const name = $("#add-tile-notes-name")?.value?.trim() || "Notes";
+  const notes = newNotesTile({ name, content: "", updatedAt: new Date().toISOString() });
+  state.notesTiles.push(notes);
+  scheduleUserProfileSave();
+  const tid = notesTileId(notes);
+  if (!state.tileLayout.order.includes(tid)) {
+    state.tileLayout.order.push(tid);
+    saveLayoutToStorage();
+  }
+  closeAddTileModal();
+  renderBoardGroups();
+  showToast("Notes tile added");
+}
+
+function openAddTileModal() {
+  const modal = $("#add-tile-modal");
+  if (!modal) return;
+  showAddTileChooser();
+  modal.classList.remove("hidden");
+}
+
+function closeAddTileModal() {
+  const modal = $("#add-tile-modal");
+  if (!modal) return;
+  modal.classList.add("hidden");
+  showAddTileChooser();
+  setAddTileError("");
+}
+
+function addOpportunityGroupTile() {
+  state.groups.push(newGroup({ name: `Group ${state.groups.length + 1}` }));
+  saveGroupsToStorage();
+  closeAddTileModal();
+  renderBoardGroups();
+  refreshGroup(state.groups[state.groups.length - 1]).catch((err) => showToast(err.message, true));
+  showToast("Opportunity group added");
+}
+
+async function addCalendarTileFromForm() {
+  const name = $("#add-tile-calendar-name")?.value?.trim() || "Calendar";
+  const feedUrl = $("#add-tile-calendar-url")?.value?.trim() || "";
+  if (!feedUrl) {
+    setAddTileError("Calendar URL is required");
+    return;
+  }
+  if (!/^https?:\/\//i.test(feedUrl)) {
+    setAddTileError("URL must start with http:// or https://");
+    return;
+  }
+  setAddTileError("");
+  const cal = newCalendarTile({ name, feedUrl });
+  state.calendarTiles.push(cal);
+  saveCalendarsToStorage();
+  const tid = calendarTileId(cal);
+  if (!state.tileLayout.order.includes(tid)) {
+    state.tileLayout.order.push(tid);
+    saveLayoutToStorage();
+  }
+  closeAddTileModal();
+  renderBoardGroups();
+  showToast("Calendar tile added");
+  try {
+    await loadCalendarForTile(cal);
+  } catch {
+    /* toast from loader */
+  }
+}
+
+function bindAddTileModal() {
+  const modal = $("#add-tile-modal");
+  if (!modal || modal.dataset.bound) return;
+  modal.dataset.bound = "1";
+
+  $("#add-tile-btn")?.addEventListener("click", openAddTileModal);
+  $("#add-tile-cancel")?.addEventListener("click", closeAddTileModal);
+  modal.querySelectorAll("[data-add-tile-dismiss]").forEach((el) => {
+    el.addEventListener("click", closeAddTileModal);
+  });
+  $("#add-tile-opportunity-group")?.addEventListener("click", () => {
+    addOpportunityGroupTile();
+  });
+  $("#add-tile-calendar")?.addEventListener("click", showAddTileCalendarForm);
+  $("#add-tile-notes")?.addEventListener("click", showAddTileNotesForm);
+  $("#add-tile-calendar-back")?.addEventListener("click", showAddTileChooser);
+  $("#add-tile-notes-back")?.addEventListener("click", showAddTileChooser);
+  $("#add-tile-calendar-create")?.addEventListener("click", () => {
+    addCalendarTileFromForm().catch((err) => setAddTileError(err.message));
+  });
+  $("#add-tile-notes-create")?.addEventListener("click", addNotesTileFromForm);
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !modal.classList.contains("hidden")) closeAddTileModal();
+  });
+}
+
+function bindCreateOpportunityModal() {
+  const modal = $("#create-opportunity-modal");
+  const form = $("#create-opportunity-form");
+  if (!modal || !form || form.dataset.bound) return;
+  form.dataset.bound = "1";
+
+  form.addEventListener("submit", (e) => {
+    submitCreateOpportunityForm(e).catch((err) => setCreateOpportunityError(err.message));
+  });
+
+  $("#create-opportunity-cancel")?.addEventListener("click", closeCreateOpportunityModal);
+  modal.querySelectorAll("[data-create-opp-dismiss]").forEach((el) => {
+    el.addEventListener("click", closeCreateOpportunityModal);
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !modal.classList.contains("hidden")) closeCreateOpportunityModal();
+  });
+
+  $("#create-opp-private")?.addEventListener("change", syncCreateOppPrivateFields);
+
+  $("#create-opp-tag-add")?.addEventListener("change", (ev) => {
+    const title = ev.target.value;
+    const draft = state.newOpportunityDraft;
+    if (!title || !draft) return;
+    if (!draft.tags.some((t) => tagsEqual(t, title))) {
+      draft.tags.push(title);
+      renderCreateOppTagChips();
+    }
+    ev.target.value = "";
+  });
+
+  bindCreateOppContactPicker();
 }
 
 function setTaskModalError(message) {
@@ -3556,6 +6557,7 @@ async function enrichOpportunitiesCustomFields(items) {
       const paths = [
         `/api/2.0/crm/opportunity/${id}/customfield`,
         `/api/2.0/crm/opportunity/${id}/customfields`,
+        `/api/2.0/crm/opportunity/${id}/customfield/`,
       ];
       for (const path of paths) {
         try {
@@ -3599,6 +6601,7 @@ async function refreshGroup(group) {
 }
 
 async function refreshAll() {
+  noteDashboardActivity();
   $("#status-text").textContent = "Loading…";
   try {
     loadFeedKeywordFromStorage();
@@ -3608,13 +6611,20 @@ async function refreshAll() {
     syncFeedFilterPlaceholder();
     await loadPortalUsers();
     await Promise.all([loadStages(), loadAllTags(), loadOpportunityCustomFieldDefs()]);
+    await loadUserProfileFromServer();
+    syncFeedFilterPlaceholder();
     renderBoardGroups();
     refreshDashboardTileLayouts();
     populateTasksUserFilter();
     await Promise.all(state.groups.map((g) => refreshGroup(g)));
-    await Promise.all([loadNotificationFeed(), loadTasks()]);
-    const total = state.groups.reduce((n, g) => n + g.opportunities.length, 0);
-    $("#status-text").textContent = `${total} opportunities · ${state.tasks.length} open tasks`;
+    await Promise.all([
+      loadNotificationFeed(),
+      loadTasks(),
+      ...state.calendarTiles.map((cal) => loadCalendarForTile(cal, { quiet: true })),
+    ]);
+    const openOpps = countOpenOpportunities();
+    const openTasks = state.tasks.length;
+    $("#status-text").textContent = `${openOpps} open opportunities · ${openTasks} open tasks`;
   } catch (err) {
     $("#status-text").textContent = "Error";
     showToast(err.message, true);
@@ -3625,9 +6635,13 @@ function showApp() {
   $("#login-screen").classList.add("hidden");
   $("#app").classList.remove("hidden");
   $("#portal-label").textContent = state.portalUrl;
+  noteDashboardActivity();
+  startPanelTileAutoRefresh();
 }
 
 function showLogin() {
+  stopPanelTileAutoRefresh();
+  userProfileReady = false;
   $("#app").classList.add("hidden");
   $("#login-screen").classList.remove("hidden");
   $("#portal-url").value = state.portalUrl || DEFAULT_PORTAL;
@@ -3644,24 +6658,25 @@ async function init() {
     localStorage.setItem("oo_portal_url", state.portalUrl);
   }
 
-  state.groups = loadGroupsFromStorage().map((g) => ({
-    ...newGroup(),
-    ...stripGroupRuntimeFields(g),
-    opportunities: [],
-  }));
-  saveGroupsToStorage();
-  state.tileLayout = loadLayoutFromStorage();
-  state.hiddenFeedKeys = loadHiddenFeedKeys();
-  state.groupTemplates = loadGroupTemplates();
+  state.groups = [];
+  state.calendarTiles = [];
+  state.notesTiles = [];
+  state.tileLayout = { order: [], widths: {}, heights: {}, collapsed: {} };
+  state.hiddenFeedKeys = new Set();
+  state.groupTemplates = [];
+  userProfileReady = false;
   bindNewTaskModal();
+  bindDealEditModal();
+  bindCreateOpportunityModal();
   bindGlobalOpportunitySearch();
+  bindDashboardActivityTracking();
 
-  $("#add-group-btn").addEventListener("click", () => {
-    state.groups.push(newGroup({ name: `Group ${state.groups.length + 1}` }));
-    saveGroupsToStorage();
-    renderBoardGroups();
-    refreshGroup(state.groups[state.groups.length - 1]);
+  $("#new-opportunity-btn")?.addEventListener("click", () => {
+    openCreateOpportunityModal().catch((err) => showToast(err.message, true));
   });
+
+  bindAddTileModal();
+  bindCalendarEventModal();
 
   $("#refresh-btn").addEventListener("click", refreshAll);
   $("#logout-btn").addEventListener("click", async () => {

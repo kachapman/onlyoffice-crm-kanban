@@ -18,6 +18,9 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
+from ics_calendar import _MAX_ICS_BYTES, is_allowed_calendar_url, parse_ics_calendar
+from user_profile_store import load_user_profile, save_user_profile
+
 ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
 
@@ -46,6 +49,52 @@ SSL_VERIFY = os.environ.get("ONLYOFFICE_SSL_VERIFY", "true").lower() not in (
     "no",
 )
 SESSION_COOKIE = "oo_token"
+DATA_DIR = ROOT / "data"
+COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
+
+
+def _session_token(handler: SimpleHTTPRequestHandler) -> str | None:
+    jar = cookies.SimpleCookie(handler.headers.get("Cookie", ""))
+    tok = jar.get(SESSION_COOKIE)
+    return tok.value if tok else None
+
+
+def _require_auth(handler: SimpleHTTPRequestHandler) -> tuple[str, str, str] | None:
+    """Return (portal, token, user_id) or None after sending error response."""
+    portal = _portal_base(handler)
+    if not portal:
+        _json_response(handler, 400, {"error": "Portal URL not configured"})
+        return None
+    token = _session_token(handler)
+    if not token:
+        _json_response(handler, 401, {"error": "Not authenticated"})
+        return None
+    user_id = _fetch_crm_user_id(portal, token)
+    if not user_id:
+        _json_response(handler, 502, {"error": "Could not resolve CRM user"})
+        return None
+    return portal, token, user_id
+
+
+def _fetch_crm_user_id(portal: str, token: str) -> str | None:
+    url = f"{portal.rstrip('/')}/api/2.0/people/@self.json"
+    req = urllib.request.Request(
+        url,
+        headers={"Accept": "application/json", "Authorization": token},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, context=_ssl_context(), timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, OSError):
+        return None
+    me = data.get("response") or data.get("result") or data
+    if not isinstance(me, dict):
+        return None
+    uid = me.get("id") or me.get("ID") or me.get("userId") or me.get("UserId")
+    if uid is None:
+        return None
+    return str(uid)
 
 
 def _ssl_context() -> ssl.SSLContext | None:
@@ -84,6 +133,7 @@ def _proxy_request(
     api_path: str,
     query: str = "",
     body: bytes | None = None,
+    content_type: str | None = None,
 ) -> tuple[int, bytes, str]:
     portal = _portal_base(handler)
     if not portal:
@@ -105,11 +155,16 @@ def _proxy_request(
         "Accept": "application/json",
         "Authorization": token.value,
     }
-    if body:
-        headers["Content-Type"] = "application/json"
+    body_empty = body is None or body.strip() in (b"", b"{}", b"null")
+    if not body_empty:
+        headers["Content-Type"] = content_type or "application/json"
     elif method in ("PUT", "POST", "DELETE"):
-        body = b"{}"
-        headers["Content-Type"] = "application/json"
+        # Empty JSON body on entity custom-field POST breaks fieldValue query binding.
+        if method == "POST" and re.search(r"/customfield/\d+", path, re.I):
+            body = None
+        else:
+            body = b"{}"
+            headers["Content-Type"] = "application/json"
 
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
@@ -141,6 +196,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self._handle_api_get()
             return
         super().do_GET()
+
+    def end_headers(self) -> None:
+        path = urlparse(self.path).path
+        if re.search(r"/favicon\.(ico|png)$", path, re.I):
+            self.send_header("Cache-Control", "no-cache, must-revalidate")
+        super().end_headers()
 
     def do_POST(self) -> None:
         if self.path == "/api/login":
@@ -224,6 +285,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         cookie[SESSION_COOKIE]["path"] = "/"
         cookie[SESSION_COOKIE]["httponly"] = True
         cookie[SESSION_COOKIE]["samesite"] = "Lax"
+        if COOKIE_SECURE:
+            cookie[SESSION_COOKIE]["secure"] = True
         self.send_header("Set-Cookie", cookie.output(header="").strip())
         body_out = json.dumps(
             {
@@ -255,8 +318,113 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         return api_path, parsed.query
 
+    def _handle_calendar_feed(self) -> None:
+        parsed = urlparse(self.path)
+        qs = parse_qs(parsed.query)
+        feed_url = (qs.get("url") or [""])[0].strip()
+        if not feed_url:
+            _json_response(self, 400, {"error": "url query parameter is required"})
+            return
+        if not is_allowed_calendar_url(feed_url):
+            _json_response(self, 400, {"error": "Invalid or disallowed calendar URL"})
+            return
+        req = urllib.request.Request(
+            feed_url,
+            headers={"Accept": "text/calendar", "User-Agent": "CRM-Kanban-Calendar/1.0"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, context=_ssl_context(), timeout=45) as resp:
+                raw = resp.read(_MAX_ICS_BYTES + 1)
+        except urllib.error.HTTPError as exc:
+            detail = exc.read(500).decode("utf-8", errors="replace")
+            _json_response(
+                self,
+                exc.code,
+                {"error": "Could not fetch calendar feed", "detail": detail[:300]},
+            )
+            return
+        except urllib.error.URLError as exc:
+            _json_response(self, 502, {"error": str(exc.reason)})
+            return
+        if len(raw) > _MAX_ICS_BYTES:
+            _json_response(self, 413, {"error": "Calendar feed too large"})
+            return
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            text = raw.decode("utf-8", errors="replace")
+        try:
+            payload = parse_ics_calendar(text)
+        except Exception as exc:
+            _json_response(self, 422, {"error": f"Could not parse calendar: {exc}"})
+            return
+        _json_response(self, 200, payload)
+
+    def _handle_user_profile_get(self) -> None:
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, _token, user_id = auth
+        profile = load_user_profile(portal, user_id)
+        _json_response(self, 200, profile)
+
+    def _handle_user_profile_put(self) -> None:
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, _token, user_id = auth
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        if not isinstance(payload, dict):
+            _json_response(self, 400, {"error": "Profile object is required"})
+            return
+        profile = save_user_profile(portal, user_id, payload)
+        _json_response(self, 200, {"ok": True, **profile})
+
+    def _handle_dashboard_notes_get(self) -> None:
+        """Backward-compatible notes endpoint."""
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, _token, user_id = auth
+        profile = load_user_profile(portal, user_id)
+        _json_response(self, 200, {"tiles": profile.get("notesTiles", [])})
+
+    def _handle_dashboard_notes_put(self) -> None:
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, _token, user_id = auth
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        tiles = payload.get("tiles")
+        if not isinstance(tiles, list):
+            _json_response(self, 400, {"error": "tiles array is required"})
+            return
+        existing = load_user_profile(portal, user_id)
+        existing["notesTiles"] = tiles
+        profile = save_user_profile(portal, user_id, existing)
+        _json_response(self, 200, {"ok": True, "tiles": profile.get("notesTiles", [])})
+
     def _handle_api_get(self) -> None:
-        if self.path == "/api/config":
+        api_path = urlparse(self.path).path
+        if api_path == "/api/user-profile":
+            self._handle_user_profile_get()
+            return
+        if api_path == "/api/dashboard-notes":
+            self._handle_dashboard_notes_get()
+            return
+        if api_path == "/api/calendar/feed":
+            self._handle_calendar_feed()
+            return
+        if api_path == "/api/config":
             _json_response(
                 self,
                 200,
@@ -266,7 +434,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 },
             )
             return
-        if self.path == "/api/session":
+        if api_path == "/api/session":
             jar = cookies.SimpleCookie(self.headers.get("Cookie", ""))
             _json_response(self, 200, {"authenticated": SESSION_COOKIE in jar})
             return
@@ -284,13 +452,29 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def _handle_api_post_put(self, method: str) -> None:
+        api_path = urlparse(self.path).path
+        if api_path == "/api/user-profile" and method == "PUT":
+            self._handle_user_profile_put()
+            return
+        if api_path == "/api/dashboard-notes" and method == "PUT":
+            self._handle_dashboard_notes_put()
+            return
         route = self._api_route()
         if not route:
             self.send_error(404)
             return
         api_path, query = route
         body = _read_body(self)
-        status, resp_body, ctype = _proxy_request(self, method, api_path, query, body or None)
+        incoming_ct = self.headers.get("Content-Type", "")
+        proxy_ct = None
+        if body and incoming_ct:
+            if "multipart/form-data" in incoming_ct.lower():
+                proxy_ct = incoming_ct
+            elif "application/json" in incoming_ct.lower():
+                proxy_ct = "application/json"
+        status, resp_body, ctype = _proxy_request(
+            self, method, api_path, query, body if body else None, content_type=proxy_ct
+        )
         self.send_response(status)
         self.send_header("Content-Type", ctype or "application/json")
         self.send_header("Content-Length", str(len(resp_body)))
