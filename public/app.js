@@ -171,8 +171,7 @@ function feedWindowStart() {
 }
 
 function feedFilterPlaceholder() {
-  const who = state.currentUserName || "your";
-  return `Filter ${who} notifications…`;
+  return "Filter new events by keyword";
 }
 
 function syncFeedFilterPlaceholder() {
@@ -2354,15 +2353,14 @@ function isNotificationForLoggedInUser(item, ev = null) {
   return false;
 }
 
-function shouldIncludeRelationshipNotifyEvent(ev, parsed) {
-  return isNotificationForLoggedInUser(parsed, ev);
+function shouldIncludeRelationshipNotifyEvent(_ev, parsed) {
+  return !!parsed;
 }
 
 function applyFeedKeywordFilter(items) {
-  let out = items.filter((it) => isNotificationForLoggedInUser(it));
   const kw = (state.feedKeywordFilter || "").trim().toLowerCase();
-  if (!kw) return out;
-  return out.filter((it) => {
+  if (!kw) return items;
+  return items.filter((it) => {
     const blob = `${it.title || ""} ${it.text || ""} ${it.author || ""}`.toLowerCase();
     return blob.includes(kw);
   });
@@ -2379,7 +2377,7 @@ function renderFeedNotificationList() {
   if (!items.length) {
     const hiddenNote = state.hiddenFeedKeys.size ? " Some are hidden." : "";
     const kwNote = state.feedKeywordFilter?.trim() ? " Try clearing the keyword filter." : "";
-    list.innerHTML = `<li>No notifications for ${escapeHtml(state.currentUserName || "you")} in the last ${FEED_DAYS} days.${hiddenNote}${kwNote} Shows notify-user mail and CRM events where you were selected under notify user.</li>`;
+    list.innerHTML = `<li>No new CRM events in the last ${FEED_DAYS} days.${hiddenNote}${kwNote}</li>`;
     return;
   }
 
@@ -2865,10 +2863,7 @@ async function loadNotificationFeed() {
           (typeof mail.from === "string" ? mail.from : mail.from?.email || mail.from?.Email) || ""
         ).toLowerCase();
         if (myUserName && fromAddr && fromAddr === myUserName) continue;
-        if (!mailIsAddressedToCurrentUser(mail)) continue;
-        const enriched = { ...parsed, forCurrentUser: true };
-        if (!isNotificationForLoggedInUser(enriched)) continue;
-        items.push(enriched);
+        items.push(parsed);
       }
     } catch {
       /* try next query shape */

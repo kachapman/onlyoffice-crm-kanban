@@ -31,6 +31,31 @@ body {
   font-family: var(--font);
   font-size: 15px;
   line-height: 1.5;
+  scrollbar-color: #3d4659 var(--surface-2);
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--surface-2);
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #3d4659;
+  border: 2px solid var(--surface-2);
+  border-radius: 6px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
+*::-webkit-scrollbar-corner {
+  background: var(--surface-2);
 }
 
 .hidden {
@@ -156,10 +181,16 @@ body {
     var(--surface);
 }
 
+.hero-brand {
+  display: flex;
+  justify-content: center;
+  padding: 1.75rem 1.5rem 0;
+}
+
 .hero-inner {
   max-width: 1400px;
   margin: 0 auto;
-  padding: 2.5rem 1.5rem 2rem;
+  padding: 1.25rem 1.5rem 2rem;
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
@@ -176,17 +207,13 @@ body {
   color: var(--accent);
 }
 
-.hero-title-row {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-}
-
 .hero-logo {
-  flex-shrink: 0;
-  width: 56px;
-  height: 56px;
+  display: block;
+  width: 168px;
+  height: auto;
+  max-width: min(168px, 40vw);
   object-fit: contain;
+  object-position: center;
 }
 
 .hero-title {
@@ -1440,8 +1467,16 @@ body {
 }
 
 @media (max-width: 640px) {
+  .hero-brand {
+    padding-top: 1.25rem;
+  }
+
+  .hero-logo {
+    width: 132px;
+  }
+
   .hero-inner {
-    padding: 1.5rem 1rem;
+    padding: 1rem 1rem 1.5rem;
   }
   .dashboard-tiles {
     padding-left: 1rem;
