@@ -1908,16 +1908,16 @@ function renderBoardGroups() {
               <label>Stage columns</label>
               <div class="stage-columns-multiselect"></div>
             </div>
-            <div class="field stage-empty-field hidden">
+            <div class="field field-checkbox stage-empty-field hidden">
               <label class="checkbox-filter">
                 <input type="checkbox" class="show-empty-stages" checked />
-                Show empty stages
+                <span>Show empty stages</span>
               </label>
             </div>
-            <div class="field">
+            <div class="field field-checkbox">
               <label class="checkbox-filter">
                 <input type="checkbox" class="show-only-red" />
-                Show only red opportunities
+                <span>Show only red opportunities</span>
               </label>
             </div>
             <div class="field">
