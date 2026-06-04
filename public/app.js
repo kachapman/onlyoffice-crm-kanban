@@ -21,6 +21,8 @@ const state = {
   tileLayout: { order: [], widths: {}, heights: {} },
   hiddenFeedKeys: new Set(),
   groupTemplates: [],
+  customFieldDefs: [],
+  customFieldById: new Map(),
 };
 
 function crmOpportunityUrl(id) {
@@ -649,8 +651,8 @@ function renderFeedTile() {
   const sub = $("#feed-user-sub", tile);
   if (sub) {
     sub.textContent = state.currentUserName
-      ? `“Notify me” alerts for ${state.currentUserName}`
-      : "Only when another user checks to notify you on an opportunity event";
+      ? `Notify-user alerts for ${state.currentUserName}`
+      : "When another user adds an opportunity event and selects you under notify user";
   }
   return tile;
 }
@@ -860,6 +862,18 @@ function stampMatchedBoardTag(opp, tagTitle) {
   }
 }
 
+function mergeOpportunityById(map, opp, tagTitle) {
+  const id = opp.id ?? opp.ID;
+  if (id == null) return;
+  const existing = map.get(id);
+  if (existing) {
+    stampMatchedBoardTag(existing, tagTitle);
+  } else {
+    stampMatchedBoardTag(opp, tagTitle);
+    map.set(id, opp);
+  }
+}
+
 function oppMatchesSelectedTags(opp, selectedTags, catalog = buildTagCatalog()) {
   if (!selectedTags?.length) return true;
   const oppTags = getOppTags(opp);
@@ -896,8 +910,7 @@ async function fetchOpportunitiesForGroup(group) {
         try {
           const data = await api(`/api/2.0/crm/opportunity/filter?${params}`);
           for (const opp of unwrap(data)) {
-            stampMatchedBoardTag(opp, tagTitle);
-            merged.set(opp.id ?? opp.ID, opp);
+            mergeOpportunityById(merged, opp, tagTitle);
           }
         } catch {
           /* try next param shape */
@@ -1042,17 +1055,19 @@ function groupOpportunities(group) {
     };
 
     if (selected.length > 0) {
+      const catalog = buildTagCatalog();
+      const byTag = new Map();
       for (const tag of selected) {
-        columns.push({ id: tag, title: columnTitle(tag), color: "#4f8cff", items: [], stageId: null });
+        const key = tagLookupKey(tag, catalog);
+        const col = { id: tag, title: columnTitle(tag), color: "#4f8cff", items: [], stageId: null };
+        byTag.set(key, col);
+        columns.push(col);
       }
-      const byTag = new Map(columns.map((c) => [normalizeTagTitle(c.id).toLowerCase(), c]));
       for (const opp of sorted) {
         for (const sel of selected) {
-          const oppTags = getOppTags(opp);
-          if (oppTags.some((t) => tagsEqual(t, sel))) {
-            const col = byTag.get(normalizeTagTitle(sel).toLowerCase());
-            if (col) col.items.push(opp);
-          }
+          if (!oppMatchesSelectedTags(opp, [sel], catalog)) continue;
+          const col = byTag.get(tagLookupKey(sel, catalog));
+          if (col) col.items.push(opp);
         }
       }
       return columns;
@@ -1116,6 +1131,92 @@ function formatMoney(opp) {
   return `${Number(opp.bidValue).toLocaleString()} ${currency}`.trim();
 }
 
+function customFieldLabel(field) {
+  return normalizeTagTitle(field?.title ?? field?.Title ?? field?.name ?? field?.label ?? field?.fieldTitle);
+}
+
+function fieldNameMatches(label, patterns) {
+  const l = label.toLowerCase();
+  return patterns.some((p) => {
+    const pat = p.toLowerCase();
+    return l === pat || l.includes(pat) || pat.includes(l);
+  });
+}
+
+async function loadOpportunityCustomFieldDefs() {
+  state.customFieldDefs = [];
+  state.customFieldById = new Map();
+  const paths = [
+    "/api/2.0/crm/setting/customfield/filter?entityType=Opportunity",
+    "/api/2.0/crm/setting/customfield/filter?entityType=opportunity",
+    "/api/2.0/crm/customfield/filter?entityType=Opportunity",
+  ];
+  for (const path of paths) {
+    try {
+      const list = unwrap(await api(path));
+      if (list.length) {
+        state.customFieldDefs = list;
+        for (const f of list) {
+          const id = f.id ?? f.ID ?? f.fieldId;
+          if (id != null) state.customFieldById.set(String(id), f);
+        }
+        return;
+      }
+    } catch {
+      /* try next path */
+    }
+  }
+}
+
+function getOppCustomFieldValue(opp, ...namePatterns) {
+  const lists = [
+    opp.customFields,
+    opp.CustomFields,
+    opp.customFieldList,
+    opp.CustomFieldList,
+    opp.fieldValues,
+    opp.FieldValues,
+  ];
+
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      const fieldId = item.id ?? item.ID ?? item.fieldId ?? item.FieldId;
+      const def = fieldId != null ? state.customFieldById.get(String(fieldId)) : null;
+      const label = customFieldLabel(item) || customFieldLabel(def);
+      if (!label || !fieldNameMatches(label, namePatterns)) continue;
+      const raw = item.value ?? item.Value ?? item.fieldValue ?? item.FieldValue;
+      if (raw == null || raw === "") return "";
+      if (typeof raw === "object") {
+        return normalizeTagTitle(raw.title ?? raw.text ?? raw.value ?? raw.Value);
+      }
+      return String(raw).trim();
+    }
+  }
+
+  for (const def of state.customFieldDefs) {
+    if (!fieldNameMatches(customFieldLabel(def), namePatterns)) continue;
+    const fieldId = def.id ?? def.ID;
+    const key = fieldId != null ? String(fieldId) : null;
+    if (key && opp[key] != null && opp[key] !== "") return String(opp[key]).trim();
+  }
+
+  return "";
+}
+
+function appendCardDetailLine(container, label, value) {
+  const line = document.createElement("p");
+  line.className = "card-detail-line";
+  if (label) {
+    const strong = document.createElement("span");
+    strong.className = "card-detail-label";
+    strong.textContent = `${label}: `;
+    line.appendChild(strong);
+  }
+  line.appendChild(document.createTextNode(value));
+  container.appendChild(line);
+}
+
 function renderCard(opp, group, showStagePill) {
   const card = document.createElement("article");
   card.className = "card";
@@ -1140,25 +1241,32 @@ function renderCard(opp, group, showStagePill) {
     v.textContent = money;
     meta.appendChild(v);
   }
-  const contact = opp.contact?.displayName || opp.contact?.title;
-  if (contact) {
-    const c = document.createElement("span");
-    c.textContent = contact;
-    meta.appendChild(c);
+
+  const details = document.createElement("div");
+  details.className = "card-details";
+
+  const description = (opp.description || opp.Description || "").trim();
+  if (description) {
+    const desc = document.createElement("p");
+    desc.className = "card-description";
+    desc.textContent = description;
+    details.appendChild(desc);
   }
-  if (opp.responsible?.displayName) {
-    const r = document.createElement("span");
-    r.textContent = opp.responsible.displayName;
-    meta.appendChild(r);
+
+  const crmJobId = getOppCustomFieldValue(opp, "crm job/id", "crm job", "job/id");
+  if (crmJobId) appendCardDetailLine(details, "CRM Job/ID", crmJobId);
+
+  const insuranceCarrier = getOppCustomFieldValue(opp, "insurance carrier");
+  if (insuranceCarrier) appendCardDetailLine(details, "Insurance Carrier", insuranceCarrier);
+
+  const supplementRequest = getOppCustomFieldValue(opp, "supplement request");
+  if (!supplementRequest) {
+    appendCardDetailLine(details, null, "No Supp Request");
   }
-  const tags = getOppTags(opp);
-  if (tags.length) {
-    const t = document.createElement("span");
-    t.textContent = tags.join(", ");
-    meta.appendChild(t);
-  }
+
   card.appendChild(title);
-  card.appendChild(meta);
+  if (meta.childElementCount) card.appendChild(meta);
+  if (details.childElementCount) card.appendChild(details);
 
   if (showStagePill && opp.stage?.title) {
     const pill = document.createElement("span");
@@ -1547,12 +1655,160 @@ async function loadCurrentUser() {
   }
 }
 
-/** OnlyOffice sends "notify me" on CRM history via Talk + email (AddRelationshipEvent). */
+/** CRM opportunity events when another user checks you under "notify user" (plus email). */
 const CRM_NOTIFY_MARKERS = [
   /CRM\.\s*New event added to/i,
   /has added a new event to/i,
   /New event added to/i,
+  /notified you/i,
+  /notify user/i,
 ];
+
+function notifyRecipientsFromEvent(ev) {
+  const out = [];
+  const lists = [
+    ev.notifyUsers,
+    ev.NotifyUsers,
+    ev.notifyUserList,
+    ev.NotifyUserList,
+    ev.usersToNotify,
+    ev.UsersToNotify,
+    ev.notifyContacts,
+    ev.NotifyContacts,
+  ];
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    out.push(...list);
+  }
+  return out;
+}
+
+function recipientMatchesCurrentUser(recipient) {
+  if (recipient == null) return false;
+  if (typeof recipient === "string") {
+    const s = recipient.toLowerCase();
+    const myName = (state.currentUserName || "").toLowerCase();
+    const myUser = (state.currentUser?.userName || state.currentUser?.UserName || "").toLowerCase();
+    if (myName && s.includes(myName)) return true;
+    if (myUser && s.includes(myUser)) return true;
+    return sameUserId(recipient, state.currentUserId);
+  }
+  const id = recipient.id ?? recipient.ID ?? recipient.userId;
+  if (id != null && sameUserId(id, state.currentUserId)) return true;
+  const name = (recipient.displayName || recipient.title || "").toLowerCase();
+  const userName = (recipient.userName || recipient.UserName || "").toLowerCase();
+  const myName = (state.currentUserName || "").toLowerCase();
+  const myUser = (state.currentUser?.userName || state.currentUser?.UserName || "").toLowerCase();
+  if (myName && name && name === myName) return true;
+  if (myUser && userName && userName === myUser) return true;
+  return false;
+}
+
+function isNotifyUserHistoryEvent(ev) {
+  const recipients = notifyRecipientsFromEvent(ev);
+  if (recipients.length) {
+    return recipients.some((r) => recipientMatchesCurrentUser(r));
+  }
+
+  const text = String(ev.description || ev.text || ev.content || ev.title || "").toLowerCase();
+  const myName = (state.currentUserName || "").toLowerCase();
+  if (myName && myName.length > 2 && text.includes(myName)) return true;
+
+  return false;
+}
+
+function parseHistoryNotifyEvent(ev) {
+  const entity = ev.entity || ev.Entity || ev.opportunity || ev.Opportunity;
+  let id =
+    entity?.entityId ??
+    entity?.id ??
+    entity?.ID ??
+    ev.entityId ??
+    ev.EntityId ??
+    ev.opportunityId ??
+    opportunityIdFromText(ev.description || ev.text || ev.content || ev.title || "");
+
+  if (!id) {
+    const blob = JSON.stringify(ev);
+    id = opportunityIdFromText(blob);
+  }
+  if (!id) return null;
+
+  const title =
+    entity?.entityTitle ||
+    entity?.title ||
+    ev.opportunityTitle ||
+    ev.title ||
+    `Opportunity #${id}`;
+
+  const author =
+    ev.createdBy?.displayName ||
+    ev.user?.displayName ||
+    ev.author?.displayName ||
+    displayNameForUserName(ev.createdBy?.userName || ev.user?.userName) ||
+    "Another user";
+
+  const text = String(ev.description || ev.text || ev.content || ev.title || "CRM opportunity event").trim();
+  const date =
+    ev.createdOn?.value ??
+    ev.createdOn ??
+    ev.date ??
+    ev.Date ??
+    ev.dateAndTime?.value ??
+    ev.dateAndTime;
+
+  return {
+    id: Number(id),
+    title: String(title).replace(/^CRM\.\s*New event added to\s+/i, "").trim(),
+    author,
+    text: text.slice(0, 220),
+    date,
+    source: "history",
+  };
+}
+
+async function loadCrmHistoryNotifications(periodFrom) {
+  const items = [];
+  const queries = [
+    new URLSearchParams({ startIndex: "0", count: "200" }),
+    new URLSearchParams({
+      startIndex: "0",
+      count: "200",
+      entityType: "opportunity",
+    }),
+    new URLSearchParams({
+      startIndex: "0",
+      count: "200",
+      entityType: "1",
+    }),
+  ];
+
+  for (const params of queries) {
+    try {
+      params.set("fromDate", new Date(periodFrom).toISOString());
+    } catch {
+      /* optional */
+    }
+    try {
+      const data = await api(`/api/2.0/crm/history/filter?${params}`);
+      for (const ev of unwrap(data)) {
+        if (!isNotifyUserHistoryEvent(ev)) continue;
+        const createdBy = ev.createdBy?.id ?? ev.createdBy?.ID ?? ev.user?.id;
+        if (createdBy && sameUserId(createdBy, state.currentUserId) && ev.notifyMe && !notifyRecipientsFromEvent(ev).length) {
+          continue;
+        }
+        const parsed = parseHistoryNotifyEvent(ev);
+        if (!parsed) continue;
+        if (!isWithinFeedWindow(parsed.date)) continue;
+        items.push(parsed);
+      }
+      if (items.length) return items;
+    } catch {
+      /* try next query */
+    }
+  }
+  return items;
+}
 
 function decodeHtmlEntities(text) {
   const el = document.createElement("textarea");
@@ -1838,6 +2094,12 @@ async function loadNotificationFeed() {
   const items = [];
 
   try {
+    items.push(...(await loadCrmHistoryNotifications(periodFrom)));
+  } catch {
+    /* history module optional */
+  }
+
+  try {
     const talk = await api("/api/2.0/portal/talk/recentMessages?calleeUserName=&id=2147483647");
     for (const msg of unwrapTalkMessages(talk)) {
       const parsed = parseTalkNotifyMessage(msg);
@@ -1852,28 +2114,25 @@ async function loadNotificationFeed() {
     /* Talk/Jabber may be disabled on the portal */
   }
 
-  const mailQueries = [
-    new URLSearchParams({
-      search: "CRM. New event added to",
-      page_size: "60",
-      sortorder: "descending",
-      page: "1",
-      period_from: new Date(periodFrom).toISOString(),
-    }),
-    new URLSearchParams({
-      search: "CRM. New event added to",
-      page_size: "60",
-      sortorder: "descending",
-      page: "1",
-      period_from: String(periodFrom),
-    }),
-    new URLSearchParams({
-      search: "CRM. New event added to",
-      page_size: "60",
-      sortorder: "descending",
-      page: "1",
-    }),
-  ];
+  const mailSearches = ["CRM. New event added to", "CRM New event", "notified you", "notify user"];
+  const mailQueries = [];
+  for (const search of mailSearches) {
+    mailQueries.push(
+      new URLSearchParams({
+        search,
+        page_size: "60",
+        sortorder: "descending",
+        page: "1",
+        period_from: new Date(periodFrom).toISOString(),
+      }),
+      new URLSearchParams({
+        search,
+        page_size: "60",
+        sortorder: "descending",
+        page: "1",
+      })
+    );
+  }
 
   for (const q of mailQueries) {
     try {
@@ -1884,7 +2143,6 @@ async function loadNotificationFeed() {
         if (!isWithinFeedWindow(parsed.date)) continue;
         items.push(parsed);
       }
-      if (items.length) break;
     } catch {
       /* try next query shape */
     }
@@ -1908,7 +2166,7 @@ async function loadNotificationFeed() {
 
   list.innerHTML = "";
   if (!unique.length) {
-    list.innerHTML = `<li>No “notify me” alerts in the last ${FEED_DAYS} days (or all are hidden). Alerts appear when another user adds a deal history event and selects you in the notify list.</li>`;
+    list.innerHTML = `<li>No notify-user alerts in the last ${FEED_DAYS} days (or all are hidden). Alerts appear when another user adds a deal event and checks you under notify user (same as the CRM email).</li>`;
     return;
   }
 
@@ -2052,12 +2310,43 @@ function renderTasksByUser() {
   }
 }
 
+async function enrichOpportunitiesCustomFields(items) {
+  if (!items.length || !state.customFieldDefs.length) return items;
+  const missing = items.filter((o) => {
+    const lists = [o.customFields, o.CustomFields, o.customFieldList, o.CustomFieldList];
+    return !lists.some((l) => Array.isArray(l) && l.length);
+  });
+  await Promise.all(
+    missing.slice(0, 40).map(async (opp) => {
+      const id = opp.id ?? opp.ID;
+      if (id == null) return;
+      const paths = [
+        `/api/2.0/crm/opportunity/${id}/customfield`,
+        `/api/2.0/crm/opportunity/${id}/customfields`,
+      ];
+      for (const path of paths) {
+        try {
+          const fields = unwrap(await api(path));
+          if (fields.length) {
+            opp.customFields = fields;
+            return;
+          }
+        } catch {
+          /* try next */
+        }
+      }
+    })
+  );
+  return items;
+}
+
 async function refreshGroup(group) {
   try {
     let items = await fetchOpportunitiesForGroup(group);
     if (group.dealStatus !== "all" && !group.stageType) {
       items = applyClientDealStatus(items, group.dealStatus);
     }
+    items = await enrichOpportunitiesCustomFields(items);
     group.opportunities = items;
 
     const el = groupDomEl(group);
@@ -2081,7 +2370,7 @@ async function refreshAll() {
     state.tileLayout = loadLayoutFromStorage();
     await loadCurrentUser();
     await loadPortalUsers();
-    await Promise.all([loadStages(), loadAllTags()]);
+    await Promise.all([loadStages(), loadAllTags(), loadOpportunityCustomFieldDefs()]);
     renderBoardGroups();
     refreshDashboardTileLayouts();
     populateTasksUserFilter();
