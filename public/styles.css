@@ -175,28 +175,34 @@ body {
 
 /* Hero (landing-style header) */
 .hero {
+  --hero-pad-bottom: 2rem;
+  position: relative;
   border-bottom: 1px solid var(--border);
   background:
     linear-gradient(135deg, rgba(79, 140, 255, 0.08) 0%, transparent 50%),
     var(--surface);
 }
 
-.hero-logo-wrap {
-  display: flex;
-  justify-content: center;
-  width: 100%;
-  padding: 1.5rem 0 0;
-}
-
 .hero-inner {
   max-width: 1400px;
   margin: 0 auto;
-  padding: 1rem 1.5rem 2rem;
+  padding: 2.5rem 1.5rem var(--hero-pad-bottom);
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   justify-content: space-between;
   gap: 1.5rem;
+}
+
+.hero-logo-wrap {
+  position: absolute;
+  left: 50%;
+  bottom: var(--hero-pad-bottom);
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 0;
+  line-height: 0;
+  pointer-events: none;
 }
 
 .eyebrow {
@@ -210,12 +216,14 @@ body {
 
 .hero-logo {
   display: block;
-  flex-shrink: 0;
+  margin: 0;
+  padding: 0;
   width: 168px;
   height: auto;
   max-width: min(168px, 36vw);
   object-fit: contain;
-  object-position: center;
+  object-position: center bottom;
+  vertical-align: bottom;
 }
 
 .hero-title {
@@ -237,9 +245,17 @@ body {
   color: var(--muted);
 }
 
+.hero-copy {
+  position: relative;
+  z-index: 1;
+}
+
 .hero-actions {
+  position: relative;
+  z-index: 1;
   display: flex;
   gap: 0.5rem;
+  flex-shrink: 0;
 }
 
 /* Toolbar */
@@ -1469,16 +1485,20 @@ body {
 }
 
 @media (max-width: 640px) {
-  .hero-logo {
-    width: 132px;
+  .hero {
+    --hero-pad-bottom: 1.5rem;
   }
 
-  .hero-logo-wrap {
-    padding-top: 1rem;
+  .hero-logo {
+    width: 120px;
   }
 
   .hero-inner {
-    padding: 1rem 1rem 1.5rem;
+    padding: 1.5rem 1rem var(--hero-pad-bottom);
+  }
+
+  .hero-copy {
+    max-width: 46%;
   }
   .dashboard-tiles {
     padding-left: 1rem;
