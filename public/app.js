@@ -45,7 +45,15 @@ function groupFilterSummary(group) {
   if (group.contactLabel) parts.push(`Contact: ${group.contactLabel}`);
   if (group.stageId) {
     const st = state.stages.find((s) => String(s.id) === String(group.stageId));
-    if (st) parts.push(`Stage: ${st.title}`);
+    if (st) parts.push(`Filter stage: ${st.title}`);
+  }
+  if (group.groupBy === "stage" && group.visibleStageIds?.length) {
+    const n = group.visibleStageIds.length;
+    const total = state.stages.length;
+    if (n < total) parts.push(`${n} stage columns`);
+  }
+  if (group.groupBy === "stage" && group.showEmptyStages === false) {
+    parts.push("Hiding empty stages");
   }
   if (group.dealStatus && group.dealStatus !== "all") {
     parts.push(group.dealStatus === "open" ? "Open deals" : "Closed deals");
@@ -769,9 +777,38 @@ function newGroup(overrides = {}) {
     sortBy: "stage",
     sortOrder: "ascending",
     filtersCollapsed: false,
+    visibleStageIds: [],
+    showEmptyStages: true,
     opportunities: [],
     ...overrides,
   };
+}
+
+function ensureVisibleStageIds(group) {
+  if (!Array.isArray(group.visibleStageIds)) group.visibleStageIds = [];
+  if (group.visibleStageIds.length === 0 && state.stages.length) {
+    group.visibleStageIds = state.stages.map((s) => String(s.id));
+  }
+}
+
+function isStageColumnVisible(group, stageId) {
+  ensureVisibleStageIds(group);
+  return group.visibleStageIds.includes(String(stageId));
+}
+
+function getOpportunityContactLabel(opp) {
+  const contact = opp.contact || opp.Contact;
+  if (contact && typeof contact === "object") {
+    return (
+      contact.displayName ||
+      contact.DisplayName ||
+      contact.title ||
+      contact.Title ||
+      contact.company ||
+      ""
+    ).trim();
+  }
+  return String(contact || opp.contactTitle || opp.ContactTitle || "").trim();
 }
 
 function loadGroupsFromStorage() {
@@ -1054,14 +1091,17 @@ function groupOpportunities(group) {
   const groupBy = group.groupBy;
 
   if (groupBy === "stage") {
-    const columns = state.stages.map((s) => ({
-      id: Number(s.id),
-      title: s.title,
-      color: s.color || "#4f8cff",
-      items: [],
-      stageId: Number(s.id),
-      empty: true,
-    }));
+    ensureVisibleStageIds(group);
+    const columns = state.stages
+      .filter((s) => isStageColumnVisible(group, s.id))
+      .map((s) => ({
+        id: Number(s.id),
+        title: s.title,
+        color: s.color || "#4f8cff",
+        items: [],
+        stageId: Number(s.id),
+        empty: true,
+      }));
     const byId = new Map(columns.map((c) => [c.stageId, c]));
 
     for (const opp of sorted) {
@@ -1072,6 +1112,10 @@ function groupOpportunities(group) {
         col.items.push(opp);
         col.empty = false;
       }
+    }
+
+    if (group.showEmptyStages === false) {
+      return columns.filter((c) => c.items.length > 0);
     }
     return columns;
   }
@@ -1276,6 +1320,14 @@ function renderCard(opp, group, showStagePill) {
   const details = document.createElement("div");
   details.className = "card-details";
 
+  const contactName = getOpportunityContactLabel(opp);
+  if (contactName) {
+    const contactEl = document.createElement("p");
+    contactEl.className = "card-contact";
+    contactEl.textContent = contactName;
+    details.appendChild(contactEl);
+  }
+
   const description = (opp.description || opp.Description || "").trim();
   if (description) {
     const desc = document.createElement("p");
@@ -1354,6 +1406,87 @@ function tagMultiselectLabel(group) {
   if (n === 1) return group.tagTitles[0];
   if (n <= 2) return group.tagTitles.join(", ");
   return `${n} tags selected`;
+}
+
+function stageColumnsLabel(group) {
+  ensureVisibleStageIds(group);
+  const n = group.visibleStageIds.length;
+  const total = state.stages.length;
+  if (!total) return "No stages";
+  if (n >= total) return "All stages";
+  if (n === 0) return "No stages selected";
+  if (n <= 2) {
+    return group.visibleStageIds
+      .map((id) => state.stages.find((s) => String(s.id) === String(id))?.title || id)
+      .join(", ");
+  }
+  return `${n} stages`;
+}
+
+function syncStageGroupFiltersUI(section, group) {
+  const show = group.groupBy === "stage";
+  $(".stage-columns-field", section)?.classList.toggle("hidden", !show);
+  $(".stage-empty-field", section)?.classList.toggle("hidden", !show);
+}
+
+function renderStageColumnsMultiselect(group, container) {
+  container.innerHTML = "";
+  ensureVisibleStageIds(group);
+
+  const wrap = document.createElement("div");
+  wrap.className = "multiselect";
+
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.className = "multiselect-trigger";
+  trigger.textContent = stageColumnsLabel(group);
+
+  const panel = document.createElement("div");
+  panel.className = "multiselect-panel hidden";
+
+  const updateTrigger = () => {
+    trigger.textContent = stageColumnsLabel(group);
+  };
+
+  if (!state.stages.length) {
+    panel.innerHTML = '<span style="padding:0.4rem;font-size:0.75rem;color:var(--muted)">No pipeline stages</span>';
+  } else {
+    for (const stage of state.stages) {
+      const sid = String(stage.id);
+      const label = document.createElement("label");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = isStageColumnVisible(group, sid);
+      cb.addEventListener("change", () => {
+        ensureVisibleStageIds(group);
+        if (cb.checked) {
+          if (!group.visibleStageIds.includes(sid)) group.visibleStageIds.push(sid);
+        } else {
+          group.visibleStageIds = group.visibleStageIds.filter((id) => String(id) !== sid);
+        }
+        updateTrigger();
+        saveGroupsToStorage();
+        updateGroupFilterSummary(group);
+        renderGroupBoard(group, groupDomEl(group) && $(".board", groupDomEl(group)));
+      });
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(stage.title || `Stage ${sid}`));
+      panel.appendChild(label);
+    }
+  }
+
+  trigger.addEventListener("click", (e) => {
+    e.stopPropagation();
+    panel.classList.toggle("hidden");
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!wrap.contains(e.target)) panel.classList.add("hidden");
+  });
+
+  wrap.appendChild(trigger);
+  wrap.appendChild(panel);
+  container.appendChild(wrap);
 }
 
 function renderTagMultiselect(group, container) {
@@ -1538,6 +1671,16 @@ function renderBoardGroups() {
               <label>Pipeline stage</label>
               <select class="stage-filter"><option value="">All stages</option></select>
             </div>
+            <div class="field stage-columns-field hidden">
+              <label>Stage columns</label>
+              <div class="stage-columns-multiselect"></div>
+            </div>
+            <div class="field stage-empty-field hidden">
+              <label class="checkbox-filter">
+                <input type="checkbox" class="show-empty-stages" checked />
+                Show empty stages
+              </label>
+            </div>
             <div class="field">
               <label>Tags</label>
               <div class="tag-multiselect"></div>
@@ -1594,10 +1737,26 @@ function renderBoardGroups() {
     groupBy.value = group.groupBy;
     groupBy.addEventListener("change", () => {
       group.groupBy = groupBy.value;
+      if (group.groupBy === "stage") ensureVisibleStageIds(group);
+      syncStageGroupFiltersUI(section, group);
       saveGroupsToStorage();
       updateGroupFilterSummary(group);
       renderGroupBoard(group, $(".board", section));
     });
+
+    syncStageGroupFiltersUI(section, group);
+    renderStageColumnsMultiselect(group, $(".stage-columns-multiselect", section));
+
+    const showEmptyStages = $(".show-empty-stages", section);
+    if (showEmptyStages) {
+      showEmptyStages.checked = group.showEmptyStages !== false;
+      showEmptyStages.addEventListener("change", () => {
+        group.showEmptyStages = showEmptyStages.checked;
+        saveGroupsToStorage();
+        updateGroupFilterSummary(group);
+        renderGroupBoard(group, $(".board", section));
+      });
+    }
 
     const stageFilter = $(".stage-filter", section);
     for (const s of state.stages) {

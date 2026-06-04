@@ -421,6 +421,13 @@ body {
   line-height: 1.45;
 }
 
+.card-contact {
+  margin: 0 0 0.4rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
 .card-description {
   margin: 0 0 0.35rem;
   color: var(--text);
@@ -977,6 +984,21 @@ body {
 
 .multiselect-panel label:hover {
   background: var(--accent-soft);
+}
+
+.checkbox-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  margin: 0;
+}
+
+.checkbox-filter input {
+  accent-color: var(--accent);
 }
 
 .card-title-link {
