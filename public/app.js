@@ -778,6 +778,7 @@ function newGroup(overrides = {}) {
     sortOrder: "ascending",
     filtersCollapsed: false,
     visibleStageIds: [],
+    stageColumnsConfigured: false,
     showEmptyStages: true,
     opportunities: [],
     ...overrides,
@@ -786,14 +787,14 @@ function newGroup(overrides = {}) {
 
 function ensureVisibleStageIds(group) {
   if (!Array.isArray(group.visibleStageIds)) group.visibleStageIds = [];
-  if (group.visibleStageIds.length === 0 && state.stages.length) {
+  if (!group.stageColumnsConfigured && state.stages.length) {
     group.visibleStageIds = state.stages.map((s) => String(s.id));
   }
 }
 
 function isStageColumnVisible(group, stageId) {
-  ensureVisibleStageIds(group);
-  return group.visibleStageIds.includes(String(stageId));
+  if (!group.stageColumnsConfigured) return true;
+  return (group.visibleStageIds || []).includes(String(stageId));
 }
 
 function getOpportunityContactLabel(opp) {
@@ -1410,10 +1411,10 @@ function tagMultiselectLabel(group) {
 
 function stageColumnsLabel(group) {
   ensureVisibleStageIds(group);
-  const n = group.visibleStageIds.length;
+  const n = group.stageColumnsConfigured ? group.visibleStageIds.length : state.stages.length;
   const total = state.stages.length;
   if (!total) return "No stages";
-  if (n >= total) return "All stages";
+  if (!group.stageColumnsConfigured || n >= total) return "All stages";
   if (n === 0) return "No stages selected";
   if (n <= 2) {
     return group.visibleStageIds
@@ -1458,7 +1459,10 @@ function renderStageColumnsMultiselect(group, container) {
       cb.type = "checkbox";
       cb.checked = isStageColumnVisible(group, sid);
       cb.addEventListener("change", () => {
-        ensureVisibleStageIds(group);
+        if (!group.stageColumnsConfigured) {
+          group.stageColumnsConfigured = true;
+          group.visibleStageIds = state.stages.map((s) => String(s.id));
+        }
         if (cb.checked) {
           if (!group.visibleStageIds.includes(sid)) group.visibleStageIds.push(sid);
         } else {
