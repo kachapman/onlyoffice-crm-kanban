@@ -55,6 +55,17 @@
           </p>
         </div>
         <div class="hero-actions">
+          <div class="global-opp-search" id="global-opp-search">
+            <label class="visually-hidden" for="global-opp-search-input">Search opportunities</label>
+            <input
+              type="search"
+              id="global-opp-search-input"
+              class="global-opp-search-input"
+              placeholder="Search opportunities…"
+              autocomplete="off"
+            />
+            <div id="global-opp-search-results" class="global-opp-search-results hidden" role="listbox"></div>
+          </div>
           <button type="button" id="add-group-btn" class="btn btn-primary">Add group</button>
           <button type="button" id="refresh-btn" class="btn btn-secondary">Refresh all</button>
           <button type="button" id="logout-btn" class="btn btn-ghost">Sign out</button>

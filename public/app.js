@@ -3061,10 +3061,12 @@ function populateNewTaskResponsibleSelect() {
   if (state.currentUserId != null) sel.value = String(state.currentUserId);
 }
 
-async function searchOpportunitiesForTaskPicker(query) {
+async function searchOpportunitiesByTitle(query, { limit = 30 } = {}) {
   const q = String(query || "").trim();
   const local = [];
   const seen = new Set();
+  const qLower = q.toLowerCase();
+
   for (const g of state.groups) {
     for (const o of g.opportunities || []) {
       const id = o.id ?? o.ID;
@@ -3072,12 +3074,13 @@ async function searchOpportunitiesForTaskPicker(query) {
       const title = (o.title || o.Title || `Opportunity #${id}`).trim();
       const key = String(id);
       if (seen.has(key)) continue;
-      if (!q || title.toLowerCase().includes(q.toLowerCase())) {
+      if (!q || title.toLowerCase().includes(qLower)) {
         seen.add(key);
         local.push({ id: Number(id), title });
       }
     }
   }
+
   if (q.length >= 2) {
     try {
       const params = new URLSearchParams({ startIndex: "0", count: "40", filterValue: q, stageType: "0" });
@@ -3095,7 +3098,82 @@ async function searchOpportunitiesForTaskPicker(query) {
       /* use local matches only */
     }
   }
-  return local.sort((a, b) => a.title.localeCompare(b.title)).slice(0, 30);
+
+  return local.sort((a, b) => a.title.localeCompare(b.title)).slice(0, limit);
+}
+
+async function searchOpportunitiesForTaskPicker(query) {
+  return searchOpportunitiesByTitle(query);
+}
+
+function bindGlobalOpportunitySearch() {
+  const wrap = $("#global-opp-search");
+  const input = $("#global-opp-search-input");
+  const results = $("#global-opp-search-results");
+  if (!wrap || !input || !results || input.dataset.bound) return;
+  input.dataset.bound = "1";
+
+  let debounce;
+  const hideResults = () => results.classList.add("hidden");
+
+  const renderResults = (opps, q) => {
+    results.innerHTML = "";
+    if (!q.length) {
+      hideResults();
+      return;
+    }
+    results.classList.remove("hidden");
+    if (q.length < 2 && !opps.length) {
+      results.innerHTML = '<span class="search-empty">Type 2+ characters to search CRM</span>';
+      return;
+    }
+    if (!opps.length) {
+      results.innerHTML = '<span class="search-empty">No opportunities found</span>';
+      return;
+    }
+    for (const o of opps) {
+      const a = document.createElement("a");
+      a.href = crmOpportunityUrl(o.id);
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = o.title;
+      a.setAttribute("role", "option");
+      a.addEventListener("click", () => {
+        input.value = "";
+        hideResults();
+      });
+      results.appendChild(a);
+    }
+  };
+
+  input.addEventListener("input", () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(async () => {
+      const q = input.value.trim();
+      if (!q.length) {
+        hideResults();
+        return;
+      }
+      try {
+        const opps = await searchOpportunitiesByTitle(q);
+        renderResults(opps, q);
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    }, 300);
+  });
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      input.value = "";
+      hideResults();
+      input.blur();
+    }
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!wrap.contains(e.target)) hideResults();
+  });
 }
 
 function bindNewTaskOpportunityPicker() {
@@ -3576,6 +3654,7 @@ async function init() {
   state.hiddenFeedKeys = loadHiddenFeedKeys();
   state.groupTemplates = loadGroupTemplates();
   bindNewTaskModal();
+  bindGlobalOpportunitySearch();
 
   $("#add-group-btn").addEventListener("click", () => {
     state.groups.push(newGroup({ name: `Group ${state.groups.length + 1}` }));
