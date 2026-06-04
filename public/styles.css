@@ -482,9 +482,25 @@ body {
   padding: 0 1.5rem 0.75rem;
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 0.75rem 1.5rem;
   font-size: 0.8rem;
   color: var(--muted);
+}
+
+.btn-collapse-all {
+  margin-left: auto;
+  font-size: 0.78rem;
+  padding: 0.35rem 0.65rem;
+}
+
+.dashboard-tile.tile-collapsed > *:not(.tile-toolbar):not(.group-tile-bar) {
+  display: none !important;
+}
+
+.dashboard-tile.tile-collapsed {
+  min-height: 0;
+  align-self: start;
 }
 
 /* Dashboard tile grid — 2 columns; double height spans 2 rows */
@@ -651,9 +667,22 @@ body {
   margin-bottom: 0;
 }
 
-.dashboard-tile .feed-list,
-.dashboard-tile .tasks-by-user {
+.dashboard-tile .feed-list {
   margin: 0 1rem 1rem;
+}
+
+.dashboard-tile.tasks-panel .panel-header {
+  padding-left: 0.65rem;
+  padding-right: 0.65rem;
+}
+
+.dashboard-tile.tasks-panel .tasks-by-user {
+  margin: 0 0.5rem 0.75rem;
+}
+
+.dashboard-tile.tasks-panel .tasks-user-block {
+  padding-left: 0.55rem;
+  padding-right: 0.55rem;
 }
 
 .dashboard-tile.board-group-tile .board-group-header {

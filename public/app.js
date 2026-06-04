@@ -7,6 +7,7 @@ const GROUPS_STORAGE_KEY = "oo_board_groups_v2";
 const LAYOUT_STORAGE_KEY = "oo_board_layout_v2";
 const HIDDEN_FEED_STORAGE_KEY = "oo_board_hidden_feed_v1";
 const GROUP_TEMPLATES_STORAGE_KEY = "oo_board_group_templates_v1";
+const ALL_TILES_COLLAPSED_KEY = "oo_board_all_collapsed_v1";
 const FEED_DAYS = 30;
 
 const state = {
@@ -21,6 +22,7 @@ const state = {
   tileLayout: { order: [], widths: {}, heights: {} },
   hiddenFeedKeys: new Set(),
   groupTemplates: [],
+  allTilesCollapsed: false,
 };
 
 function crmOpportunityUrl(id) {
@@ -706,10 +708,87 @@ function saveGroupsToStorage() {
   localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(slim));
 }
 
+function normalizeTagTitle(tag) {
+  if (tag == null) return "";
+  if (typeof tag === "string") return tag.trim();
+  return String(tag.title ?? tag.Title ?? tag.name ?? tag.Name ?? "").trim();
+}
+
+function tagsEqual(a, b) {
+  const x = normalizeTagTitle(a).toLowerCase();
+  const y = normalizeTagTitle(b).toLowerCase();
+  return x && y && x === y;
+}
+
 function getOppTags(opp) {
-  const raw = opp.tags || opp.Tags || [];
-  if (!Array.isArray(raw)) return [];
-  return raw.map((t) => (typeof t === "string" ? t : t.title || t.name)).filter(Boolean);
+  const titles = new Set();
+  const add = (t) => {
+    const n = normalizeTagTitle(t);
+    if (n) titles.add(n);
+  };
+
+  const sources = [
+    opp.tags,
+    opp.Tags,
+    opp.tagList,
+    opp.TagList,
+    opp.tag,
+    opp.Tag,
+  ];
+
+  for (const raw of sources) {
+    if (!raw) continue;
+    if (Array.isArray(raw)) {
+      for (const t of raw) add(t);
+    } else if (typeof raw === "string") {
+      raw.split(",").forEach(add);
+    } else if (typeof raw === "object") {
+      add(raw);
+    }
+  }
+
+  return [...titles];
+}
+
+function oppMatchesSelectedTags(opp, selectedTags) {
+  if (!selectedTags?.length) return true;
+  const oppTags = getOppTags(opp);
+  return selectedTags.some((sel) => oppTags.some((t) => tagsEqual(t, sel)));
+}
+
+function applyClientTagFilter(opportunities, group) {
+  if (!group.tagTitles?.length) return opportunities;
+  return opportunities.filter((o) => oppMatchesSelectedTags(o, group.tagTitles));
+}
+
+function oppDueDateMs(opp) {
+  const d = opp.expectedCloseDate?.value ?? opp.expectedCloseDate ?? opp.ExpectedCloseDate?.value;
+  return new Date(d || 0).getTime();
+}
+
+function oppCreatedMs(opp) {
+  const d =
+    opp.createOn?.value ??
+    opp.createOn ??
+    opp.created ??
+    opp.Created ??
+    opp.dateAndTime?.value ??
+    opp.dateAndTime;
+  return new Date(d || 0).getTime();
+}
+
+function loadAllTilesCollapsed() {
+  return localStorage.getItem(ALL_TILES_COLLAPSED_KEY) === "1";
+}
+
+function applyAllTilesCollapsed(collapsed) {
+  state.allTilesCollapsed = collapsed;
+  localStorage.setItem(ALL_TILES_COLLAPSED_KEY, collapsed ? "1" : "0");
+  document.querySelectorAll(".dashboard-tile").forEach((tile) => {
+    tile.classList.toggle("tile-collapsed", collapsed);
+  });
+  const btn = $("#collapse-all-tiles-btn");
+  if (btn) btn.textContent = collapsed ? "Expand all sections" : "Collapse all sections";
 }
 
 function applyClientDealStatus(opportunities, dealStatus) {
@@ -737,9 +816,7 @@ function buildFilterQuery(group) {
 
   if (group.stageId) params.set("opportunityStagesid", group.stageId);
 
-  for (const tag of group.tagTitles || []) {
-    if (tag) params.append("tags", tag);
-  }
+  /* Tag filter is applied client-side (OR). API tag params use AND and often return no rows. */
 
   if (group.contactId) params.set("contactid", group.contactId);
 
@@ -765,9 +842,11 @@ function sortCards(items, group) {
         cmp = (a.bidValue || 0) - (b.bidValue || 0);
         break;
       case "dateandtime": {
-        const da = new Date(a.expectedCloseDate?.value || a.expectedCloseDate || 0).getTime();
-        const db = new Date(b.expectedCloseDate?.value || b.expectedCloseDate || 0).getTime();
-        cmp = da - db;
+        cmp = oppDueDateMs(a) - oppDueDateMs(b);
+        break;
+      }
+      case "created": {
+        cmp = oppCreatedMs(a) - oppCreatedMs(b);
         break;
       }
       default: {
@@ -817,44 +896,62 @@ function groupOpportunities(group) {
   }
 
   if (groupBy === "tag") {
-    const selected = group.tagTitles || [];
+    const selected = (group.tagTitles || []).map(normalizeTagTitle).filter(Boolean);
     const columns = [];
+
+    const columnTitle = (tag) => {
+      const known = state.allTags.find((t) => tagsEqual(t.title || t, tag));
+      return known?.title || tag;
+    };
 
     if (selected.length > 0) {
       for (const tag of selected) {
-        columns.push({ id: tag, title: tag, color: "#4f8cff", items: [], stageId: null });
+        columns.push({ id: tag, title: columnTitle(tag), color: "#4f8cff", items: [], stageId: null });
       }
-      const byTag = new Map(columns.map((c) => [c.id, c]));
+      const byTag = new Map(columns.map((c) => [normalizeTagTitle(c.id).toLowerCase(), c]));
       for (const opp of sorted) {
-        for (const tag of getOppTags(opp)) {
-          if (byTag.has(tag)) byTag.get(tag).items.push(opp);
+        for (const sel of selected) {
+          const oppTags = getOppTags(opp);
+          if (oppTags.some((t) => tagsEqual(t, sel))) {
+            const col = byTag.get(normalizeTagTitle(sel).toLowerCase());
+            if (col) col.items.push(opp);
+          }
         }
       }
       return columns;
     }
 
     const map = new Map();
-    map.set("_untagged", {
+    const untagged = {
       id: "_untagged",
       title: "Untagged",
       color: "#8b95a8",
       items: [],
       stageId: null,
-    });
+    };
+    map.set("_untagged", untagged);
+
     for (const opp of sorted) {
       const tags = getOppTags(opp);
       if (!tags.length) {
-        map.get("_untagged").items.push(opp);
+        untagged.items.push(opp);
         continue;
       }
       for (const tag of tags) {
-        if (!map.has(tag)) {
-          map.set(tag, { id: tag, title: tag, color: "#4f8cff", items: [], stageId: null });
+        const key = normalizeTagTitle(tag).toLowerCase();
+        if (!map.has(key)) {
+          map.set(key, { id: tag, title: columnTitle(tag), color: "#4f8cff", items: [], stageId: null });
         }
-        map.get(tag).items.push(opp);
+        map.get(key).items.push(opp);
       }
     }
-    return [...map.values()].filter((g) => g.items.length > 0);
+
+    const out = [...map.values()].filter((c) => c.items.length > 0);
+    return out.sort((a, b) => {
+      if (a.id === "_untagged") return 1;
+      if (b.id === "_untagged") return -1;
+      return a.title.localeCompare(b.title);
+    });
   }
 
   const order = [
@@ -1008,17 +1105,22 @@ function renderTagMultiselect(group, container) {
       const label = document.createElement("label");
       const cb = document.createElement("input");
       cb.type = "checkbox";
-      cb.checked = (group.tagTitles || []).includes(title);
+      cb.checked = (group.tagTitles || []).some((t) => tagsEqual(t, title));
       cb.addEventListener("change", () => {
         if (cb.checked) {
-          if (!group.tagTitles.includes(title)) group.tagTitles.push(title);
+          if (!group.tagTitles.some((t) => tagsEqual(t, title))) group.tagTitles.push(title);
         } else {
-          group.tagTitles = group.tagTitles.filter((t) => t !== title);
+          group.tagTitles = group.tagTitles.filter((t) => !tagsEqual(t, title));
+        }
+        if (group.tagTitles.length > 0) {
+          group.groupBy = "tag";
+          const groupBySel = groupDomEl(group) && $(".group-by", groupDomEl(group));
+          if (groupBySel) groupBySel.value = "tag";
         }
         updateTrigger();
         saveGroupsToStorage();
-        refreshGroup(group);
         updateGroupFilterSummary(group);
+        refreshGroup(group);
       });
       label.appendChild(cb);
       label.appendChild(document.createTextNode(title));
@@ -1174,6 +1276,23 @@ function renderBoardGroups() {
               <label>Search</label>
               <input type="search" class="group-search" placeholder="Title…" />
             </div>
+            <div class="field">
+              <label>Sort by</label>
+              <select class="group-sort-by">
+                <option value="stage">Pipeline stage</option>
+                <option value="title">Title</option>
+                <option value="bidvalue">Bid value</option>
+                <option value="dateandtime">Due date</option>
+                <option value="created">Date created</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Order</label>
+              <select class="group-sort-order">
+                <option value="ascending">Oldest / A→Z first</option>
+                <option value="descending">Newest / Z→A first</option>
+              </select>
+            </div>
           </div>
           <p class="group-filter-summary"></p>
         </div>
@@ -1224,6 +1343,22 @@ function renderBoardGroups() {
       refreshGroup(group);
     }));
 
+    const sortBy = $(".group-sort-by", section);
+    sortBy.value = group.sortBy || "stage";
+    sortBy.addEventListener("change", () => {
+      group.sortBy = sortBy.value;
+      saveGroupsToStorage();
+      renderGroupBoard(group, $(".board", section));
+    });
+
+    const sortOrder = $(".group-sort-order", section);
+    sortOrder.value = group.sortOrder || "ascending";
+    sortOrder.addEventListener("change", () => {
+      group.sortOrder = sortOrder.value;
+      saveGroupsToStorage();
+      renderGroupBoard(group, $(".board", section));
+    });
+
     renderTagMultiselect(group, $(".tag-multiselect", section));
     bindContactField(group, $(".contact-field", section));
 
@@ -1237,6 +1372,7 @@ function renderBoardGroups() {
 
   ensureTileLayout();
   mountDashboardTiles();
+  applyAllTilesCollapsed(state.allTilesCollapsed);
 }
 
 function debounceForGroup(group, fn) {
@@ -1786,6 +1922,7 @@ async function refreshGroup(group) {
     if (group.dealStatus !== "all" && !group.stageType) {
       items = applyClientDealStatus(items, group.dealStatus);
     }
+    items = applyClientTagFilter(items, group);
     group.opportunities = items;
 
     const el = groupDomEl(group);
@@ -1815,6 +1952,7 @@ async function refreshAll() {
     populateTasksUserFilter();
     await Promise.all([loadNotificationFeed(), loadTasks()]);
     await Promise.all(state.groups.map((g) => refreshGroup(g)));
+    applyAllTilesCollapsed(state.allTilesCollapsed);
     const total = state.groups.reduce((n, g) => n + g.opportunities.length, 0);
     $("#status-text").textContent = `${total} opportunities · ${state.tasks.length} open tasks`;
   } catch (err) {
@@ -1855,6 +1993,11 @@ async function init() {
   state.tileLayout = loadLayoutFromStorage();
   state.hiddenFeedKeys = loadHiddenFeedKeys();
   state.groupTemplates = loadGroupTemplates();
+  state.allTilesCollapsed = loadAllTilesCollapsed();
+
+  $("#collapse-all-tiles-btn")?.addEventListener("click", () => {
+    applyAllTilesCollapsed(!state.allTilesCollapsed);
+  });
 
   $("#add-group-btn").addEventListener("click", () => {
     state.groups.push(newGroup({ name: `Group ${state.groups.length + 1}` }));
