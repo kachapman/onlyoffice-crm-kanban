@@ -1851,6 +1851,7 @@ async function init() {
     ...stripGroupRuntimeFields(g),
     opportunities: [],
   }));
+  saveGroupsToStorage();
   state.tileLayout = loadLayoutFromStorage();
   state.hiddenFeedKeys = loadHiddenFeedKeys();
   state.groupTemplates = loadGroupTemplates();
