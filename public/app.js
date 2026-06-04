@@ -3027,10 +3027,12 @@ function populateNewTaskCategorySelect() {
   if (!state.taskCategories.length) {
     const opt = document.createElement("option");
     opt.value = "";
-    opt.textContent = "Default";
+    opt.textContent = "Loading categories…";
     sel.appendChild(opt);
+    sel.required = false;
     return;
   }
+  sel.required = true;
   for (const cat of state.taskCategories) {
     const opt = document.createElement("option");
     opt.value = String(cat.id ?? cat.ID ?? "");
@@ -3136,37 +3138,50 @@ function bindNewTaskOpportunityPicker() {
   });
 }
 
-function toApiDeadLine(dateInputValue) {
+/** CRM create-task uses `deadline` (ISO), not read-model `deadLine`. */
+function toApiTaskDeadline(dateInputValue) {
   if (!dateInputValue) return null;
   const d = new Date(`${dateInputValue}T17:00:00`);
   if (Number.isNaN(d.getTime())) return null;
-  return { value: d.toISOString() };
+  return d.toISOString();
+}
+
+function resolveTaskCategoryId(formCategoryId) {
+  const picked = formCategoryId != null && String(formCategoryId).trim() !== "" ? Number(formCategoryId) : NaN;
+  if (Number.isFinite(picked) && picked > 0) return picked;
+  const first = state.taskCategories[0];
+  const fallback = Number(first?.id ?? first?.ID);
+  if (Number.isFinite(fallback) && fallback > 0) return fallback;
+  return null;
 }
 
 function buildCreateTaskBody(form) {
   const title = form.title?.trim();
   if (!title) throw new Error("Task title is required");
 
+  const responsibleId = form.responsibleId?.trim();
+  if (!responsibleId) throw new Error("Assigned user is required");
+
+  const categoryId = resolveTaskCategoryId(form.categoryId);
+  if (categoryId == null) {
+    throw new Error("No task category available. Reload the page or check CRM task categories.");
+  }
+
   const body = {
     title,
     description: form.description?.trim() || "",
+    responsibleId,
+    categoryId,
+    isNotify: !!form.isNotify,
   };
 
-  const deadLine = toApiDeadLine(form.deadLine);
-  if (deadLine) body.deadLine = deadLine;
-
-  const responsibleId = form.responsibleId?.trim();
-  if (responsibleId) body.responsibleid = responsibleId;
-
-  const categoryId = form.categoryId?.trim();
-  if (categoryId) body.categoryid = Number(categoryId);
+  const deadline = toApiTaskDeadline(form.deadLine);
+  if (deadline) body.deadline = deadline;
 
   const oppId = state.newTaskOpportunity.id;
   if (oppId != null && Number.isFinite(oppId)) {
-    body.entity = {
-      entityType: 2,
-      entityId: oppId,
-    };
+    body.entityType = "opportunity";
+    body.entityId = oppId;
   }
 
   return body;
@@ -3211,6 +3226,7 @@ async function submitNewTaskForm(e) {
       deadLine: $("#new-task-deadline")?.value,
       responsibleId: $("#new-task-responsible")?.value,
       categoryId: $("#new-task-category")?.value,
+      isNotify: $("#new-task-notify")?.checked,
     });
     const data = await createCrmTask(body);
     const created = unwrapCreatedEntity(data);
