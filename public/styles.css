@@ -1510,6 +1510,69 @@ body {
   gap: 0.5rem;
 }
 
+.modal-card-form {
+  width: min(480px, 92vw);
+  max-height: min(90vh, 720px);
+  overflow-y: auto;
+}
+
+.modal-form .field {
+  margin-bottom: 0.85rem;
+}
+
+.modal-form .field label {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 0.3rem;
+}
+
+.modal-form .field input:not([type="checkbox"]),
+.modal-form .field select,
+.modal-form .field textarea {
+  display: block;
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  box-sizing: border-box;
+}
+
+.modal-form .field textarea {
+  resize: vertical;
+  min-height: 4.5rem;
+}
+
+.modal-checkbox {
+  margin: 0.25rem 0 0.85rem;
+}
+
+.modal-error {
+  margin: 0 0 0.75rem;
+  font-size: 0.85rem;
+  color: var(--danger);
+}
+
+.modal-error.hidden {
+  display: none;
+}
+
+.tile-toolbar .btn-new-task {
+  font-size: 0.72rem;
+  padding: 0.3rem 0.65rem;
+  flex-shrink: 0;
+}
+
+.opportunity-picker-field {
+  position: relative;
+}
+
 @media (max-width: 640px) {
   .hero-logo {
     width: 64px;

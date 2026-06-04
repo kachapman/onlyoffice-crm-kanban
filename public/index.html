@@ -89,6 +89,50 @@
     </div>
   </div>
 
+  <div id="task-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="task-modal-title">
+    <div class="modal-backdrop" data-task-modal-dismiss></div>
+    <div class="modal-card modal-card-form">
+      <h2 id="task-modal-title" class="modal-title">New task</h2>
+      <form id="task-modal-form" class="modal-form">
+        <div class="field">
+          <label for="new-task-title">Title</label>
+          <input type="text" id="new-task-title" name="title" required autocomplete="off" placeholder="Task title" />
+        </div>
+        <div class="field">
+          <label for="new-task-description">Description</label>
+          <textarea id="new-task-description" name="description" rows="3" placeholder="Optional details"></textarea>
+        </div>
+        <div class="field">
+          <label for="new-task-deadline">Due date</label>
+          <input type="date" id="new-task-deadline" name="deadLine" />
+        </div>
+        <div class="field">
+          <label for="new-task-category">Category</label>
+          <select id="new-task-category" name="categoryId"></select>
+        </div>
+        <div class="field">
+          <label for="new-task-responsible">Assigned to</label>
+          <select id="new-task-responsible" name="responsibleId" required></select>
+        </div>
+        <div class="field opportunity-picker-field">
+          <label for="new-task-opportunity-search">Opportunity</label>
+          <input type="search" id="new-task-opportunity-search" placeholder="Search opportunity title…" autocomplete="off" />
+          <div id="new-task-opportunity-results" class="contact-results hidden"></div>
+          <div id="new-task-opportunity-selected" class="contact-selected"></div>
+        </div>
+        <label class="checkbox-filter modal-checkbox">
+          <input type="checkbox" id="new-task-notify" name="notify" checked />
+          <span>Notify assigned user</span>
+        </label>
+        <p id="task-modal-error" class="modal-error hidden" role="alert"></p>
+        <div class="modal-actions">
+          <button type="button" id="task-modal-cancel" class="btn btn-secondary">Cancel</button>
+          <button type="submit" id="task-modal-submit" class="btn btn-primary">Create task</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <script src="app.js" type="module"></script>
 </body>
 </html>

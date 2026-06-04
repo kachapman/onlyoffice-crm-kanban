@@ -29,6 +29,8 @@ const state = {
   groupTemplates: [],
   customFieldDefs: [],
   customFieldById: new Map(),
+  taskCategories: [],
+  newTaskOpportunity: { id: null, title: "" },
 };
 
 function crmOpportunityUrl(id) {
@@ -544,6 +546,7 @@ function bindTileChrome(tileEl, tileId) {
   }
   attachTileCollapseButton(tileEl, tileId);
   applyTileBodyCollapsed(tileEl, tileId);
+  if (tileId === "tile-tasks") ensureTasksNewTaskButton(tileEl);
 }
 
 function bindTileDragDrop(tileEl, tileId, toolbar) {
@@ -878,6 +881,7 @@ function renderTasksTile() {
   applyTileLayoutClasses(tile, tileId);
   ensurePanelToolbarCount(tile, tileId);
   ensurePanelLayoutButtons(tile, tileId);
+  ensureTasksNewTaskButton(tile);
   if (tile && !tile.dataset.tasksFilterBound) {
     tile.dataset.tasksFilterBound = "1";
     $("#tasks-user-filter", tile)?.addEventListener("change", () => {
@@ -2943,6 +2947,329 @@ async function loadNotificationFeed() {
   renderFeedNotificationList();
 }
 
+function ensureTasksNewTaskButton(tileEl) {
+  if (!tileEl || tileEl.dataset.tileId !== "tile-tasks") return;
+  const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
+  if (!toolbar || toolbar.querySelector(".btn-new-task")) return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn btn-primary btn-new-task";
+  btn.textContent = "New task";
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openNewTaskModal().catch((err) => showToast(err.message, true));
+  });
+  const layoutBtns = toolbar.querySelector(".tile-layout-btns");
+  if (layoutBtns) toolbar.insertBefore(btn, layoutBtns);
+  else toolbar.appendChild(btn);
+}
+
+function setTaskModalError(message) {
+  const el = $("#task-modal-error");
+  if (!el) return;
+  if (message) {
+    el.textContent = message;
+    el.classList.remove("hidden");
+  } else {
+    el.textContent = "";
+    el.classList.add("hidden");
+  }
+}
+
+function closeNewTaskModal() {
+  const modal = $("#task-modal");
+  if (modal) modal.classList.add("hidden");
+  setTaskModalError("");
+}
+
+function clearNewTaskOpportunitySelection() {
+  state.newTaskOpportunity = { id: null, title: "" };
+  const search = $("#new-task-opportunity-search");
+  const selected = $("#new-task-opportunity-selected");
+  const results = $("#new-task-opportunity-results");
+  if (search) search.value = "";
+  if (selected) selected.innerHTML = "";
+  if (results) {
+    results.innerHTML = "";
+    results.classList.add("hidden");
+  }
+}
+
+function setNewTaskOpportunitySelection(id, title) {
+  state.newTaskOpportunity = { id: Number(id), title: title || `Opportunity #${id}` };
+  const search = $("#new-task-opportunity-search");
+  const selected = $("#new-task-opportunity-selected");
+  const results = $("#new-task-opportunity-results");
+  if (search) search.value = "";
+  if (results) {
+    results.innerHTML = "";
+    results.classList.add("hidden");
+  }
+  if (selected) {
+    selected.innerHTML = `${escapeHtml(state.newTaskOpportunity.title)} <span class="contact-clear" role="button" tabindex="0">clear</span>`;
+    $(".contact-clear", selected)?.addEventListener("click", () => clearNewTaskOpportunitySelection());
+  }
+}
+
+async function loadTaskCategories() {
+  try {
+    const data = await api("/api/2.0/crm/task/category");
+    state.taskCategories = unwrap(data);
+  } catch {
+    state.taskCategories = [];
+  }
+}
+
+function populateNewTaskCategorySelect() {
+  const sel = $("#new-task-category");
+  if (!sel) return;
+  sel.innerHTML = "";
+  if (!state.taskCategories.length) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "Default";
+    sel.appendChild(opt);
+    return;
+  }
+  for (const cat of state.taskCategories) {
+    const opt = document.createElement("option");
+    opt.value = String(cat.id ?? cat.ID ?? "");
+    opt.textContent = cat.title || cat.Title || `Category ${opt.value}`;
+    sel.appendChild(opt);
+  }
+}
+
+function populateNewTaskResponsibleSelect() {
+  const sel = $("#new-task-responsible");
+  if (!sel) return;
+  sel.innerHTML = "";
+  const users = new Map();
+  for (const u of state.portalUsers) {
+    if (u.id != null) users.set(String(u.id), u.displayName || u.id);
+  }
+  if (state.currentUserId != null) {
+    users.set(String(state.currentUserId), state.currentUserName || state.currentUserId);
+  }
+  for (const [id, name] of [...users.entries()].sort((a, b) => a[1].localeCompare(b[1]))) {
+    const opt = document.createElement("option");
+    opt.value = id;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  }
+  if (state.currentUserId != null) sel.value = String(state.currentUserId);
+}
+
+async function searchOpportunitiesForTaskPicker(query) {
+  const q = String(query || "").trim();
+  const local = [];
+  const seen = new Set();
+  for (const g of state.groups) {
+    for (const o of g.opportunities || []) {
+      const id = o.id ?? o.ID;
+      if (id == null) continue;
+      const title = (o.title || o.Title || `Opportunity #${id}`).trim();
+      const key = String(id);
+      if (seen.has(key)) continue;
+      if (!q || title.toLowerCase().includes(q.toLowerCase())) {
+        seen.add(key);
+        local.push({ id: Number(id), title });
+      }
+    }
+  }
+  if (q.length >= 2) {
+    try {
+      const params = new URLSearchParams({ startIndex: "0", count: "40", filterValue: q, stageType: "0" });
+      const data = await api(`/api/2.0/crm/opportunity/filter?${params}`);
+      for (const o of unwrap(data)) {
+        const id = o.id ?? o.ID;
+        if (id == null) continue;
+        const key = String(id);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        local.push({ id: Number(id), title: (o.title || o.Title || `Opportunity #${id}`).trim() });
+        indexOpportunity(o);
+      }
+    } catch {
+      /* use local matches only */
+    }
+  }
+  return local.sort((a, b) => a.title.localeCompare(b.title)).slice(0, 30);
+}
+
+function bindNewTaskOpportunityPicker() {
+  const input = $("#new-task-opportunity-search");
+  const results = $("#new-task-opportunity-results");
+  if (!input || !results || input.dataset.bound) return;
+  input.dataset.bound = "1";
+  let debounce;
+  input.addEventListener("input", () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(async () => {
+      const q = input.value.trim();
+      results.innerHTML = "";
+      if (q.length < 1) {
+        results.classList.add("hidden");
+        return;
+      }
+      try {
+        const opps = await searchOpportunitiesForTaskPicker(q);
+        results.classList.remove("hidden");
+        if (!opps.length) {
+          results.innerHTML = '<button type="button" disabled>No matches</button>';
+          return;
+        }
+        for (const o of opps) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = o.title;
+          btn.addEventListener("click", () => setNewTaskOpportunitySelection(o.id, o.title));
+          results.appendChild(btn);
+        }
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    }, 300);
+  });
+  document.addEventListener("click", (e) => {
+    const wrap = input.closest(".opportunity-picker-field");
+    if (wrap && !wrap.contains(e.target)) results.classList.add("hidden");
+  });
+}
+
+function toApiDeadLine(dateInputValue) {
+  if (!dateInputValue) return null;
+  const d = new Date(`${dateInputValue}T17:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  return { value: d.toISOString() };
+}
+
+function buildCreateTaskBody(form) {
+  const title = form.title?.trim();
+  if (!title) throw new Error("Task title is required");
+
+  const body = {
+    title,
+    description: form.description?.trim() || "",
+  };
+
+  const deadLine = toApiDeadLine(form.deadLine);
+  if (deadLine) body.deadLine = deadLine;
+
+  const responsibleId = form.responsibleId?.trim();
+  if (responsibleId) body.responsibleid = responsibleId;
+
+  const categoryId = form.categoryId?.trim();
+  if (categoryId) body.categoryid = Number(categoryId);
+
+  const oppId = state.newTaskOpportunity.id;
+  if (oppId != null && Number.isFinite(oppId)) {
+    body.entity = {
+      entityType: 2,
+      entityId: oppId,
+    };
+  }
+
+  return body;
+}
+
+function unwrapCreatedEntity(data) {
+  const r = data?.response ?? data?.result ?? data;
+  if (r && typeof r === "object") return r;
+  return data;
+}
+
+async function createCrmTask(body) {
+  return api("/api/2.0/crm/task", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+async function notifyCrmTaskResponsible(taskId) {
+  try {
+    await api(`/api/2.0/crm/task/${taskId}/notify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+  } catch {
+    /* optional */
+  }
+}
+
+async function submitNewTaskForm(e) {
+  e.preventDefault();
+  setTaskModalError("");
+  const form = e.target;
+  const submitBtn = $("#task-modal-submit");
+  if (submitBtn) submitBtn.disabled = true;
+  try {
+    const body = buildCreateTaskBody({
+      title: $("#new-task-title")?.value,
+      description: $("#new-task-description")?.value,
+      deadLine: $("#new-task-deadline")?.value,
+      responsibleId: $("#new-task-responsible")?.value,
+      categoryId: $("#new-task-category")?.value,
+    });
+    const data = await createCrmTask(body);
+    const created = unwrapCreatedEntity(data);
+    const taskId = created?.id ?? created?.ID ?? data?.id ?? data?.ID;
+    if ($("#new-task-notify")?.checked && taskId != null) {
+      await notifyCrmTaskResponsible(taskId);
+    }
+    closeNewTaskModal();
+    showToast("Task created");
+    await loadTasks();
+  } catch (err) {
+    setTaskModalError(err.message || "Could not create task");
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
+
+async function openNewTaskModal() {
+  const modal = $("#task-modal");
+  const form = $("#task-modal-form");
+  if (!modal || !form) return;
+
+  setTaskModalError("");
+  form.reset();
+  clearNewTaskOpportunitySelection();
+
+  await loadTaskCategories();
+  populateNewTaskCategorySelect();
+  populateNewTaskResponsibleSelect();
+
+  const notify = $("#new-task-notify");
+  if (notify) notify.checked = true;
+
+  modal.classList.remove("hidden");
+  $("#new-task-title")?.focus();
+}
+
+function bindNewTaskModal() {
+  const modal = $("#task-modal");
+  const form = $("#task-modal-form");
+  if (!modal || !form || form.dataset.bound) return;
+  form.dataset.bound = "1";
+
+  form.addEventListener("submit", (e) => {
+    submitNewTaskForm(e).catch((err) => setTaskModalError(err.message));
+  });
+
+  $("#task-modal-cancel")?.addEventListener("click", closeNewTaskModal);
+  modal.querySelectorAll("[data-task-modal-dismiss]").forEach((el) => {
+    el.addEventListener("click", closeNewTaskModal);
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !modal.classList.contains("hidden")) closeNewTaskModal();
+  });
+
+  bindNewTaskOpportunityPicker();
+}
+
 async function loadTasks() {
   renderTasksTile();
   const params = new URLSearchParams({ startIndex: "0", count: "200", isClosed: "false" });
@@ -3232,6 +3559,7 @@ async function init() {
   state.tileLayout = loadLayoutFromStorage();
   state.hiddenFeedKeys = loadHiddenFeedKeys();
   state.groupTemplates = loadGroupTemplates();
+  bindNewTaskModal();
 
   $("#add-group-btn").addEventListener("click", () => {
     state.groups.push(newGroup({ name: `Group ${state.groups.length + 1}` }));
