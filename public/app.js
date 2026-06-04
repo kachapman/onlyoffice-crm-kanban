@@ -873,7 +873,7 @@ function tagsEqual(a, b, catalog = buildTagCatalog()) {
   return x && y && x === y;
 }
 
-function getOppTags(opp) {
+function getOppTagsFromRecord(opp) {
   const titles = new Set();
   const add = (t) => {
     const n = normalizeTagTitle(t);
@@ -906,47 +906,43 @@ function getOppTags(opp) {
     }
   }
 
-  if (Array.isArray(opp._matchedBoardTags)) {
-    for (const t of opp._matchedBoardTags) add(t);
-  }
-
-  for (const [key, val] of Object.entries(opp)) {
-    if (!/tag/i.test(key) || sources.includes(val)) continue;
-    if (Array.isArray(val)) {
-      for (const t of val) add(t);
-    } else if (typeof val === "string" && val.includes(",")) {
-      val.split(",").forEach(add);
-    }
-  }
-
   return [...titles];
 }
 
-function stampMatchedBoardTag(opp, tagTitle) {
-  const title = normalizeTagTitle(tagTitle);
-  if (!title) return;
-  if (!Array.isArray(opp._matchedBoardTags)) opp._matchedBoardTags = [];
-  if (!opp._matchedBoardTags.some((t) => tagsEqual(t, title))) {
-    opp._matchedBoardTags.push(title);
-  }
+function getOppTags(opp) {
+  return getOppTagsFromRecord(opp);
 }
 
-function mergeOpportunityById(map, opp, tagTitle) {
-  const id = opp.id ?? opp.ID;
-  if (id == null) return;
-  const existing = map.get(id);
-  if (existing) {
-    stampMatchedBoardTag(existing, tagTitle);
-  } else {
-    stampMatchedBoardTag(opp, tagTitle);
-    map.set(id, opp);
-  }
+function oppHasTag(opp, tagTitle, catalog = buildTagCatalog()) {
+  return getOppTagsFromRecord(opp).some((t) => tagsEqual(t, tagTitle, catalog));
 }
 
 function oppMatchesSelectedTags(opp, selectedTags, catalog = buildTagCatalog()) {
   if (!selectedTags?.length) return true;
-  const oppTags = getOppTags(opp);
-  return selectedTags.some((sel) => oppTags.some((t) => tagsEqual(t, sel, catalog)));
+  return selectedTags.some((sel) => oppHasTag(opp, sel, catalog));
+}
+
+async function enrichOpportunitiesTags(items) {
+  const needTags = items.filter((o) => getOppTagsFromRecord(o).length === 0);
+  await Promise.all(
+    needTags.slice(0, 100).map(async (opp) => {
+      const id = opp.id ?? opp.ID;
+      if (id == null) return;
+      const paths = [`/api/2.0/crm/opportunity/${id}/tag`, `/api/2.0/crm/opportunity/${id}/tags`];
+      for (const path of paths) {
+        try {
+          const tags = unwrap(await api(path));
+          if (tags.length) {
+            opp.tags = tags;
+            return;
+          }
+        } catch {
+          /* try next */
+        }
+      }
+    })
+  );
+  return items;
 }
 
 function apiTagParamValues(tagTitle, catalog) {
@@ -961,37 +957,18 @@ function apiTagParamValues(tagTitle, catalog) {
 async function fetchOpportunitiesForGroup(group) {
   const baseQs = buildFilterQuery(group);
   const catalog = buildTagCatalog();
-
-  if (!group.tagTitles?.length) {
-    const data = await api(`/api/2.0/crm/opportunity/filter?${baseQs}`);
-    return unwrap(data);
-  }
-
-  const merged = new Map();
-  for (const tagTitle of group.tagTitles) {
-    const paramValues = apiTagParamValues(tagTitle, catalog);
-    const tryValues = paramValues.length ? paramValues : [normalizeTagTitle(tagTitle)];
-    for (const tagParam of tryValues) {
-      if (!tagParam) continue;
-      for (const tagKey of ["tags", "tag"]) {
-        const params = new URLSearchParams(baseQs);
-        params.append(tagKey, tagParam);
-        try {
-          const data = await api(`/api/2.0/crm/opportunity/filter?${params}`);
-          for (const opp of unwrap(data)) {
-            mergeOpportunityById(merged, opp, tagTitle);
-          }
-        } catch {
-          /* try next param shape */
-        }
-      }
-    }
-  }
-
-  if (merged.size > 0) return [...merged.values()];
-
   const data = await api(`/api/2.0/crm/opportunity/filter?${baseQs}`);
-  return unwrap(data).filter((o) => oppMatchesSelectedTags(o, group.tagTitles, catalog));
+  let items = unwrap(data);
+
+  if (group.tagTitles?.length || group.groupBy === "tag") {
+    items = await enrichOpportunitiesTags(items);
+  }
+
+  if (group.tagTitles?.length) {
+    items = items.filter((o) => oppMatchesSelectedTags(o, group.tagTitles, catalog));
+  }
+
+  return items;
 }
 
 function oppDueDateMs(opp) {
@@ -1141,7 +1118,7 @@ function groupOpportunities(group) {
       }
       for (const opp of sorted) {
         for (const sel of selected) {
-          if (!oppMatchesSelectedTags(opp, [sel], catalog)) continue;
+          if (!oppHasTag(opp, sel, catalog)) continue;
           const col = byTag.get(tagLookupKey(sel, catalog));
           if (col) col.items.push(opp);
         }
@@ -1242,6 +1219,76 @@ async function loadOpportunityCustomFieldDefs() {
       /* try next path */
     }
   }
+}
+
+const CHECKLIST_STAGE_TITLE = "New Supplement Project - Estimate Needed";
+const CHECKLIST_FIELD_NAMES = ["Measurement Report", "Insurance Documents", "Inspection Photos"];
+
+function findCustomFieldEntry(opp, ...namePatterns) {
+  const lists = [
+    opp.customFields,
+    opp.CustomFields,
+    opp.customFieldList,
+    opp.CustomFieldList,
+    opp.fieldValues,
+    opp.FieldValues,
+  ];
+
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      const fieldId = item.id ?? item.ID ?? item.fieldId ?? item.FieldId;
+      const def = fieldId != null ? state.customFieldById.get(String(fieldId)) : null;
+      const label = customFieldLabel(item) || customFieldLabel(def);
+      if (!label || !fieldNameMatches(label, namePatterns)) continue;
+      return item;
+    }
+  }
+
+  for (const def of state.customFieldDefs) {
+    if (!fieldNameMatches(customFieldLabel(def), namePatterns)) continue;
+    const fieldId = def.id ?? def.ID;
+    const key = fieldId != null ? String(fieldId) : null;
+    if (key && opp[key] != null && opp[key] !== "") {
+      return { value: opp[key], fieldId };
+    }
+  }
+
+  return null;
+}
+
+function isCustomFieldChecked(opp, ...namePatterns) {
+  const entry = findCustomFieldEntry(opp, ...namePatterns);
+  if (!entry) return false;
+
+  const fieldId = entry.id ?? entry.ID ?? entry.fieldId ?? entry.FieldId;
+  const def = fieldId != null ? state.customFieldById.get(String(fieldId)) : null;
+  const raw = entry.value ?? entry.Value ?? entry.fieldValue ?? entry.FieldValue;
+
+  if (raw === true || raw === 1) return true;
+  if (raw === false || raw === 0 || raw == null) return false;
+
+  const text = String(raw).trim().toLowerCase();
+  if (!text) return false;
+  if (text === "true" || text === "yes" || text === "1" || text === "checked" || text === "on") return true;
+  if (text === "false" || text === "no" || text === "0" || text === "unchecked" || text === "off") return false;
+
+  const fieldType = String(def?.fieldType ?? def?.type ?? def?.fieldTypeTitle ?? "").toLowerCase();
+  if (fieldType.includes("check") || fieldType.includes("bool")) {
+    return true;
+  }
+
+  return true;
+}
+
+function isChecklistStage(opp) {
+  const title = (opp.stage?.title || "").trim().toLowerCase();
+  return title === CHECKLIST_STAGE_TITLE.toLowerCase();
+}
+
+function needsMissingChecklistWarning(opp) {
+  if (!isChecklistStage(opp)) return false;
+  return CHECKLIST_FIELD_NAMES.some((name) => !isCustomFieldChecked(opp, name));
 }
 
 function getOppCustomFieldValue(opp, ...namePatterns) {
@@ -1357,6 +1404,13 @@ function renderCard(opp, group, showStagePill) {
     pill.className = "card-stage-pill";
     pill.textContent = opp.stage.title;
     card.appendChild(pill);
+  }
+
+  if (needsMissingChecklistWarning(opp)) {
+    const warn = document.createElement("p");
+    warn.className = "card-checklist-warn";
+    warn.textContent = "Missing Checklist info";
+    card.appendChild(warn);
   }
 
   return card;

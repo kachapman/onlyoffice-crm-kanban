@@ -452,6 +452,13 @@ body {
   color: var(--accent);
 }
 
+.card-checklist-warn {
+  margin: 0.5rem 0 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--danger);
+}
+
 .empty-column {
   padding: 1.5rem 1rem;
   text-align: center;
