@@ -945,15 +945,6 @@ async function enrichOpportunitiesTags(items) {
   return items;
 }
 
-function apiTagParamValues(tagTitle, catalog) {
-  const title = normalizeTagTitle(tagTitle);
-  const values = new Set();
-  if (title) values.add(title);
-  const entry = catalog.byTitleLower.get(title.toLowerCase());
-  if (entry?.id != null) values.add(String(entry.id));
-  return [...values];
-}
-
 async function fetchOpportunitiesForGroup(group) {
   const baseQs = buildFilterQuery(group);
   const catalog = buildTagCatalog();
