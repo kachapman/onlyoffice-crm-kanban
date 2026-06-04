@@ -176,6 +176,19 @@ body {
   color: var(--accent);
 }
 
+.hero-title-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.hero-logo {
+  flex-shrink: 0;
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+}
+
 .hero-title {
   margin: 0;
   font-family: var(--serif);
@@ -529,26 +542,98 @@ body {
   white-space: nowrap;
 }
 
-/* Pinned row: collapsed CRM notifications + Tasks always stay on top */
+/* Fixed top row: notifications (left) + tasks (right) */
+.dashboard-panel-row,
 .dashboard-tiles-pinned {
-  --tile-row-height: 400px;
+  --panel-content-width: 75%;
+}
+
+.dashboard-panel-row {
+  max-width: 1400px;
+  margin: 0 auto 1.25rem;
+  padding: 0 1.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  align-items: flex-start;
+}
+
+.dashboard-panel-row .panel-slot-left {
+  order: 1;
+}
+
+.dashboard-panel-row .panel-slot-right {
+  order: 2;
+}
+
+.dashboard-panel-row .dashboard-tile.panel-width-half {
+  flex: 1 1 calc(50% - 0.625rem);
+  min-width: 0;
+  max-width: calc(50% - 0.625rem);
+}
+
+.dashboard-panel-row .dashboard-tile.panel-width-full {
+  flex: 0 0 var(--panel-content-width);
+  width: var(--panel-content-width);
+  max-width: var(--panel-content-width);
+}
+
+.dashboard-panel-row.panel-row-has-full .dashboard-tile.panel-width-full {
+  flex: 0 0 var(--panel-content-width);
+}
+
+.dashboard-panel-row.panel-row-has-full .dashboard-tile.panel-width-half {
+  flex: 1 1 calc(50% - 0.625rem);
+  max-width: calc(50% - 0.625rem);
+}
+
+/* Pinned row: collapsed panels — minimal height, same left/right slots */
+.dashboard-tiles-pinned {
   max-width: 1400px;
   margin: 0 auto;
   padding: 0 1.5rem;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-auto-rows: auto;
+  display: flex;
+  flex-wrap: wrap;
   gap: 1.25rem;
-  align-items: start;
+  align-items: stretch;
 }
 
 .dashboard-tiles-pinned:not(.hidden) {
-  margin-bottom: 1.25rem;
+  margin-bottom: 0.65rem;
 }
 
 .dashboard-tiles-pinned .dashboard-tile {
-  grid-column: span 1;
   min-height: 0;
+  height: auto;
+  align-self: start;
+}
+
+.dashboard-tiles-pinned .panel-slot-left {
+  order: 1;
+}
+
+.dashboard-tiles-pinned .panel-slot-right {
+  order: 2;
+}
+
+.dashboard-tiles-pinned .dashboard-tile.panel-width-half {
+  flex: 1 1 calc(50% - 0.625rem);
+  max-width: calc(50% - 0.625rem);
+}
+
+.dashboard-tiles-pinned .dashboard-tile.panel-width-full {
+  flex: 0 0 var(--panel-content-width);
+  width: var(--panel-content-width);
+  max-width: var(--panel-content-width);
+}
+
+.dashboard-tiles-pinned .dashboard-tile.tile-body-collapsed {
+  min-height: 0;
+}
+
+.dashboard-tiles-pinned .tile-toolbar {
+  padding: 0.3rem 0.55rem;
+  border-bottom: 1px solid var(--border);
 }
 
 /* Dashboard tile grid — 2 columns; double height spans 2 rows */
@@ -654,6 +739,26 @@ body {
   flex-shrink: 0;
 }
 
+.tile-drag-hint.hidden {
+  display: none;
+}
+
+.tile-toolbar-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.tile-toolbar-count {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin-left: 0.15rem;
+  flex-shrink: 0;
+}
+
 .group-tile-bar {
   flex-wrap: wrap;
   gap: 0.4rem 0.5rem;
@@ -726,29 +831,82 @@ body {
 }
 
 .dashboard-tile.feed-panel,
-.dashboard-tile.tasks-panel {
+.dashboard-tile.tasks-panel,
+.dashboard-tile.panel-tile {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  height: auto;
+  align-self: start;
 }
 
-.dashboard-tile .panel-header {
+.dashboard-tile.feed-panel .panel-header,
+.dashboard-tile.tasks-panel .panel-header {
   flex-shrink: 0;
-  padding: 0.85rem 1rem 0;
-  margin-bottom: 0.65rem;
+  padding: 0.65rem 1rem 0;
+  margin-bottom: 0.5rem;
+  min-height: auto;
+  align-items: center;
 }
 
-.dashboard-tile .feed-list,
-.dashboard-tile .tasks-by-user {
+.panel-header-feed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.panel-header-feed .feed-keyword-filter {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+  margin-left: 0;
+}
+
+.dashboard-tile.panel-tile .feed-list,
+.dashboard-tile.panel-tile .tasks-by-user {
   list-style: none;
   margin: 0 1rem 1rem;
   padding: 0;
-  flex: 1;
-  min-height: 120px;
-  max-height: 220px;
-  overflow-y: auto;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: visible;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  box-sizing: border-box;
+}
+
+.dashboard-tile.panel-tile .feed-list {
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.dashboard-tile.panel-tile .tasks-by-user:not(.tasks-by-user-columns) {
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.dashboard-tile.tasks-panel.tasks-tile-full .tasks-by-user.tasks-by-user-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 1.25rem;
+  align-items: start;
+  max-height: none;
+  overflow: visible;
+}
+
+.tasks-column {
+  min-width: 0;
+}
+
+.tasks-column .task-row:first-of-type {
+  border-top: none;
+}
+
+.dashboard-tiles-pinned .dashboard-tile.tile-body-collapsed {
+  max-height: none;
 }
 
 .dashboard-tile .tasks-by-user .board-loading {
@@ -807,6 +965,28 @@ body {
   margin-left: auto;
   font-size: 0.75rem;
   opacity: 0.85;
+}
+
+.feed-keyword-filter {
+  flex: 1 1 140px;
+  min-width: 120px;
+  max-width: 220px;
+  padding: 0.35rem 0.55rem;
+  font: inherit;
+  font-size: 0.78rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.feed-keyword-filter::placeholder {
+  color: var(--muted);
+}
+
+.feed-keyword-filter:focus {
+  outline: 2px solid var(--accent-soft);
+  border-color: var(--accent);
 }
 
 .feed-list li {
@@ -912,9 +1092,10 @@ body {
 }
 
 .tasks-filter-label {
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   color: var(--muted);
   display: flex;
+  margin-left: auto;
   align-items: center;
   gap: 0.4rem;
 }
@@ -1202,6 +1383,15 @@ body {
   .dashboard-tile,
   .dashboard-tile.tile-half {
     grid-column: 1 / -1;
+  }
+
+  .dashboard-panel-row .dashboard-tile.panel-width-half,
+  .dashboard-panel-row .dashboard-tile.panel-width-full,
+  .dashboard-tiles-pinned .dashboard-tile.panel-width-half,
+  .dashboard-tiles-pinned .dashboard-tile.panel-width-full {
+    flex: 1 1 100%;
+    max-width: 100%;
+    width: 100%;
   }
 }
 

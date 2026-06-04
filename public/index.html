@@ -3,7 +3,18 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Vanguard CRM — Opportunity Board</title>
+  <title>Vanguard Adjusting Dashboard</title>
+  <meta name="description" content="CRM Viewer and organizer for Opportunities, Notifications and Tasks." />
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png" />
+  <link rel="apple-touch-icon" sizes="192x192" href="favicon-192.png" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Vanguard Adjusting Dashboard" />
+  <meta property="og:description" content="CRM Viewer and organizer for Opportunities, Notifications and Tasks." />
+  <meta property="og:image" content="favicon-192.png" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="Vanguard Adjusting Dashboard" />
+  <meta name="twitter:description" content="CRM Viewer and organizer for Opportunities, Notifications and Tasks." />
+  <meta name="twitter:image" content="favicon-192.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
@@ -38,9 +49,12 @@
       <div class="hero-inner">
         <div class="hero-copy">
           <p class="eyebrow">Vanguard · OnlyOffice CRM</p>
-          <h1 class="hero-title">Opportunity <em>board</em></h1>
+          <div class="hero-title-row">
+            <img src="hero-ship-56.png" alt="" class="hero-logo" width="56" height="56" />
+            <h1 class="hero-title">Opportunity <em>dashboard</em></h1>
+          </div>
           <p class="hero-desc">
-            View CRM opportunities in multiple filtered groups. Open deals in CRM in a new tab; mark tasks complete here.
+            CRM Viewer and organizer for Opportunities, Notifications and Tasks.
           </p>
         </div>
         <div class="hero-actions">
@@ -57,6 +71,7 @@
     </section>
 
     <div id="dashboard-tiles-pinned" class="dashboard-tiles-pinned hidden" aria-label="Pinned collapsed feed and tasks"></div>
+    <div id="dashboard-panel-row" class="dashboard-panel-row" aria-label="CRM notifications and tasks"></div>
     <div id="dashboard-tiles" class="dashboard-tiles" aria-label="Dashboard tiles"></div>
   </div>
 

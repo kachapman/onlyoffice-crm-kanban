@@ -6,6 +6,7 @@ const DEFAULT_PORTAL = "https://office.vanguardadj.com";
 const GROUPS_STORAGE_KEY = "oo_board_groups_v2";
 const LAYOUT_STORAGE_KEY = "oo_board_layout_v2";
 const HIDDEN_FEED_STORAGE_KEY = "oo_board_hidden_feed_v1";
+const FEED_KEYWORD_STORAGE_KEY = "oo_board_feed_keyword_v1";
 const GROUP_TEMPLATES_STORAGE_KEY = "oo_board_group_templates_v1";
 const FEED_DAYS = 30;
 
@@ -14,12 +15,17 @@ const state = {
   stages: [],
   allTags: [],
   groups: [],
+  currentUser: null,
   currentUserId: null,
   currentUserName: "",
+  currentUserEmail: "",
   portalUsers: [],
   tasks: [],
   tileLayout: { order: [], widths: {}, heights: {} },
   hiddenFeedKeys: new Set(),
+  feedKeywordFilter: "",
+  feedNotificationsCache: [],
+  opportunityById: new Map(),
   groupTemplates: [],
   customFieldDefs: [],
   customFieldById: new Map(),
@@ -106,6 +112,18 @@ function unwrap(data) {
   return [];
 }
 
+/** GET /api/2.0/crm/opportunity/tag/{id} returns plain tag title strings. */
+function unwrapEntityTags(data) {
+  const raw = unwrap(data);
+  if (!raw.length && typeof data?.response === "string") {
+    const s = data.response.trim();
+    return s ? [s] : [];
+  }
+  return raw
+    .map((t) => (typeof t === "string" ? t.trim() : normalizeTagTitle(t)))
+    .filter(Boolean);
+}
+
 function sameUserId(a, b) {
   if (a == null || b == null || a === "" || b === "") return false;
   return String(a).toLowerCase() === String(b).toLowerCase();
@@ -152,6 +170,16 @@ function feedWindowStart() {
   return Date.now() - FEED_DAYS * 24 * 60 * 60 * 1000;
 }
 
+function feedFilterPlaceholder() {
+  const who = state.currentUserName || "your";
+  return `Filter ${who} notifications…`;
+}
+
+function syncFeedFilterPlaceholder() {
+  const kw = $("#feed-keyword-filter");
+  if (kw) kw.placeholder = feedFilterPlaceholder();
+}
+
 function isWithinFeedWindow(date) {
   if (!date) return true;
   const t = new Date(date).getTime();
@@ -160,7 +188,8 @@ function isWithinFeedWindow(date) {
 }
 
 function feedNotificationKey(it) {
-  return `${it.source || "notify"}-${it.id}-${(it.text || "").slice(0, 120)}-${it.author || ""}`;
+  const when = it.date ? new Date(it.date).getTime() : 0;
+  return `${it.id}-${when}-${(it.text || "").slice(0, 80)}-${it.author || ""}`;
 }
 
 function saveLayoutToStorage() {
@@ -179,6 +208,10 @@ function ensureTileLayout() {
     if (!filtered.includes(id)) filtered.push(id);
   }
   state.tileLayout.order = filtered;
+  for (const id of PANEL_TILE_IDS) {
+    if (state.tileLayout.heights?.[id]) delete state.tileLayout.heights[id];
+    if (!state.tileLayout.widths[id]) state.tileLayout.widths[id] = "half";
+  }
   saveLayoutToStorage();
 }
 
@@ -213,10 +246,27 @@ function setTileBodyCollapsed(tileId, collapsed) {
 }
 
 const PINNED_TILE_IDS = ["tile-feed", "tile-tasks"];
+const PANEL_TILE_IDS = new Set(PINNED_TILE_IDS);
+
+function loadFeedKeywordFromStorage() {
+  try {
+    state.feedKeywordFilter = localStorage.getItem(FEED_KEYWORD_STORAGE_KEY) || "";
+  } catch {
+    state.feedKeywordFilter = "";
+  }
+}
+
+function saveFeedKeywordToStorage() {
+  localStorage.setItem(FEED_KEYWORD_STORAGE_KEY, state.feedKeywordFilter || "");
+}
 
 function collectDashboardTileNodes() {
   const nodes = new Map();
-  for (const container of [$("#dashboard-tiles-pinned"), $("#dashboard-tiles")]) {
+  for (const container of [
+    $("#dashboard-tiles-pinned"),
+    $("#dashboard-panel-row"),
+    $("#dashboard-tiles"),
+  ]) {
     if (!container) continue;
     for (const child of [...container.children]) {
       if (child.dataset.tileId) nodes.set(child.dataset.tileId, child);
@@ -239,7 +289,21 @@ function applyTileBodyCollapsed(tileEl, tileId) {
 function applyTileLayoutClasses(tileEl, tileId) {
   if (!tileEl || !tileId) return;
   if (tileBodyCollapsed(tileId)) {
-    tileEl.classList.remove("tile-half", "tile-double");
+    tileEl.classList.remove("tile-half", "tile-double", "tasks-tile-full");
+    return;
+  }
+  if (PANEL_TILE_IDS.has(tileId)) {
+    if (state.tileLayout.heights?.[tileId]) {
+      delete state.tileLayout.heights[tileId];
+      saveLayoutToStorage();
+    }
+    tileEl.classList.add("panel-tile");
+    tileEl.classList.remove("tile-double", "tile-half", "tasks-tile-full");
+    const w = tileWidth(tileId);
+    tileEl.classList.toggle("panel-width-half", w !== "full");
+    tileEl.classList.toggle("panel-width-full", w === "full");
+    tileEl.classList.toggle("tasks-tile-full", tileId === "tile-tasks" && w === "full");
+    syncPanelRowLayout();
     return;
   }
   const w = tileWidth(tileId);
@@ -322,7 +386,7 @@ function confirmDialog({ title, message, confirmLabel = "OK", danger = true }) {
   });
 }
 
-function createLayoutButtons() {
+function createLayoutButtons({ showDoubleHeight = true } = {}) {
   const wrap = document.createElement("div");
   wrap.className = "tile-layout-btns";
 
@@ -337,15 +401,18 @@ function createLayoutButtons() {
   fullBtn.className = "tile-btn";
   fullBtn.textContent = "Full width";
 
-  const tallBtn = document.createElement("button");
-  tallBtn.type = "button";
-  tallBtn.className = "tile-btn";
-  tallBtn.textContent = "Double height";
-  tallBtn.title = "Use two grid rows — pushes tiles below";
-
   wrap.appendChild(halfBtn);
   wrap.appendChild(fullBtn);
-  wrap.appendChild(tallBtn);
+
+  let tallBtn = null;
+  if (showDoubleHeight) {
+    tallBtn = document.createElement("button");
+    tallBtn.type = "button";
+    tallBtn.className = "tile-btn";
+    tallBtn.textContent = "Double height";
+    tallBtn.title = "Use two grid rows — pushes tiles below";
+    wrap.appendChild(tallBtn);
+  }
   return { wrap, halfBtn, fullBtn, tallBtn };
 }
 
@@ -355,8 +422,10 @@ function bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn) {
     const h = tileHeight(tileId);
     halfBtn.classList.toggle("tile-btn-active", w === "half");
     fullBtn.classList.toggle("tile-btn-active", w === "full");
-    tallBtn.classList.toggle("tile-btn-active", h === "double");
+    if (tallBtn) tallBtn.classList.toggle("tile-btn-active", h === "double");
     applyTileLayoutClasses(tileEl, tileId);
+    if (tileId === "tile-tasks") renderTasksByUser();
+    if (PANEL_TILE_IDS.has(tileId)) syncPanelRowLayout();
   };
   halfBtn.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -368,11 +437,13 @@ function bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn) {
     setTileWidth(tileId, "full");
     syncTileLayout();
   });
-  tallBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    setTileHeight(tileId, tileHeight(tileId) === "double" ? "normal" : "double");
-    syncTileLayout();
-  });
+  if (tallBtn) {
+    tallBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setTileHeight(tileId, tileHeight(tileId) === "double" ? "normal" : "double");
+      syncTileLayout();
+    });
+  }
   syncTileLayout();
   return syncTileLayout;
 }
@@ -388,23 +459,77 @@ function createTileChrome(tileId, label) {
   hint.textContent = "⋮⋮";
   hint.setAttribute("aria-hidden", "true");
 
+  const isPanel = PANEL_TILE_IDS.has(tileId);
+  if (isPanel) {
+    hint.classList.add("hidden");
+    toolbar.draggable = false;
+  }
+
   const name = document.createElement("span");
-  name.className = "tile-drag-hint";
-  name.style.letterSpacing = "0";
-  name.style.fontSize = "0.75rem";
+  name.className = "tile-toolbar-title";
   name.textContent = label;
+
+  const countBadge = document.createElement("span");
+  countBadge.className = "tile-toolbar-count";
+  countBadge.dataset.tileCountFor = tileId;
+  countBadge.textContent = "(0)";
 
   const spacer = document.createElement("span");
   spacer.className = "tile-toolbar-spacer";
 
-  const { wrap, halfBtn, fullBtn, tallBtn } = createLayoutButtons();
+  const { wrap, halfBtn, fullBtn, tallBtn } = createLayoutButtons({
+    showDoubleHeight: !isPanel,
+  });
 
   toolbar.appendChild(hint);
   toolbar.appendChild(name);
+  toolbar.appendChild(countBadge);
   toolbar.appendChild(spacer);
   toolbar.appendChild(wrap);
 
   return { toolbar, halfBtn, fullBtn, tallBtn };
+}
+
+function syncPanelRowLayout() {
+  const row = $("#dashboard-panel-row");
+  const pinned = $("#dashboard-tiles-pinned");
+  if (!row) return;
+  const anyFull = PINNED_TILE_IDS.some((id) => tileWidth(id) === "full" && !tileBodyCollapsed(id));
+  row.classList.toggle("panel-row-has-full", anyFull);
+  if (pinned) pinned.classList.toggle("panel-row-has-full", anyFull);
+}
+
+function updatePanelTileCount(tileId, count) {
+  document.querySelectorAll(`[data-tile-count-for="${tileId}"]`).forEach((el) => {
+    el.textContent = `(${count})`;
+  });
+}
+
+function ensurePanelToolbarCount(tileEl, tileId) {
+  if (!PANEL_TILE_IDS.has(tileId)) return;
+  const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
+  if (!toolbar) return;
+  toolbar.draggable = false;
+  const hint = toolbar.querySelector(".tile-drag-hint");
+  if (hint) hint.classList.add("hidden");
+  if (!toolbar.querySelector(`[data-tile-count-for="${tileId}"]`)) {
+    const countBadge = document.createElement("span");
+    countBadge.className = "tile-toolbar-count";
+    countBadge.dataset.tileCountFor = tileId;
+    countBadge.textContent = "(0)";
+    const title = toolbar.querySelector(".tile-toolbar-title");
+    if (title) title.after(countBadge);
+    else toolbar.insertBefore(countBadge, toolbar.querySelector(".tile-toolbar-spacer"));
+  }
+}
+
+function ensurePanelLayoutButtons(tileEl, tileId) {
+  if (!PANEL_TILE_IDS.has(tileId)) return;
+  const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
+  if (!toolbar || toolbar.querySelector(".tile-layout-btns")) return;
+  const { wrap, halfBtn, fullBtn, tallBtn } = createLayoutButtons({ showDoubleHeight: false });
+  toolbar.appendChild(wrap);
+  bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn);
 }
 
 function bindTileChrome(tileEl, tileId) {
@@ -413,12 +538,17 @@ function bindTileChrome(tileEl, tileId) {
     bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn);
     tileEl.prepend(toolbar);
     bindTileDragDrop(tileEl, tileId, toolbar);
+  } else {
+    ensurePanelToolbarCount(tileEl, tileId);
+    ensurePanelLayoutButtons(tileEl, tileId);
   }
   attachTileCollapseButton(tileEl, tileId);
   applyTileBodyCollapsed(tileEl, tileId);
 }
 
 function bindTileDragDrop(tileEl, tileId, toolbar) {
+  if (PANEL_TILE_IDS.has(tileId)) return;
+
   toolbar.addEventListener("dragstart", (e) => {
     e.dataTransfer.setData("text/plain", tileId);
     e.dataTransfer.effectAllowed = "move";
@@ -632,33 +762,45 @@ function bindGroupTileChrome(section, group, tileId) {
   group._setFiltersCollapsed = setFiltersCollapsed;
 }
 
+function mountPanelTile(node, tileId, parent) {
+  if (!node || !parent) return;
+  parent.appendChild(node);
+  node.classList.remove("tile-half", "tile-double", "tasks-tile-full");
+  node.classList.toggle("panel-slot-left", tileId === "tile-feed");
+  node.classList.toggle("panel-slot-right", tileId === "tile-tasks");
+  applyTileBodyCollapsed(node, tileId);
+  if (!tileBodyCollapsed(tileId)) applyTileLayoutClasses(node, tileId);
+}
+
 function mountDashboardTiles() {
   const root = $("#dashboard-tiles");
+  const panelRow = $("#dashboard-panel-row");
   const pinnedRoot = $("#dashboard-tiles-pinned");
   if (!root) return;
   ensureTileLayout();
 
   const nodes = collectDashboardTileNodes();
   if (pinnedRoot) pinnedRoot.innerHTML = "";
+  if (panelRow) panelRow.innerHTML = "";
   root.innerHTML = "";
 
-  const pinnedIds = PINNED_TILE_IDS.filter((id) => nodes.has(id) && tileBodyCollapsed(id));
-
-  for (const tileId of pinnedIds) {
+  let hasPinned = false;
+  for (const tileId of PINNED_TILE_IDS) {
     const node = nodes.get(tileId);
-    if (!node || !pinnedRoot) continue;
-    pinnedRoot.appendChild(node);
-    node.classList.add("tile-half");
-    node.classList.remove("tile-double");
-    applyTileBodyCollapsed(node, tileId);
+    if (!node) continue;
+    if (tileBodyCollapsed(tileId)) {
+      mountPanelTile(node, tileId, pinnedRoot);
+      hasPinned = true;
+    } else {
+      mountPanelTile(node, tileId, panelRow);
+    }
   }
 
-  if (pinnedRoot) {
-    pinnedRoot.classList.toggle("hidden", pinnedIds.length === 0);
-  }
+  if (pinnedRoot) pinnedRoot.classList.toggle("hidden", !hasPinned);
+  syncPanelRowLayout();
 
   for (const tileId of state.tileLayout.order) {
-    if (pinnedIds.includes(tileId)) continue;
+    if (PANEL_TILE_IDS.has(tileId)) continue;
     const node = nodes.get(tileId);
     if (!node) continue;
     root.appendChild(node);
@@ -676,22 +818,39 @@ function renderFeedTile() {
     tile.dataset.tileId = tileId;
     tile.dataset.tileLabel = "CRM notifications";
     tile.innerHTML = `
-      <div class="panel-header">
-        <h2>CRM notifications</h2>
-        <span class="panel-sub" id="feed-user-sub">Opportunity updates for you</span>
+      <div class="panel-header panel-header-feed">
+        <input type="search" id="feed-keyword-filter" class="feed-keyword-filter" placeholder="${escapeHtml(feedFilterPlaceholder())}" autocomplete="off" />
         <span class="panel-sub feed-range-hint">Last ${FEED_DAYS} days</span>
       </div>
       <ul id="notification-feed" class="feed-list" aria-live="polite"></ul>
     `;
-    $("#dashboard-tiles")?.appendChild(tile);
+    $("#dashboard-panel-row")?.appendChild(tile);
     bindTileChrome(tile, tileId);
+    const kw = $("#feed-keyword-filter", tile);
+    if (kw) {
+      kw.value = state.feedKeywordFilter || "";
+      kw.addEventListener("input", () => {
+        state.feedKeywordFilter = kw.value;
+        saveFeedKeywordToStorage();
+        renderFeedNotificationList();
+      });
+    }
   }
   applyTileLayoutClasses(tile, tileId);
-  const sub = $("#feed-user-sub", tile);
-  if (sub) {
-    sub.textContent = state.currentUserName
-      ? `Notify-user alerts for ${state.currentUserName}`
-      : "When another user adds an opportunity event and selects you under notify user";
+  ensurePanelToolbarCount(tile, tileId);
+  ensurePanelLayoutButtons(tile, tileId);
+  syncFeedFilterPlaceholder();
+  const kw = $("#feed-keyword-filter", tile);
+  if (kw) {
+    kw.value = state.feedKeywordFilter || "";
+    if (!kw.dataset.bound) {
+      kw.dataset.bound = "1";
+      kw.addEventListener("input", () => {
+        state.feedKeywordFilter = kw.value;
+        saveFeedKeywordToStorage();
+        renderFeedNotificationList();
+      });
+    }
   }
   return tile;
 }
@@ -705,19 +864,20 @@ function renderTasksTile() {
     tile.dataset.tileId = tileId;
     tile.dataset.tileLabel = "Tasks";
     tile.innerHTML = `
-      <div class="panel-header">
-        <h2>Tasks</h2>
-        <label class="tasks-filter-label">
+      <div class="panel-header panel-header-tasks">
+        <label class="tasks-filter-label panel-sub">
           User
           <select id="tasks-user-filter"></select>
         </label>
       </div>
       <div id="tasks-by-user" class="tasks-by-user"></div>
     `;
-    $("#dashboard-tiles")?.appendChild(tile);
+    $("#dashboard-panel-row")?.appendChild(tile);
     bindTileChrome(tile, tileId);
   }
   applyTileLayoutClasses(tile, tileId);
+  ensurePanelToolbarCount(tile, tileId);
+  ensurePanelLayoutButtons(tile, tileId);
   if (tile && !tile.dataset.tasksFilterBound) {
     tile.dataset.tasksFilterBound = "1";
     $("#tasks-user-filter", tile)?.addEventListener("change", () => {
@@ -924,24 +1084,22 @@ function oppMatchesSelectedTags(opp, selectedTags, catalog = buildTagCatalog()) 
 
 async function enrichOpportunitiesTags(items) {
   const needTags = items.filter((o) => getOppTagsFromRecord(o).length === 0);
-  await Promise.all(
-    needTags.slice(0, 100).map(async (opp) => {
-      const id = opp.id ?? opp.ID;
-      if (id == null) return;
-      const paths = [`/api/2.0/crm/opportunity/${id}/tag`, `/api/2.0/crm/opportunity/${id}/tags`];
-      for (const path of paths) {
+  const concurrency = 12;
+  for (let i = 0; i < needTags.length; i += concurrency) {
+    const chunk = needTags.slice(i, i + concurrency);
+    await Promise.all(
+      chunk.map(async (opp) => {
+        const id = opp.id ?? opp.ID;
+        if (id == null) return;
         try {
-          const tags = unwrap(await api(path));
-          if (tags.length) {
-            opp.tags = tags;
-            return;
-          }
+          const tags = unwrapEntityTags(await api(`/api/2.0/crm/opportunity/tag/${id}`));
+          if (tags.length) opp.tags = tags;
         } catch {
-          /* try next */
+          /* no tags on this deal */
         }
-      }
-    })
-  );
+      })
+    );
+  }
   return items;
 }
 
@@ -1881,17 +2039,37 @@ async function loadAllTags() {
 async function loadCurrentUser() {
   try {
     const data = await api("/api/2.0/people/@self");
-    const me = data.response || data;
-    state.currentUser = me;
-    state.currentUserId = me.id ?? me.ID;
-    state.currentUserName = me.displayName || me.DisplayName || me.userName || me.UserName || "";
+    const me = data.response ?? data.result ?? data;
+    state.currentUser = me && typeof me === "object" ? me : null;
+    state.currentUserId =
+      me?.id ?? me?.ID ?? me?.userId ?? me?.UserId ?? data?.id ?? data?.ID ?? null;
+    state.currentUserName =
+      me?.displayName || me?.DisplayName || me?.userName || me?.UserName || "";
+    state.currentUserEmail = String(me?.email || me?.Email || me?.primaryEmail || me?.PrimaryEmail || "")
+      .trim()
+      .toLowerCase();
     return me;
   } catch {
     state.currentUser = null;
     state.currentUserId = null;
     state.currentUserName = "";
+    state.currentUserEmail = "";
     return null;
   }
+}
+
+function currentUserIdentityTokens() {
+  const tokens = new Set();
+  if (state.currentUserId != null && state.currentUserId !== "") {
+    tokens.add(String(state.currentUserId).toLowerCase());
+  }
+  const name = (state.currentUserName || "").trim().toLowerCase();
+  if (name) tokens.add(name);
+  const userName = (state.currentUser?.userName || state.currentUser?.UserName || "").trim().toLowerCase();
+  if (userName) tokens.add(userName);
+  const email = (state.currentUserEmail || "").trim().toLowerCase();
+  if (email) tokens.add(email);
+  return tokens;
 }
 
 /** CRM opportunity events when another user checks you under "notify user" (plus email). */
@@ -1902,6 +2080,57 @@ const CRM_NOTIFY_MARKERS = [
   /notified you/i,
   /notify user/i,
 ];
+
+function parseNotifyNamesFromText(text) {
+  const t = String(text || "");
+  const out = [];
+  const patterns = [
+    /notify\s+users?\s*[:]\s*([^\n<]+)/i,
+    /users?\s+to\s+notify\s*[:]\s*([^\n<]+)/i,
+    /notified\s+users?\s*[:]\s*([^\n<]+)/i,
+    /notify\s+user\s*[:]\s*([^\n<]+)/i,
+  ];
+  for (const re of patterns) {
+    const m = t.match(re);
+    if (!m?.[1]) continue;
+    for (const part of m[1].split(/[,;]+/)) {
+      const name = part.trim();
+      if (name) out.push(name);
+    }
+  }
+  return out;
+}
+
+function notifyRecipientsFromAdditionalData(raw) {
+  if (!raw) return [];
+  let data = raw;
+  if (typeof raw === "string") {
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      return parseNotifyNamesFromText(raw);
+    }
+  }
+  if (!data || typeof data !== "object") return [];
+  const out = [];
+  const lists = [
+    data.notifyUsers,
+    data.NotifyUsers,
+    data.notifyUserList,
+    data.NotifyUserList,
+    data.usersToNotify,
+    data.UsersToNotify,
+    data.notifyContacts,
+    data.NotifyContacts,
+    data.toUsers,
+    data.ToUsers,
+  ];
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    out.push(...list);
+  }
+  return out;
+}
 
 function notifyRecipientsFromEvent(ev) {
   const out = [];
@@ -1914,22 +2143,57 @@ function notifyRecipientsFromEvent(ev) {
     ev.UsersToNotify,
     ev.notifyContacts,
     ev.NotifyContacts,
+    ev.toUsers,
+    ev.ToUsers,
   ];
   for (const list of lists) {
     if (!Array.isArray(list)) continue;
     out.push(...list);
   }
+  out.push(...notifyRecipientsFromAdditionalData(ev.additionalData || ev.AdditionalData));
+  out.push(...parseNotifyNamesFromText(ev.content || ev.Content || ""));
   return out;
+}
+
+function mailAddressesFromMessage(mail) {
+  const out = [];
+  const lists = [mail.to, mail.To, mail.cc, mail.Cc, mail.bcc, mail.Bcc, mail.recipients, mail.Recipients];
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const entry of list) {
+      if (typeof entry === "string") out.push(entry);
+      else if (entry) {
+        out.push(entry.email || entry.Email || entry.address || entry.Address || entry.title || entry.Title);
+      }
+    }
+  }
+  const single = mail.address || mail.Address;
+  if (single) out.push(single);
+  return out.filter(Boolean).map((a) => String(a).toLowerCase());
+}
+
+function mailIsAddressedToCurrentUser(mail) {
+  const addresses = mailAddressesFromMessage(mail);
+  if (!addresses.length) return true;
+  const tokens = currentUserIdentityTokens();
+  if (!tokens.size) return false;
+  return addresses.some((addr) => {
+    for (const token of tokens) {
+      if (addr === token || addr.includes(token) || token.includes(addr)) return true;
+    }
+    return false;
+  });
 }
 
 function recipientMatchesCurrentUser(recipient) {
   if (recipient == null) return false;
+  const tokens = currentUserIdentityTokens();
+  if (!tokens.size) return false;
   if (typeof recipient === "string") {
     const s = recipient.toLowerCase();
-    const myName = (state.currentUserName || "").toLowerCase();
-    const myUser = (state.currentUser?.userName || state.currentUser?.UserName || "").toLowerCase();
-    if (myName && s.includes(myName)) return true;
-    if (myUser && s.includes(myUser)) return true;
+    for (const token of tokens) {
+      if (s === token || s.includes(token) || token.includes(s)) return true;
+    }
     return sameUserId(recipient, state.currentUserId);
   }
   const id = recipient.id ?? recipient.ID ?? recipient.userId;
@@ -1943,109 +2207,271 @@ function recipientMatchesCurrentUser(recipient) {
   return false;
 }
 
-function isNotifyUserHistoryEvent(ev) {
-  const recipients = notifyRecipientsFromEvent(ev);
-  if (recipients.length) {
-    return recipients.some((r) => recipientMatchesCurrentUser(r));
-  }
-
-  const text = String(ev.description || ev.text || ev.content || ev.title || "").toLowerCase();
-  const myName = (state.currentUserName || "").toLowerCase();
-  if (myName && myName.length > 2 && text.includes(myName)) return true;
-
-  return false;
+function normalizeCrmEntityType(raw) {
+  if (raw == null || raw === "") return "";
+  const n = Number(raw);
+  if (n === 2) return "opportunity";
+  if (n === 3) return "case";
+  if (n === 1) return "contact";
+  const s = String(raw).toLowerCase();
+  if (s === "deal") return "opportunity";
+  return s;
 }
 
-function parseHistoryNotifyEvent(ev) {
-  const entity = ev.entity || ev.Entity || ev.opportunity || ev.Opportunity;
+function unwrapHistoryEvents(data) {
+  const direct = unwrap(data);
+  if (direct.length) return direct;
+  const r = data?.response;
+  if (!r || typeof r !== "object") return [];
+  for (const key of ["items", "Items", "events", "Events", "history", "History"]) {
+    if (Array.isArray(r[key])) return r[key];
+  }
+  return [];
+}
+
+function parseRelationshipNotifyEvent(ev) {
+  const entity = ev.entity || ev.Entity;
+  const entityType = normalizeCrmEntityType(
+    entity?.entityType ?? entity?.EntityType ?? ev.entityType ?? ev.EntityType
+  );
+  if (entityType && entityType !== "opportunity") return null;
+
   let id =
     entity?.entityId ??
+    entity?.EntityId ??
     entity?.id ??
     entity?.ID ??
     ev.entityId ??
     ev.EntityId ??
-    ev.opportunityId ??
-    opportunityIdFromText(ev.description || ev.text || ev.content || ev.title || "");
+    ev.entityID ??
+    ev.EntityID ??
+    ev.opportunityId;
 
   if (!id) {
-    const blob = JSON.stringify(ev);
-    id = opportunityIdFromText(blob);
+    id = opportunityIdFromText(ev.content || ev.Content || "");
   }
   if (!id) return null;
 
-  const title =
-    entity?.entityTitle ||
-    entity?.title ||
-    ev.opportunityTitle ||
-    ev.title ||
-    `Opportunity #${id}`;
+  const title = String(
+    entity?.entityTitle || entity?.EntityTitle || ev.opportunityTitle || `Opportunity #${id}`
+  )
+    .replace(/^CRM\.\s*New event added to\s+/i, "")
+    .trim();
 
+  const createBy = ev.createBy || ev.CreateBy || ev.createdBy || ev.CreatedBy;
+  const authorId = createBy?.id ?? createBy?.ID ?? null;
   const author =
-    ev.createdBy?.displayName ||
-    ev.user?.displayName ||
-    ev.author?.displayName ||
-    displayNameForUserName(ev.createdBy?.userName || ev.user?.userName) ||
+    createBy?.displayName ||
+    createBy?.DisplayName ||
+    displayNameForUserName(createBy?.userName || createBy?.UserName) ||
     "Another user";
 
-  const text = String(ev.description || ev.text || ev.content || ev.title || "CRM opportunity event").trim();
+  let text = toPlainDisplayText(ev.content ?? ev.Content ?? "");
+  if (!text || isNotifyTemplateSpam(text)) {
+    const catTitle = ev.category?.title || ev.Category?.title || ev.category?.Title;
+    const catText = toPlainDisplayText(catTitle);
+    if (catText && !isNotifyTemplateSpam(catText)) text = catText;
+    else return null;
+  }
+
   const date =
-    ev.createdOn?.value ??
-    ev.createdOn ??
-    ev.date ??
-    ev.Date ??
-    ev.dateAndTime?.value ??
-    ev.dateAndTime;
+    ev.created?.value ??
+    ev.created ??
+    ev.Created?.value ??
+    ev.Created ??
+    ev.createOn?.value ??
+    ev.createOn;
 
   return {
     id: Number(id),
-    title: String(title).replace(/^CRM\.\s*New event added to\s+/i, "").trim(),
+    title,
     author,
-    text: text.slice(0, 220),
+    authorId,
+    text,
     date,
     source: "history",
+    notifyRecipients: notifyRecipientsFromEvent(ev),
   };
 }
 
-async function loadCrmHistoryNotifications(periodFrom) {
+function indexOpportunity(opp) {
+  const id = Number(opp?.id ?? opp?.ID);
+  if (!Number.isFinite(id) || id <= 0) return;
+  if (!state.opportunityById) state.opportunityById = new Map();
+  state.opportunityById.set(id, opp);
+}
+
+function getOpportunityFromState(oppId) {
+  const id = Number(oppId);
+  if (!Number.isFinite(id)) return null;
+  if (state.opportunityById?.has(id)) return state.opportunityById.get(id);
+  for (const g of state.groups) {
+    for (const o of g.opportunities || []) {
+      if (Number(o.id ?? o.ID) === id) {
+        indexOpportunity(o);
+        return o;
+      }
+    }
+  }
+  return null;
+}
+
+function isCurrentUserOpportunityResponsible(opp) {
+  if (!opp || state.currentUserId == null) return false;
+  const respId =
+    opp.responsible?.id ??
+    opp.responsible?.ID ??
+    opp.responsibleId ??
+    opp.ResponsibleId ??
+    opp.responsibleID;
+  return respId != null && sameUserId(respId, state.currentUserId);
+}
+
+function isNotificationForLoggedInUser(item, ev = null) {
+  const tokens = currentUserIdentityTokens();
+  if (!tokens.size) return false;
+
+  if (item.authorId && state.currentUserId != null && sameUserId(item.authorId, state.currentUserId)) {
+    return false;
+  }
+
+  if (item.source === "mail") {
+    if (item.forCurrentUser === false) return false;
+    if (item.forCurrentUser === true) return true;
+    return true;
+  }
+
+  const recipients = ev ? notifyRecipientsFromEvent(ev) : item.notifyRecipients || [];
+  if (recipients.length) {
+    return recipients.some((r) => recipientMatchesCurrentUser(r));
+  }
+
+  const blob = `${item.text || ""} ${item.title || ""}`;
+  if (/notify|notified/i.test(blob) && recipientMatchesCurrentUser(blob)) {
+    return true;
+  }
+
+  return false;
+}
+
+function shouldIncludeRelationshipNotifyEvent(ev, parsed) {
+  return isNotificationForLoggedInUser(parsed, ev);
+}
+
+function applyFeedKeywordFilter(items) {
+  let out = items.filter((it) => isNotificationForLoggedInUser(it));
+  const kw = (state.feedKeywordFilter || "").trim().toLowerCase();
+  if (!kw) return out;
+  return out.filter((it) => {
+    const blob = `${it.title || ""} ${it.text || ""} ${it.author || ""}`.toLowerCase();
+    return blob.includes(kw);
+  });
+}
+
+function renderFeedNotificationList() {
+  const list = $("#notification-feed");
+  if (!list) return;
+
+  let items = applyFeedKeywordFilter(state.feedNotificationsCache || []);
+  updatePanelTileCount("tile-feed", items.length);
+
+  list.innerHTML = "";
+  if (!items.length) {
+    const hiddenNote = state.hiddenFeedKeys.size ? " Some are hidden." : "";
+    const kwNote = state.feedKeywordFilter?.trim() ? " Try clearing the keyword filter." : "";
+    list.innerHTML = `<li>No notifications for ${escapeHtml(state.currentUserName || "you")} in the last ${FEED_DAYS} days.${hiddenNote}${kwNote} Shows notify-user mail and CRM events where you were selected under notify user.</li>`;
+    return;
+  }
+
+  for (const it of items) {
+    list.appendChild(renderFeedNotificationItem(it));
+  }
+}
+
+function tryAddRelationshipNotifyEvent(items, seen, ev, periodFrom) {
+  const parsed = parseRelationshipNotifyEvent(ev);
+  if (!parsed) return;
+  if (!shouldIncludeRelationshipNotifyEvent(ev, parsed)) return;
+  if (!isWithinFeedWindow(parsed.date)) return;
+  if (parsed.date) {
+    const t = new Date(parsed.date).getTime();
+    if (!Number.isNaN(t) && t < periodFrom) return;
+  }
+  const dedupe = `${parsed.id}-${parsed.text}-${parsed.author}-${parsed.date || ""}`;
+  if (seen.has(dedupe)) return;
+  seen.add(dedupe);
+  items.push(parsed);
+}
+
+async function loadNotifyEventsForOpportunityIds(periodFrom, items, seen) {
+  const oppIds = new Set();
+  for (const g of state.groups) {
+    for (const o of g.opportunities || []) {
+      const id = o.id ?? o.ID;
+      if (id != null) oppIds.add(Number(id));
+    }
+  }
+  if (!oppIds.size) {
+    try {
+      const qs = new URLSearchParams({ startIndex: "0", count: "200", stageType: "0" });
+      const data = await api(`/api/2.0/crm/opportunity/filter?${qs}`);
+      for (const o of unwrap(data)) {
+        const id = o.id ?? o.ID;
+        if (id != null) {
+          oppIds.add(Number(id));
+          indexOpportunity(o);
+        }
+      }
+    } catch {
+      /* optional */
+    }
+  }
+
+  const ids = [...oppIds].filter((id) => Number.isFinite(id) && id > 0).slice(0, 120);
+  const concurrency = 10;
+  for (let i = 0; i < ids.length; i += concurrency) {
+    await Promise.all(
+      ids.slice(i, i + concurrency).map(async (oppId) => {
+        try {
+          const params = new URLSearchParams({
+            startIndex: "0",
+            count: "40",
+            entityType: "opportunity",
+            entityId: String(oppId),
+          });
+          const data = await api(`/api/2.0/crm/history/filter?${params}`);
+          for (const ev of unwrapHistoryEvents(data)) {
+            tryAddRelationshipNotifyEvent(items, seen, ev, periodFrom);
+          }
+        } catch {
+          /* per-deal optional */
+        }
+      })
+    );
+  }
+}
+
+async function loadCrmRelationshipNotifyEvents(periodFrom) {
   const items = [];
+  const seen = new Set();
+
   const queries = [
-    new URLSearchParams({ startIndex: "0", count: "200" }),
-    new URLSearchParams({
-      startIndex: "0",
-      count: "200",
-      entityType: "opportunity",
-    }),
-    new URLSearchParams({
-      startIndex: "0",
-      count: "200",
-      entityType: "1",
-    }),
+    new URLSearchParams({ startIndex: "0", count: "500", entityType: "opportunity" }),
+    new URLSearchParams({ startIndex: "0", count: "500" }),
   ];
 
   for (const params of queries) {
     try {
-      params.set("fromDate", new Date(periodFrom).toISOString());
-    } catch {
-      /* optional */
-    }
-    try {
       const data = await api(`/api/2.0/crm/history/filter?${params}`);
-      for (const ev of unwrap(data)) {
-        if (!isNotifyUserHistoryEvent(ev)) continue;
-        const createdBy = ev.createdBy?.id ?? ev.createdBy?.ID ?? ev.user?.id;
-        if (createdBy && sameUserId(createdBy, state.currentUserId) && ev.notifyMe && !notifyRecipientsFromEvent(ev).length) {
-          continue;
-        }
-        const parsed = parseHistoryNotifyEvent(ev);
-        if (!parsed) continue;
-        if (!isWithinFeedWindow(parsed.date)) continue;
-        items.push(parsed);
+      for (const ev of unwrapHistoryEvents(data)) {
+        tryAddRelationshipNotifyEvent(items, seen, ev, periodFrom);
       }
-      if (items.length) return items;
     } catch {
-      /* try next query */
+      /* try next */
     }
   }
+
+  await loadNotifyEventsForOpportunityIds(periodFrom, items, seen);
   return items;
 }
 
@@ -2053,6 +2479,69 @@ function decodeHtmlEntities(text) {
   const el = document.createElement("textarea");
   el.innerHTML = text;
   return el.value;
+}
+
+const NOTIFY_TEMPLATE_MARKERS = [
+  /subscription settings/i,
+  /registered user of the/i,
+  /manage your/i,
+  /VirtualRootPath/i,
+  /\$\{__VirtualRootPath\}/i,
+  /\$EntityTitle/i,
+  /\$__AuthorName/i,
+  /\$AdditionalData/i,
+  /\^You receive this email/i,
+  /^h1\.\s/i,
+  /has added a new event to\s+"[^"]+":/i,
+  /New event added to\s+"[^"]+":/i,
+];
+
+function isNotifyTemplateSpam(text) {
+  const t = String(text || "").trim();
+  if (!t) return true;
+  if (t.length > 600) return true;
+  return NOTIFY_TEMPLATE_MARKERS.some((re) => re.test(t));
+}
+
+/** Plain text for feed tiles — strips HTML, wiki/markdown mail templates, and CRM boilerplate. */
+function toPlainDisplayText(raw) {
+  if (raw == null) return "";
+  let s = String(raw);
+  if (!s.trim()) return "";
+
+  if (/<[a-z][\s\S]*>/i.test(s)) {
+    s = s.replace(/<style[\s\S]*?<\/style>/gi, " ");
+    s = s.replace(/<script[\s\S]*?<\/script>/gi, " ");
+    s = s.replace(/<br\s*\/?>/gi, "\n");
+    s = s.replace(/<\/p>/gi, "\n");
+    s = s.replace(/<\/div>/gi, "\n");
+    s = s.replace(/<[^>]+>/g, " ");
+  }
+
+  s = decodeHtmlEntities(s);
+  s = s.replace(/\r/g, "");
+  s = s.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+  s = s.replace(/"([^"]+)":/g, "$1 ");
+  s = s.replace(/\^([^^]+)\^/g, "$1");
+  s = s.replace(/^h[1-6]\.\s*/gim, "");
+  s = s.replace(/\${[^}]+}/g, " ");
+  s = s.replace(/https?:\/\/\S+/gi, " ");
+  s = s.replace(/Products\/CRM\/\S+/gi, " ");
+  s = s.replace(/\s+/g, " ").trim();
+
+  const added = s.match(/has added a new event[^:]*:\s*(.+)$/i);
+  if (added) {
+    const inner = added[1].replace(/\s+/g, " ").trim();
+    if (inner && !isNotifyTemplateSpam(inner)) return inner.slice(0, 220);
+  }
+
+  const crmLine = s.match(/CRM\.\s*New event added to\s+(.+?)(?:\s{2,}|$)/i);
+  if (crmLine) {
+    const title = crmLine[1].trim();
+    if (title && !isNotifyTemplateSpam(title)) return title.slice(0, 220);
+  }
+
+  return s.slice(0, 220);
 }
 
 function parseFeedDate(value) {
@@ -2088,7 +2577,7 @@ function normalizeTalkMessage(msg) {
     msg?.Content ||
     "";
   if (typeof text !== "string") text = String(text || "");
-  text = decodeHtmlEntities(text.replace(/<br\s*\/?>/gi, "\n"));
+  text = toPlainDisplayText(text.replace(/<br\s*\/?>/gi, "\n"));
 
   const userName =
     msg?.userName ||
@@ -2173,19 +2662,18 @@ function extractCrmNotifyFromText(text, meta = {}) {
     plain.match(/New event added to\s+"([^"]+)"/i)?.[1]?.trim();
   title = (title || `Opportunity #${id}`).replace(/\s*\(.*\)\s*$/, "").trim();
 
-  let eventText = "";
-  const lines = plain.split("\n").map((l) => l.trim()).filter(Boolean);
+  let eventText = toPlainDisplayText(plain);
+  const lines = plain.split("\n").map((l) => toPlainDisplayText(l)).filter(Boolean);
   for (const line of lines) {
     if (/Deals\.aspx\?id=/i.test(line) || /\/Products\/CRM\/Deals/i.test(line)) continue;
     if (CRM_NOTIFY_MARKERS.some((re) => re.test(line))) continue;
-    if (/^https?:\/\//i.test(line)) continue;
-    if (line.length < 3 || /^[-─]{3,}$/.test(line)) continue;
+    if (isNotifyTemplateSpam(line)) continue;
+    if (line.length < 2) continue;
     eventText = line;
     break;
   }
-  if (!eventText) {
-    const added = plain.match(/has added a new event[^:]*:\s*([\s\S]+?)(?:\n\s*https?:|\n\s*Products\/CRM\/|$)/i);
-    if (added) eventText = added[1].replace(/\s+/g, " ").trim().slice(0, 200);
+  if (!eventText || isNotifyTemplateSpam(eventText)) {
+    eventText = "New opportunity event";
   }
 
   return {
@@ -2193,7 +2681,7 @@ function extractCrmNotifyFromText(text, meta = {}) {
     title,
     author: meta.author || "Another user",
     authorId: meta.authorId || null,
-    text: eventText || "Notified you about a new opportunity event",
+    text: eventText.slice(0, 220),
     date: meta.date,
     source: meta.source || "notify",
   };
@@ -2213,12 +2701,14 @@ function parseTalkNotifyMessage(msg) {
 function parseMailNotifyMessage(mail) {
   const subject = mail.subject || mail.Subject || "";
   const body =
-    mail.introduction ||
-    mail.Introduction ||
-    mail.preview ||
-    mail.Preview ||
     mail.textBody ||
     mail.TextBody ||
+    mail.plainText ||
+    mail.PlainText ||
+    mail.preview ||
+    mail.Preview ||
+    mail.introduction ||
+    mail.Introduction ||
     "";
   const combined = `${subject}\n${body}`;
   const from = mail.from || mail.From || mail.fromEmail || mail.FromEmail;
@@ -2247,11 +2737,12 @@ function parseMailNotifyMessage(mail) {
   if (!parsed && /^CRM\.\s*New event added to/i.test(subject)) {
     const id = opportunityIdFromText(body) || opportunityIdFromText(mail.htmlBody || mail.HtmlBody || "");
     if (id) {
+      const eventText = toPlainDisplayText(body || subject);
       parsed = {
         id,
         title: subject.replace(/^CRM\.\s*New event added to\s+/i, "").trim() || `Opportunity #${id}`,
         author,
-        text: (body || subject).replace(/<[^>]+>/g, " ").trim().slice(0, 200),
+        text: eventText && !isNotifyTemplateSpam(eventText) ? eventText : "New opportunity event",
         date,
         source: "mail",
       };
@@ -2311,8 +2802,12 @@ function renderFeedNotificationItem(it) {
   hideBtn.addEventListener("click", () => {
     state.hiddenFeedKeys.add(it.key);
     saveHiddenFeedKeys();
+    state.feedNotificationsCache = state.feedNotificationsCache.filter((n) => n.key !== it.key);
     li.classList.add("feed-item-hiding");
-    setTimeout(() => li.remove(), 200);
+    setTimeout(() => {
+      li.remove();
+      renderFeedNotificationList();
+    }, 200);
   });
 
   row.appendChild(body);
@@ -2326,6 +2821,7 @@ async function loadNotificationFeed() {
   const list = $("#notification-feed");
   if (!list) return;
   list.innerHTML = '<li class="feed-loading">Loading…</li>';
+  updatePanelTileCount("tile-feed", 0);
   if (!state.hiddenFeedKeys.size) state.hiddenFeedKeys = loadHiddenFeedKeys();
 
   const myUserName = (state.currentUser?.userName || state.currentUser?.UserName || "").toLowerCase();
@@ -2333,27 +2829,12 @@ async function loadNotificationFeed() {
   const items = [];
 
   try {
-    items.push(...(await loadCrmHistoryNotifications(periodFrom)));
+    items.push(...(await loadCrmRelationshipNotifyEvents(periodFrom)));
   } catch {
     /* history module optional */
   }
 
-  try {
-    const talk = await api("/api/2.0/portal/talk/recentMessages?calleeUserName=&id=2147483647");
-    for (const msg of unwrapTalkMessages(talk)) {
-      const parsed = parseTalkNotifyMessage(msg);
-      if (!parsed) continue;
-      if (!isWithinFeedWindow(parsed.date)) continue;
-      const norm = normalizeTalkMessage(msg);
-      const fromUser = String(norm.userName || "").toLowerCase();
-      if (myUserName && fromUser && fromUser === myUserName) continue;
-      items.push(parsed);
-    }
-  } catch {
-    /* Talk/Jabber may be disabled on the portal */
-  }
-
-  const mailSearches = ["CRM. New event added to", "CRM New event", "notified you", "notify user"];
+  const mailSearches = ["CRM. New event added to", "CRM New event added to"];
   const mailQueries = [];
   for (const search of mailSearches) {
     mailQueries.push(
@@ -2380,16 +2861,32 @@ async function loadNotificationFeed() {
         const parsed = parseMailNotifyMessage(mail);
         if (!parsed) continue;
         if (!isWithinFeedWindow(parsed.date)) continue;
-        items.push(parsed);
+        const fromAddr = String(
+          (typeof mail.from === "string" ? mail.from : mail.from?.email || mail.from?.Email) || ""
+        ).toLowerCase();
+        if (myUserName && fromAddr && fromAddr === myUserName) continue;
+        if (!mailIsAddressedToCurrentUser(mail)) continue;
+        const enriched = { ...parsed, forCurrentUser: true };
+        if (!isNotificationForLoggedInUser(enriched)) continue;
+        items.push(enriched);
       }
     } catch {
       /* try next query shape */
     }
   }
 
+  const mergedByEvent = new Map();
+  for (const it of items) {
+    const mergeKey = `${it.id}-${(it.text || "").slice(0, 60)}-${it.author}`;
+    const prev = mergedByEvent.get(mergeKey);
+    if (!prev || (prev.source === "history" && it.source === "mail")) {
+      mergedByEvent.set(mergeKey, it);
+    }
+  }
+
   const seen = new Set();
   const unique = [];
-  for (const it of items) {
+  for (const it of mergedByEvent.values()) {
     const key = feedNotificationKey(it);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -2403,15 +2900,8 @@ async function loadNotificationFeed() {
     return db - da;
   });
 
-  list.innerHTML = "";
-  if (!unique.length) {
-    list.innerHTML = `<li>No notify-user alerts in the last ${FEED_DAYS} days (or all are hidden). Alerts appear when another user adds a deal event and checks you under notify user (same as the CRM email).</li>`;
-    return;
-  }
-
-  for (const it of unique) {
-    list.appendChild(renderFeedNotificationItem(it));
-  }
+  state.feedNotificationsCache = unique;
+  renderFeedNotificationList();
 }
 
 async function loadTasks() {
@@ -2462,14 +2952,112 @@ function populateTasksUserFilter() {
   }
 }
 
+function taskSortMs(task) {
+  const due = task.deadLine?.value ?? task.deadLine ?? task.deadline;
+  if (due) {
+    const t = new Date(due).getTime();
+    if (!Number.isNaN(t)) return t;
+  }
+  const created =
+    task.createOn?.value ?? task.createOn ?? task.created?.value ?? task.created ?? task.dateAndTime;
+  const c = new Date(created || 0).getTime();
+  return Number.isNaN(c) ? 0 : c;
+}
+
+function createTaskRow(task) {
+  const row = document.createElement("div");
+  row.className = "task-row";
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.addEventListener("change", async () => {
+    if (!cb.checked) return;
+    cb.disabled = true;
+    try {
+      await api(`/api/2.0/crm/task/${task.id}/close`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      row.classList.add("done");
+      showToast("Task marked complete");
+      state.tasks = state.tasks.filter((t) => t.id !== task.id);
+      setTimeout(() => {
+        row.remove();
+        renderTasksByUser();
+      }, 400);
+    } catch (err) {
+      cb.checked = false;
+      cb.disabled = false;
+      showToast(err.message, true);
+    }
+  });
+
+  const label = document.createElement("label");
+  const titleLink = document.createElement("a");
+  titleLink.href = crmTaskUrl(task);
+  titleLink.target = "_blank";
+  titleLink.rel = "noopener noreferrer";
+  titleLink.textContent = task.title || "(Task)";
+  label.appendChild(titleLink);
+  if (task.deadLine?.value || task.deadLine) {
+    const dl = document.createElement("span");
+    dl.className = "feed-meta";
+    dl.textContent = `Due ${new Date(task.deadLine?.value || task.deadLine).toLocaleDateString()}`;
+    label.appendChild(dl);
+  }
+  if (task.entity?.entityType === "opportunity" && task.entity.entityTitle) {
+    const ent = document.createElement("a");
+    ent.className = "feed-meta";
+    ent.href = crmOpportunityUrl(task.entity.entityId);
+    ent.target = "_blank";
+    ent.rel = "noopener noreferrer";
+    ent.textContent = task.entity.entityTitle;
+    label.appendChild(ent);
+  }
+
+  row.appendChild(cb);
+  row.appendChild(label);
+  return row;
+}
+
 function renderTasksByUser() {
   const root = $("#tasks-by-user");
+  if (!root) return;
   root.innerHTML = "";
+  const tasksTile = document.querySelector('[data-tile-id="tile-tasks"]');
+  const fullWidth = tasksTile?.classList.contains("panel-width-full");
+  root.className = fullWidth ? "tasks-by-user tasks-by-user-columns" : "tasks-by-user";
 
   const filterUser = $("#tasks-user-filter")?.value;
   let tasks = state.tasks;
   if (filterUser) {
-    tasks = tasks.filter((t) => t.responsible?.id === filterUser);
+    tasks = tasks.filter((t) => String(t.responsible?.id) === String(filterUser));
+  }
+
+  updatePanelTileCount("tile-tasks", tasks.length);
+
+  if (!tasks.length) {
+    root.innerHTML = '<p class="board-loading">No open tasks.</p>';
+    return;
+  }
+
+  if (fullWidth) {
+    const sorted = [...tasks].sort((a, b) => {
+      const da = new Date(a.deadline || a.Deadline || 0).getTime() || Infinity;
+      const db = new Date(b.deadline || b.Deadline || 0).getTime() || Infinity;
+      return da - db;
+    });
+    const colCount = 3;
+    const perCol = Math.ceil(sorted.length / colCount);
+    for (let c = 0; c < colCount; c++) {
+      const col = document.createElement("div");
+      col.className = "tasks-column";
+      for (const task of sorted.slice(c * perCol, (c + 1) * perCol)) {
+        col.appendChild(createTaskRow(task));
+      }
+      root.appendChild(col);
+    }
+    return;
   }
 
   const byUser = new Map();
@@ -2481,11 +3069,6 @@ function renderTasksByUser() {
     byUser.get(key).tasks.push(task);
   }
 
-  if (!byUser.size) {
-    root.innerHTML = '<p class="board-loading">No open tasks.</p>';
-    return;
-  }
-
   for (const { name, tasks: userTasks } of byUser.values()) {
     const block = document.createElement("div");
     block.className = "tasks-user-block";
@@ -2494,56 +3077,7 @@ function renderTasksByUser() {
     block.appendChild(h);
 
     for (const task of userTasks) {
-      const row = document.createElement("div");
-      row.className = "task-row";
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.addEventListener("change", async () => {
-        if (!cb.checked) return;
-        cb.disabled = true;
-        try {
-          await api(`/api/2.0/crm/task/${task.id}/close`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: "{}",
-          });
-          row.classList.add("done");
-          showToast("Task marked complete");
-          state.tasks = state.tasks.filter((t) => t.id !== task.id);
-          setTimeout(() => row.remove(), 400);
-        } catch (err) {
-          cb.checked = false;
-          cb.disabled = false;
-          showToast(err.message, true);
-        }
-      });
-
-      const label = document.createElement("label");
-      const titleLink = document.createElement("a");
-      titleLink.href = crmTaskUrl(task);
-      titleLink.target = "_blank";
-      titleLink.rel = "noopener noreferrer";
-      titleLink.textContent = task.title || "(Task)";
-      label.appendChild(titleLink);
-      if (task.deadLine?.value || task.deadLine) {
-        const dl = document.createElement("span");
-        dl.className = "feed-meta";
-        dl.textContent = `Due ${new Date(task.deadLine?.value || task.deadLine).toLocaleDateString()}`;
-        label.appendChild(dl);
-      }
-      if (task.entity?.entityType === "opportunity" && task.entity.entityTitle) {
-        const ent = document.createElement("a");
-        ent.className = "feed-meta";
-        ent.href = crmOpportunityUrl(task.entity.entityId);
-        ent.target = "_blank";
-        ent.rel = "noopener noreferrer";
-        ent.textContent = task.entity.entityTitle;
-        label.appendChild(ent);
-      }
-
-      row.appendChild(cb);
-      row.appendChild(label);
-      block.appendChild(row);
+      block.appendChild(createTaskRow(task));
     }
     root.appendChild(block);
   }
@@ -2587,6 +3121,7 @@ async function refreshGroup(group) {
     }
     items = await enrichOpportunitiesCustomFields(items);
     group.opportunities = items;
+    for (const o of items) indexOpportunity(o);
 
     const el = groupDomEl(group);
     if (el) {
@@ -2606,15 +3141,18 @@ async function refreshGroup(group) {
 async function refreshAll() {
   $("#status-text").textContent = "Loading…";
   try {
+    loadFeedKeywordFromStorage();
+    state.opportunityById = new Map();
     state.tileLayout = loadLayoutFromStorage();
     await loadCurrentUser();
+    syncFeedFilterPlaceholder();
     await loadPortalUsers();
     await Promise.all([loadStages(), loadAllTags(), loadOpportunityCustomFieldDefs()]);
     renderBoardGroups();
     refreshDashboardTileLayouts();
     populateTasksUserFilter();
-    await Promise.all([loadNotificationFeed(), loadTasks()]);
     await Promise.all(state.groups.map((g) => refreshGroup(g)));
+    await Promise.all([loadNotificationFeed(), loadTasks()]);
     const total = state.groups.reduce((n, g) => n + g.opportunities.length, 0);
     $("#status-text").textContent = `${total} opportunities · ${state.tasks.length} open tasks`;
   } catch (err) {
