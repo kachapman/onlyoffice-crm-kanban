@@ -488,19 +488,10 @@ body {
   color: var(--muted);
 }
 
-.btn-collapse-all {
-  margin-left: auto;
-  font-size: 0.78rem;
-  padding: 0.35rem 0.65rem;
-}
-
-.dashboard-tile.tile-collapsed > *:not(.tile-toolbar):not(.group-tile-bar) {
-  display: none !important;
-}
-
-.dashboard-tile.tile-collapsed {
-  min-height: 0;
-  align-self: start;
+.btn-collapse-tile {
+  font-size: 0.72rem;
+  padding: 0.25rem 0.5rem;
+  white-space: nowrap;
 }
 
 /* Dashboard tile grid — 2 columns; double height spans 2 rows */
@@ -511,10 +502,10 @@ body {
   padding: 0 1.5rem 2rem;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-auto-rows: var(--tile-row-height);
+  grid-auto-rows: auto;
   grid-auto-flow: row;
   gap: 1.25rem;
-  align-items: stretch;
+  align-items: start;
 }
 
 .dashboard-tile {
@@ -558,6 +549,21 @@ body {
 
 .dashboard-tile.tile-double.board-group-tile .column {
   max-height: calc(var(--tile-row-height) * 2 - 120px);
+}
+
+.dashboard-tile.tile-body-collapsed {
+  min-height: 0;
+  height: auto;
+  grid-row: auto;
+  align-self: start;
+}
+
+.dashboard-tile.tile-body-collapsed.tile-double {
+  grid-row: auto;
+}
+
+.dashboard-tile.tile-body-collapsed > *:not(.tile-toolbar):not(.group-tile-bar) {
+  display: none !important;
 }
 
 .dashboard-tile.dragging {

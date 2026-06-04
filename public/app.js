@@ -7,7 +7,6 @@ const GROUPS_STORAGE_KEY = "oo_board_groups_v2";
 const LAYOUT_STORAGE_KEY = "oo_board_layout_v2";
 const HIDDEN_FEED_STORAGE_KEY = "oo_board_hidden_feed_v1";
 const GROUP_TEMPLATES_STORAGE_KEY = "oo_board_group_templates_v1";
-const ALL_TILES_COLLAPSED_KEY = "oo_board_all_collapsed_v1";
 const FEED_DAYS = 30;
 
 const state = {
@@ -22,7 +21,6 @@ const state = {
   tileLayout: { order: [], widths: {}, heights: {} },
   hiddenFeedKeys: new Set(),
   groupTemplates: [],
-  allTilesCollapsed: false,
 };
 
 function crmOpportunityUrl(id) {
@@ -113,13 +111,14 @@ function loadLayoutFromStorage() {
           order: Array.isArray(parsed.order) ? parsed.order : [],
           widths: parsed.widths && typeof parsed.widths === "object" ? parsed.widths : {},
           heights: parsed.heights && typeof parsed.heights === "object" ? parsed.heights : {},
+          collapsed: parsed.collapsed && typeof parsed.collapsed === "object" ? parsed.collapsed : {},
         };
       }
     }
   } catch {
     /* ignore */
   }
-  return { order: [], widths: {}, heights: {} };
+  return { order: [], widths: {}, heights: {}, collapsed: {} };
 }
 
 function loadHiddenFeedKeys() {
@@ -191,12 +190,66 @@ function setTileHeight(tileId, height) {
   saveLayoutToStorage();
 }
 
+function tileBodyCollapsed(tileId) {
+  return state.tileLayout.collapsed?.[tileId] === true;
+}
+
+function setTileBodyCollapsed(tileId, collapsed) {
+  if (!state.tileLayout.collapsed) state.tileLayout.collapsed = {};
+  if (collapsed) state.tileLayout.collapsed[tileId] = true;
+  else delete state.tileLayout.collapsed[tileId];
+  saveLayoutToStorage();
+}
+
+function applyTileBodyCollapsed(tileEl, tileId) {
+  if (!tileEl || !tileId) return;
+  const collapsed = tileBodyCollapsed(tileId);
+  tileEl.classList.toggle("tile-body-collapsed", collapsed);
+  if (collapsed) {
+    tileEl.classList.remove("tile-half", "tile-double");
+  } else {
+    applyTileLayoutClasses(tileEl, tileId);
+  }
+}
+
 function applyTileLayoutClasses(tileEl, tileId) {
   if (!tileEl || !tileId) return;
+  if (tileBodyCollapsed(tileId)) {
+    tileEl.classList.remove("tile-half", "tile-double");
+    return;
+  }
   const w = tileWidth(tileId);
   const h = tileHeight(tileId);
   tileEl.classList.toggle("tile-half", w === "half");
   tileEl.classList.toggle("tile-double", h === "double");
+}
+
+function createCollapseTileButton(tileEl, tileId) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn btn-ghost btn-collapse-tile";
+  const sync = () => {
+    const collapsed = tileBodyCollapsed(tileId);
+    btn.textContent = collapsed ? "Expand" : "Collapse";
+    btn.setAttribute("aria-expanded", String(!collapsed));
+    applyTileBodyCollapsed(tileEl, tileId);
+  };
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setTileBodyCollapsed(tileId, !tileBodyCollapsed(tileId));
+    sync();
+  });
+  sync();
+  return btn;
+}
+
+function attachTileCollapseButton(tileEl, tileId) {
+  const toolbar = tileEl.querySelector(":scope > .tile-toolbar, :scope > .group-tile-bar");
+  if (!toolbar || toolbar.querySelector(".btn-collapse-tile")) return;
+  const layoutBtns = toolbar.querySelector(".tile-layout-btns");
+  const collapseBtn = createCollapseTileButton(tileEl, tileId);
+  if (layoutBtns) toolbar.insertBefore(collapseBtn, layoutBtns);
+  else toolbar.appendChild(collapseBtn);
 }
 
 function confirmDialog({ title, message, confirmLabel = "OK", danger = true }) {
@@ -331,11 +384,14 @@ function createTileChrome(tileId, label) {
 }
 
 function bindTileChrome(tileEl, tileId) {
-  if (tileEl.querySelector(":scope > .tile-toolbar")) return;
-  const { toolbar, halfBtn, fullBtn, tallBtn } = createTileChrome(tileId, tileEl.dataset.tileLabel || "Section");
-  bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn);
-  tileEl.prepend(toolbar);
-  bindTileDragDrop(tileEl, tileId, toolbar);
+  if (!tileEl.querySelector(":scope > .tile-toolbar")) {
+    const { toolbar, halfBtn, fullBtn, tallBtn } = createTileChrome(tileId, tileEl.dataset.tileLabel || "Section");
+    bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn);
+    tileEl.prepend(toolbar);
+    bindTileDragDrop(tileEl, tileId, toolbar);
+  }
+  attachTileCollapseButton(tileEl, tileId);
+  applyTileBodyCollapsed(tileEl, tileId);
 }
 
 function bindTileDragDrop(tileEl, tileId, toolbar) {
@@ -478,6 +534,7 @@ function bindGroupTileChrome(section, group, tileId) {
   section.prepend(toolbar);
   bindTileLayoutButtons(section, tileId, halfBtn, fullBtn, tallBtn);
   bindTileDragDrop(section, tileId, toolbar);
+  attachTileCollapseButton(section, tileId);
 
   const setFiltersCollapsed = (collapsed) => {
     group.filtersCollapsed = collapsed;
@@ -631,7 +688,9 @@ function renderTasksTile() {
 
 function refreshDashboardTileLayouts() {
   document.querySelectorAll(".dashboard-tile[data-tile-id]").forEach((el) => {
-    applyTileLayoutClasses(el, el.dataset.tileId);
+    const id = el.dataset.tileId;
+    attachTileCollapseButton(el, id);
+    applyTileBodyCollapsed(el, id);
   });
 }
 
@@ -714,9 +773,32 @@ function normalizeTagTitle(tag) {
   return String(tag.title ?? tag.Title ?? tag.name ?? tag.Name ?? "").trim();
 }
 
-function tagsEqual(a, b) {
-  const x = normalizeTagTitle(a).toLowerCase();
-  const y = normalizeTagTitle(b).toLowerCase();
+function buildTagCatalog() {
+  const byTitleLower = new Map();
+  const byId = new Map();
+  for (const tag of state.allTags) {
+    const title = normalizeTagTitle(tag.title ?? tag);
+    const id = tag.id ?? tag.ID ?? tag.Id;
+    if (title) byTitleLower.set(title.toLowerCase(), { title, id });
+    if (id != null) byId.set(String(id), { title, id });
+  }
+  return { byTitleLower, byId };
+}
+
+function tagLookupKey(value, catalog) {
+  const raw = normalizeTagTitle(value);
+  if (!raw) return "";
+  if (catalog?.byId?.has(raw)) {
+    return catalog.byId.get(raw).title.toLowerCase();
+  }
+  const lower = raw.toLowerCase();
+  if (catalog?.byTitleLower?.has(lower)) return lower;
+  return lower;
+}
+
+function tagsEqual(a, b, catalog = buildTagCatalog()) {
+  const x = tagLookupKey(a, catalog);
+  const y = tagLookupKey(b, catalog);
   return x && y && x === y;
 }
 
@@ -734,6 +816,12 @@ function getOppTags(opp) {
     opp.TagList,
     opp.tag,
     opp.Tag,
+    opp.linkTags,
+    opp.LinkTags,
+    opp.tagsInfo,
+    opp.TagsInfo,
+    opp.tagAccessories,
+    opp.TagAccessories,
   ];
 
   for (const raw of sources) {
@@ -747,18 +835,81 @@ function getOppTags(opp) {
     }
   }
 
+  if (Array.isArray(opp._matchedBoardTags)) {
+    for (const t of opp._matchedBoardTags) add(t);
+  }
+
+  for (const [key, val] of Object.entries(opp)) {
+    if (!/tag/i.test(key) || sources.includes(val)) continue;
+    if (Array.isArray(val)) {
+      for (const t of val) add(t);
+    } else if (typeof val === "string" && val.includes(",")) {
+      val.split(",").forEach(add);
+    }
+  }
+
   return [...titles];
 }
 
-function oppMatchesSelectedTags(opp, selectedTags) {
-  if (!selectedTags?.length) return true;
-  const oppTags = getOppTags(opp);
-  return selectedTags.some((sel) => oppTags.some((t) => tagsEqual(t, sel)));
+function stampMatchedBoardTag(opp, tagTitle) {
+  const title = normalizeTagTitle(tagTitle);
+  if (!title) return;
+  if (!Array.isArray(opp._matchedBoardTags)) opp._matchedBoardTags = [];
+  if (!opp._matchedBoardTags.some((t) => tagsEqual(t, title))) {
+    opp._matchedBoardTags.push(title);
+  }
 }
 
-function applyClientTagFilter(opportunities, group) {
-  if (!group.tagTitles?.length) return opportunities;
-  return opportunities.filter((o) => oppMatchesSelectedTags(o, group.tagTitles));
+function oppMatchesSelectedTags(opp, selectedTags, catalog = buildTagCatalog()) {
+  if (!selectedTags?.length) return true;
+  const oppTags = getOppTags(opp);
+  return selectedTags.some((sel) => oppTags.some((t) => tagsEqual(t, sel, catalog)));
+}
+
+function apiTagParamValues(tagTitle, catalog) {
+  const title = normalizeTagTitle(tagTitle);
+  const values = new Set();
+  if (title) values.add(title);
+  const entry = catalog.byTitleLower.get(title.toLowerCase());
+  if (entry?.id != null) values.add(String(entry.id));
+  return [...values];
+}
+
+async function fetchOpportunitiesForGroup(group) {
+  const baseQs = buildFilterQuery(group);
+  const catalog = buildTagCatalog();
+
+  if (!group.tagTitles?.length) {
+    const data = await api(`/api/2.0/crm/opportunity/filter?${baseQs}`);
+    return unwrap(data);
+  }
+
+  const merged = new Map();
+  for (const tagTitle of group.tagTitles) {
+    const paramValues = apiTagParamValues(tagTitle, catalog);
+    const tryValues = paramValues.length ? paramValues : [normalizeTagTitle(tagTitle)];
+    for (const tagParam of tryValues) {
+      if (!tagParam) continue;
+      for (const tagKey of ["tags", "tag"]) {
+        const params = new URLSearchParams(baseQs);
+        params.append(tagKey, tagParam);
+        try {
+          const data = await api(`/api/2.0/crm/opportunity/filter?${params}`);
+          for (const opp of unwrap(data)) {
+            stampMatchedBoardTag(opp, tagTitle);
+            merged.set(opp.id ?? opp.ID, opp);
+          }
+        } catch {
+          /* try next param shape */
+        }
+      }
+    }
+  }
+
+  if (merged.size > 0) return [...merged.values()];
+
+  const data = await api(`/api/2.0/crm/opportunity/filter?${baseQs}`);
+  return unwrap(data).filter((o) => oppMatchesSelectedTags(o, group.tagTitles, catalog));
 }
 
 function oppDueDateMs(opp) {
@@ -775,20 +926,6 @@ function oppCreatedMs(opp) {
     opp.dateAndTime?.value ??
     opp.dateAndTime;
   return new Date(d || 0).getTime();
-}
-
-function loadAllTilesCollapsed() {
-  return localStorage.getItem(ALL_TILES_COLLAPSED_KEY) === "1";
-}
-
-function applyAllTilesCollapsed(collapsed) {
-  state.allTilesCollapsed = collapsed;
-  localStorage.setItem(ALL_TILES_COLLAPSED_KEY, collapsed ? "1" : "0");
-  document.querySelectorAll(".dashboard-tile").forEach((tile) => {
-    tile.classList.toggle("tile-collapsed", collapsed);
-  });
-  const btn = $("#collapse-all-tiles-btn");
-  if (btn) btn.textContent = collapsed ? "Expand all sections" : "Collapse all sections";
 }
 
 function applyClientDealStatus(opportunities, dealStatus) {
@@ -1368,11 +1505,12 @@ function renderBoardGroups() {
     renderGroupBoard(group, $(".board", section));
     $(".board-group-count", section).textContent = `${group.opportunities.length} deals`;
     applyTileLayoutClasses(section, tileId);
+    applyTileBodyCollapsed(section, tileId);
   }
 
   ensureTileLayout();
   mountDashboardTiles();
-  applyAllTilesCollapsed(state.allTilesCollapsed);
+  refreshDashboardTileLayouts();
 }
 
 function debounceForGroup(group, fn) {
@@ -1916,13 +2054,10 @@ function renderTasksByUser() {
 
 async function refreshGroup(group) {
   try {
-    const qs = buildFilterQuery(group);
-    const data = await api(`/api/2.0/crm/opportunity/filter?${qs}`);
-    let items = unwrap(data);
+    let items = await fetchOpportunitiesForGroup(group);
     if (group.dealStatus !== "all" && !group.stageType) {
       items = applyClientDealStatus(items, group.dealStatus);
     }
-    items = applyClientTagFilter(items, group);
     group.opportunities = items;
 
     const el = groupDomEl(group);
@@ -1952,7 +2087,6 @@ async function refreshAll() {
     populateTasksUserFilter();
     await Promise.all([loadNotificationFeed(), loadTasks()]);
     await Promise.all(state.groups.map((g) => refreshGroup(g)));
-    applyAllTilesCollapsed(state.allTilesCollapsed);
     const total = state.groups.reduce((n, g) => n + g.opportunities.length, 0);
     $("#status-text").textContent = `${total} opportunities · ${state.tasks.length} open tasks`;
   } catch (err) {
@@ -1993,11 +2127,6 @@ async function init() {
   state.tileLayout = loadLayoutFromStorage();
   state.hiddenFeedKeys = loadHiddenFeedKeys();
   state.groupTemplates = loadGroupTemplates();
-  state.allTilesCollapsed = loadAllTilesCollapsed();
-
-  $("#collapse-all-tiles-btn")?.addEventListener("click", () => {
-    applyAllTilesCollapsed(!state.allTilesCollapsed);
-  });
 
   $("#add-group-btn").addEventListener("click", () => {
     state.groups.push(newGroup({ name: `Group ${state.groups.length + 1}` }));
