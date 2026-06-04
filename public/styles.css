@@ -515,6 +515,28 @@ body {
   white-space: nowrap;
 }
 
+/* Pinned row: collapsed CRM notifications + Tasks always stay on top */
+.dashboard-tiles-pinned {
+  --tile-row-height: 400px;
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0 1.5rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: auto;
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.dashboard-tiles-pinned:not(.hidden) {
+  margin-bottom: 1.25rem;
+}
+
+.dashboard-tiles-pinned .dashboard-tile {
+  grid-column: span 1;
+  min-height: 0;
+}
+
 /* Dashboard tile grid — 2 columns; double height spans 2 rows */
 .dashboard-tiles {
   --tile-row-height: 400px;
@@ -524,7 +546,6 @@ body {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-auto-rows: auto;
-  grid-auto-flow: row dense;
   gap: 1.25rem;
   align-items: start;
 }
@@ -558,15 +579,6 @@ body {
   max-height: none;
   flex: 1;
   min-height: 0;
-}
-
-.dashboard-tile.tile-body-collapsed[data-tile-id="tile-feed"],
-.dashboard-tile.tile-body-collapsed[data-tile-id="tile-tasks"] {
-  order: -10;
-}
-
-.dashboard-tile.tile-body-collapsed:not([data-tile-id="tile-feed"]):not([data-tile-id="tile-tasks"]) {
-  order: -5;
 }
 
 .dashboard-tile.tile-double.board-group-tile {

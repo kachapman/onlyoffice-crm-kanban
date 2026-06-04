@@ -204,17 +204,17 @@ function setTileBodyCollapsed(tileId, collapsed) {
   mountDashboardTiles();
 }
 
-/** Collapsed tiles first; feed and tasks stay at the very top when collapsed. */
-function sortTilesForDisplay(order, nodes) {
-  const known = order.filter((id) => nodes.has(id));
-  const pinFirst = ["tile-feed", "tile-tasks"];
-  const collapsed = known.filter((id) => tileBodyCollapsed(id));
-  const expanded = known.filter((id) => !tileBodyCollapsed(id));
-  const collapsedSorted = [
-    ...pinFirst.filter((id) => collapsed.includes(id)),
-    ...collapsed.filter((id) => !pinFirst.includes(id)),
-  ];
-  return [...collapsedSorted, ...expanded];
+const PINNED_TILE_IDS = ["tile-feed", "tile-tasks"];
+
+function collectDashboardTileNodes() {
+  const nodes = new Map();
+  for (const container of [$("#dashboard-tiles-pinned"), $("#dashboard-tiles")]) {
+    if (!container) continue;
+    for (const child of [...container.children]) {
+      if (child.dataset.tileId) nodes.set(child.dataset.tileId, child);
+    }
+  }
+  return nodes;
 }
 
 function applyTileBodyCollapsed(tileEl, tileId) {
@@ -626,21 +626,36 @@ function bindGroupTileChrome(section, group, tileId) {
 
 function mountDashboardTiles() {
   const root = $("#dashboard-tiles");
+  const pinnedRoot = $("#dashboard-tiles-pinned");
   if (!root) return;
   ensureTileLayout();
-  const nodes = new Map();
-  for (const child of [...root.children]) {
-    if (child.dataset.tileId) nodes.set(child.dataset.tileId, child);
-  }
+
+  const nodes = collectDashboardTileNodes();
+  if (pinnedRoot) pinnedRoot.innerHTML = "";
   root.innerHTML = "";
-  const displayOrder = sortTilesForDisplay(state.tileLayout.order, nodes);
-  for (const tileId of displayOrder) {
+
+  const pinnedIds = PINNED_TILE_IDS.filter((id) => nodes.has(id) && tileBodyCollapsed(id));
+
+  for (const tileId of pinnedIds) {
     const node = nodes.get(tileId);
-    if (node) {
-      root.appendChild(node);
-      applyTileLayoutClasses(node, tileId);
-      applyTileBodyCollapsed(node, tileId);
-    }
+    if (!node || !pinnedRoot) continue;
+    pinnedRoot.appendChild(node);
+    node.classList.add("tile-half");
+    node.classList.remove("tile-double");
+    applyTileBodyCollapsed(node, tileId);
+  }
+
+  if (pinnedRoot) {
+    pinnedRoot.classList.toggle("hidden", pinnedIds.length === 0);
+  }
+
+  for (const tileId of state.tileLayout.order) {
+    if (pinnedIds.includes(tileId)) continue;
+    const node = nodes.get(tileId);
+    if (!node) continue;
+    root.appendChild(node);
+    applyTileLayoutClasses(node, tileId);
+    applyTileBodyCollapsed(node, tileId);
   }
 }
 
