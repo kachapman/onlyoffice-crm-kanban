@@ -1,5 +1,7 @@
 # CRM Kanban (Workspace dashboard)
 
+**Current version:** 1.1.0 — see [CHANGELOG.md](./CHANGELOG.md) and [docs/RELEASE_v1.1.md](./docs/RELEASE_v1.1.md).
+
 Local test portal for Vanguard CRM opportunities, tasks, and notifications. Serves static UI from `public/` and proxies OnlyOffice CRM API calls via `server.py`.
 
 ## Run (local development)

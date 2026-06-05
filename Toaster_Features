@@ -75,6 +75,7 @@ TIER 2 — Medium effort, strong UX
 
 11. Documents / files tile
     - Recent files linked to opportunities (Files API — research like FEAT-003).
+    - **Editable OnlyOffice embed:** see **FEAT-022** in FUTURE_FEATURES.md (link-out → Docs API embed; Shared Spreadsheet field).
 
 12. Email / correspondence strip
     - If CRM mail module exposed: last emails per user (app already has mail parsing hints in feed code).
@@ -111,9 +112,11 @@ TIER 3 — Larger features (templates from enterprise CRMs)
 
 21. Mobile-friendly "quick actions" bar
     - New opp, new task, log call — bottom sheet on narrow screens.
+    - PARTIAL: header Quick note + icon-only New opp / Add tile / Refresh (see FEAT-021). Full bottom sheet still optional.
 
 22. Integrations placeholders
     - Webhook tile, Zapier link, or embed Power BI / Google Sheet iframe tile.
+    - OnlyOffice doc/xlsx in-tile editor: **FEAT-022** (prefer Docs API over raw iframe).
 
 
 --------------------------------------------------------------------------------

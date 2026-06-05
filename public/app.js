@@ -10,7 +10,18 @@ const LAYOUT_STORAGE_KEY = "oo_board_layout_v2";
 const HIDDEN_FEED_STORAGE_KEY = "oo_board_hidden_feed_v1";
 const FEED_KEYWORD_STORAGE_KEY = "oo_board_feed_keyword_v1";
 const GROUP_TEMPLATES_STORAGE_KEY = "oo_board_group_templates_v1";
-const FEED_DAYS = 30;
+const FEED_DAYS = 90;
+const FEED_CACHE_TTL_MS = 5 * 60 * 1000;
+const FEED_MAX_EVENTS = 200;
+const FEED_HISTORY_PAGE_SIZE = 100;
+const FEED_MAIL_SEARCH = "CRM. New event added to";
+const FEED_MAIL_SEARCHES = [FEED_MAIL_SEARCH, "CRM New event added to"];
+const FEED_MAIL_PAGE_SIZE = 60;
+const FEED_INITIAL_HISTORY_PAGES = 3;
+const FEED_INITIAL_MAIL_PAGES = 2;
+const OPP_CUSTOM_FIELD_ENRICH_CONCURRENCY = 5;
+const HIDDEN_FEED_RETENTION_DAYS = 30;
+const HIDDEN_FEED_RETENTION_MS = HIDDEN_FEED_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 const PANEL_TILE_AUTO_REFRESH_MS = 60 * 60 * 1000;
 const DASHBOARD_IDLE_STOP_MS = 3 * 60 * 60 * 1000;
 /** Set true when create-opportunity custom user field save is fixed (see ISSUES.md). */
@@ -31,9 +42,13 @@ const state = {
   portalUsers: [],
   tasks: [],
   tileLayout: { order: [], widths: {}, heights: {} },
-  hiddenFeedKeys: new Set(),
+  hiddenFeedEntries: new Map(),
   feedKeywordFilter: "",
   feedNotificationsCache: [],
+  feedFetchedAt: null,
+  feedRawItems: [],
+  feedPagination: null,
+  feedLoading: false,
   calendarTiles: [],
   calendarCache: {},
   notesTiles: [],
@@ -44,6 +59,7 @@ const state = {
   taskCategories: [],
   newTaskOpportunity: { id: null, title: "" },
   dealEdit: null,
+  quickNote: null,
   historyCategories: [],
   newOpportunityDraft: null,
 };
@@ -167,22 +183,114 @@ function loadLayoutFromStorage() {
   return { order: [], widths: {}, heights: {}, collapsed: {} };
 }
 
-function loadHiddenFeedKeys() {
+function hiddenFeedCutoffTime() {
+  return Date.now() - HIDDEN_FEED_RETENTION_MS;
+}
+
+function normalizeHiddenFeedEntries(raw) {
+  const map = new Map();
+  if (!Array.isArray(raw)) return map;
+  const nowIso = new Date().toISOString();
+  const cutoff = hiddenFeedCutoffTime();
+  for (const item of raw) {
+    let key = "";
+    let hiddenAt = nowIso;
+    let snapshot = null;
+    if (typeof item === "string") {
+      key = item.trim();
+    } else if (item && typeof item === "object") {
+      key = String(item.key || "").trim();
+      hiddenAt = String(item.hiddenAt || "").trim() || nowIso;
+      const snap = item.snapshot;
+      if (snap && typeof snap === "object") {
+        snapshot = {
+          id: snap.id,
+          title: String(snap.title || "").slice(0, 300),
+          text: String(snap.text || "").slice(0, 500),
+          author: String(snap.author || "").slice(0, 200),
+          date: snap.date != null ? String(snap.date) : null,
+        };
+      }
+    }
+    if (!key || map.has(key)) continue;
+    const hiddenMs = new Date(hiddenAt).getTime();
+    if (!Number.isNaN(hiddenMs) && hiddenMs < cutoff) continue;
+    map.set(key, { hiddenAt, snapshot });
+  }
+  return map;
+}
+
+function pruneHiddenFeedEntries(map = state.hiddenFeedEntries) {
+  const cutoff = hiddenFeedCutoffTime();
+  for (const [key, entry] of map) {
+    const hiddenMs = new Date(entry.hiddenAt).getTime();
+    if (Number.isNaN(hiddenMs) || hiddenMs < cutoff) map.delete(key);
+  }
+  return map;
+}
+
+function hiddenFeedEntriesToPayload(map) {
+  const cutoff = hiddenFeedCutoffTime();
+  const rows = [];
+  for (const [key, entry] of map) {
+    const hiddenMs = new Date(entry.hiddenAt).getTime();
+    if (Number.isNaN(hiddenMs) || hiddenMs < cutoff) continue;
+    const row = { key, hiddenAt: entry.hiddenAt };
+    if (entry.snapshot) row.snapshot = entry.snapshot;
+    rows.push(row);
+  }
+  return rows;
+}
+
+function serializeHiddenFeedEntries() {
+  pruneHiddenFeedEntries();
+  return hiddenFeedEntriesToPayload(state.hiddenFeedEntries);
+}
+
+function isFeedKeyHidden(key) {
+  const entry = state.hiddenFeedEntries.get(key);
+  if (!entry) return false;
+  const hiddenMs = new Date(entry.hiddenAt).getTime();
+  if (Number.isNaN(hiddenMs) || hiddenMs < hiddenFeedCutoffTime()) {
+    state.hiddenFeedEntries.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function loadHiddenFeedEntriesFromStorage() {
   try {
     const raw = localStorage.getItem(HIDDEN_FEED_STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return new Set(parsed);
-    }
+    if (raw) return normalizeHiddenFeedEntries(JSON.parse(raw));
   } catch {
     /* ignore */
   }
-  return new Set();
+  return new Map();
 }
 
-function saveHiddenFeedKeys() {
-  localStorage.setItem(HIDDEN_FEED_STORAGE_KEY, JSON.stringify([...state.hiddenFeedKeys]));
+function saveHiddenFeedEntries() {
+  const payload = serializeHiddenFeedEntries();
+  localStorage.setItem(HIDDEN_FEED_STORAGE_KEY, JSON.stringify(payload));
   scheduleUserProfileSave();
+  updateFeedHiddenToolbarButton();
+}
+
+function applyFeedUserPreferences(profile) {
+  if (!profile || typeof profile !== "object") return;
+  if (profile.feedKeywordFilter != null) {
+    state.feedKeywordFilter = String(profile.feedKeywordFilter || "");
+  }
+  if (profile.hiddenFeedKeys != null) {
+    state.hiddenFeedEntries = normalizeHiddenFeedEntries(profile.hiddenFeedKeys);
+    pruneHiddenFeedEntries();
+  }
+  syncFeedKeywordInput();
+  updateFeedHiddenToolbarButton();
+}
+
+function syncFeedKeywordInput() {
+  const kw = $("#feed-keyword-filter");
+  if (kw) kw.value = state.feedKeywordFilter || "";
 }
 
 function feedWindowStart() {
@@ -221,7 +329,7 @@ function defaultTileOrder() {
     "tile-tasks",
     ...state.groups.map((g) => `group-${g.id}`),
     ...state.calendarTiles.map((c) => calendarTileId(c)),
-    ...state.notesTiles.map((n) => notesTileId(n)),
+    ...activeNotesTiles().map((n) => notesTileId(n)),
   ];
 }
 
@@ -258,7 +366,9 @@ function ensureTileLayout() {
 }
 
 function tileWidth(tileId) {
-  return state.tileLayout.widths[tileId] === "half" ? "half" : "full";
+  const w = state.tileLayout.widths[tileId];
+  if (w === "quarter" || w === "half") return w;
+  return "full";
 }
 
 function tileHeight(tileId) {
@@ -266,7 +376,8 @@ function tileHeight(tileId) {
 }
 
 function setTileWidth(tileId, width) {
-  state.tileLayout.widths[tileId] = width === "half" ? "half" : "full";
+  state.tileLayout.widths[tileId] =
+    width === "quarter" ? "quarter" : width === "half" ? "half" : "full";
   saveLayoutToStorage();
 }
 
@@ -287,16 +398,111 @@ function setTileBodyCollapsed(tileId, collapsed) {
   mountDashboardTiles();
 }
 
-const PINNED_TILE_IDS = ["tile-feed", "tile-tasks"];
-const PANEL_TILE_IDS = new Set(PINNED_TILE_IDS);
+/** Tiles that fetch CRM (or calendar feed) data when expanded. Notes tiles are local-only. */
+function isCrmDataTileId(tileId) {
+  if (!tileId) return false;
+  if (tileId === "tile-feed" || tileId === "tile-tasks") return true;
+  if (tileId.startsWith("group-") || tileId.startsWith("calendar-")) return true;
+  return false;
+}
 
-function loadFeedKeywordFromStorage() {
-  try {
-    state.feedKeywordFilter = localStorage.getItem(FEED_KEYWORD_STORAGE_KEY) || "";
-  } catch {
-    state.feedKeywordFilter = "";
+function shouldFetchTileCrmData(tileId) {
+  return isCrmDataTileId(tileId) && !tileBodyCollapsed(tileId);
+}
+
+function groupForTileId(tileId) {
+  if (!tileId?.startsWith("group-")) return null;
+  const groupId = tileId.slice("group-".length);
+  return state.groups.find((g) => String(g.id) === String(groupId)) || null;
+}
+
+function dashboardTileIdsForLoad() {
+  const ids = [...PINNED_TILE_IDS, ...(state.tileLayout.order || [])];
+  return [...new Set(ids.filter(Boolean))];
+}
+
+function showTileCollapsedHint(tileId, message) {
+  const tileEl = document.querySelector(`[data-tile-id="${tileId}"]`);
+  if (!tileEl || !tileBodyCollapsed(tileId)) return;
+  if (tileId === "tile-feed") {
+    const list = $("#notification-feed", tileEl);
+    if (list) list.innerHTML = `<li class="feed-collapsed-hint">${escapeHtml(message)}</li>`;
+    updatePanelTileCount("tile-feed", 0);
+    return;
+  }
+  if (tileId === "tile-tasks") {
+    const wrap = $(".tasks-by-user", tileEl);
+    if (wrap) wrap.innerHTML = `<p class="tile-collapsed-hint">${escapeHtml(message)}</p>`;
+    updatePanelTileCount("tile-tasks", 0);
+    return;
+  }
+  if (tileId.startsWith("group-")) {
+    const group = groupForTileId(tileId);
+    const board = group?._el ? $(".board", group._el) : null;
+    if (board) board.innerHTML = `<p class="tile-collapsed-hint">${escapeHtml(message)}</p>`;
+    const countEl = group?._el?.querySelector(".board-group-count");
+    if (countEl) countEl.textContent = "—";
+    return;
+  }
+  if (tileId.startsWith("calendar-")) {
+    const body = tileEl.querySelector(".calendar-month-body");
+    if (body) body.innerHTML = `<p class="tile-collapsed-hint">${escapeHtml(message)}</p>`;
   }
 }
+
+function updateDashboardStatusText() {
+  const openOpps = countOpenOpportunities();
+  const openTasks = state.tasks.length;
+  const skipped = dashboardTileIdsForLoad().filter(
+    (id) => isCrmDataTileId(id) && tileBodyCollapsed(id)
+  ).length;
+  let text = `${openOpps} open opportunities · ${openTasks} open tasks`;
+  if (skipped) text += ` · ${skipped} minimized tile${skipped === 1 ? "" : "s"} skipped`;
+  const status = $("#status-text");
+  if (status) status.textContent = text;
+}
+
+async function loadTileCrmData(tileId, { quiet = false, force = false } = {}) {
+  if (!tileId || (!force && !shouldFetchTileCrmData(tileId))) return;
+
+  if (tileId === "tile-feed") {
+    await loadNotificationFeed({ force });
+    return;
+  }
+  if (tileId === "tile-tasks") {
+    await loadTasks();
+    return;
+  }
+  if (tileId.startsWith("calendar-")) {
+    const cal = getCalendarByTileId(tileId);
+    if (cal) await loadCalendarForTile(cal, { quiet });
+    return;
+  }
+  if (tileId.startsWith("group-")) {
+    const group = groupForTileId(tileId);
+    if (group) await refreshGroup(group, { force: true });
+  }
+}
+
+async function loadExpandedDashboardTiles({ quiet = false } = {}) {
+  const jobs = dashboardTileIdsForLoad()
+    .filter((tileId) => shouldFetchTileCrmData(tileId))
+    .map((tileId) => loadTileCrmData(tileId, { quiet }));
+  if (!jobs.length) {
+    for (const tileId of dashboardTileIdsForLoad()) {
+      if (isCrmDataTileId(tileId) && tileBodyCollapsed(tileId)) {
+        showTileCollapsedHint(tileId, "Minimized — expand to load");
+      }
+    }
+    updateDashboardStatusText();
+    return;
+  }
+  await Promise.all(jobs);
+  updateDashboardStatusText();
+}
+
+const PINNED_TILE_IDS = ["tile-feed", "tile-tasks"];
+const PANEL_TILE_IDS = new Set(PINNED_TILE_IDS);
 
 function saveFeedKeywordToStorage() {
   localStorage.setItem(FEED_KEYWORD_STORAGE_KEY, state.feedKeywordFilter || "");
@@ -323,7 +529,7 @@ function applyTileBodyCollapsed(tileEl, tileId) {
   const collapsed = tileBodyCollapsed(tileId);
   tileEl.classList.toggle("tile-body-collapsed", collapsed);
   if (collapsed) {
-    tileEl.classList.remove("tile-half", "tile-double");
+    tileEl.classList.remove("tile-half", "tile-quarter", "tile-double");
   } else {
     applyTileLayoutClasses(tileEl, tileId);
   }
@@ -332,7 +538,7 @@ function applyTileBodyCollapsed(tileEl, tileId) {
 function applyTileLayoutClasses(tileEl, tileId) {
   if (!tileEl || !tileId) return;
   if (tileBodyCollapsed(tileId)) {
-    tileEl.classList.remove("tile-half", "tile-double", "tasks-tile-full");
+    tileEl.classList.remove("tile-half", "tile-quarter", "tile-double", "tasks-tile-full");
     return;
   }
   if (PANEL_TILE_IDS.has(tileId)) {
@@ -341,9 +547,10 @@ function applyTileLayoutClasses(tileEl, tileId) {
       saveLayoutToStorage();
     }
     tileEl.classList.add("panel-tile");
-    tileEl.classList.remove("tile-double", "tile-half", "tasks-tile-full");
+    tileEl.classList.remove("tile-double", "tile-half", "tile-quarter", "tasks-tile-full");
     const w = tileWidth(tileId);
-    tileEl.classList.toggle("panel-width-half", w !== "full");
+    const panelHalf = w === "half" || w === "quarter";
+    tileEl.classList.toggle("panel-width-half", panelHalf);
     tileEl.classList.toggle("panel-width-full", w === "full");
     tileEl.classList.toggle("tasks-tile-full", tileId === "tile-tasks" && w === "full");
     syncPanelRowLayout();
@@ -351,24 +558,34 @@ function applyTileLayoutClasses(tileEl, tileId) {
   }
   const w = tileWidth(tileId);
   const h = tileHeight(tileId);
-  tileEl.classList.toggle("tile-half", w === "half");
+  tileEl.classList.remove("tile-half", "tile-quarter");
+  if (w === "half") tileEl.classList.add("tile-half");
+  else if (w === "quarter") tileEl.classList.add("tile-quarter");
   tileEl.classList.toggle("tile-double", h === "double");
 }
 
 function createCollapseTileButton(tileEl, tileId) {
   const btn = document.createElement("button");
   btn.type = "button";
-  btn.className = "btn btn-ghost btn-collapse-tile";
+  btn.className = "btn btn-ghost btn-collapse-tile tile-btn tile-btn-icon";
   const sync = () => {
     const collapsed = tileBodyCollapsed(tileId);
-    btn.textContent = collapsed ? "Expand" : "Collapse";
+    const title = collapsed ? "Expand tile" : "Minimize tile";
+    setTileLayoutIconButton(btn, collapsed ? TILE_ICON_TILE_EXPAND : TILE_ICON_MINIMIZE, title);
+    btn.classList.toggle("tile-btn-active", collapsed);
     btn.setAttribute("aria-expanded", String(!collapsed));
     applyTileBodyCollapsed(tileEl, tileId);
   };
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
-    setTileBodyCollapsed(tileId, !tileBodyCollapsed(tileId));
+    const wasCollapsed = tileBodyCollapsed(tileId);
+    setTileBodyCollapsed(tileId, !wasCollapsed);
     sync();
+    if (wasCollapsed && isCrmDataTileId(tileId)) {
+      loadTileCrmData(tileId).catch((err) => showToast(err.message, true));
+    } else if (!wasCollapsed && isCrmDataTileId(tileId)) {
+      showTileCollapsedHint(tileId, "Minimized — expand to load");
+    }
   });
   sync();
   return btn;
@@ -376,11 +593,11 @@ function createCollapseTileButton(tileEl, tileId) {
 
 function attachTileCollapseButton(tileEl, tileId) {
   const toolbar = tileEl.querySelector(":scope > .tile-toolbar, :scope > .group-tile-bar");
-  if (!toolbar || toolbar.querySelector(".btn-collapse-tile")) return;
+  if (!toolbar) return;
   const layoutBtns = toolbar.querySelector(".tile-layout-btns");
+  if (!layoutBtns || layoutBtns.querySelector(".btn-collapse-tile")) return;
   const collapseBtn = createCollapseTileButton(tileEl, tileId);
-  if (layoutBtns) toolbar.insertBefore(collapseBtn, layoutBtns);
-  else toolbar.appendChild(collapseBtn);
+  layoutBtns.insertBefore(collapseBtn, layoutBtns.firstChild);
 }
 
 function confirmDialog({ title, message, confirmLabel = "OK", danger = true }) {
@@ -435,6 +652,28 @@ const TILE_ICON_WINDOW_MAXIMIZE = `<svg class="tile-layout-icon" xmlns="http://w
 
 const TILE_ICON_HEIGHT_EXPAND = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18"/><path d="m8 7 4-4 4 4"/><path d="m8 17 4 4 4-4"/></svg>`;
 
+const TILE_ICON_WINDOW_QUARTER = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5" width="4" height="14" rx="0.5"/><rect x="10" y="5" width="4" height="14" rx="0.5"/><rect x="16" y="5" width="4" height="14" rx="0.5"/></svg>`;
+
+const TILE_ICON_MINIMIZE = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 20h14"/></svg>`;
+
+const TILE_ICON_TILE_EXPAND = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>`;
+
+const TILE_ICON_COPY = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
+
+const TILE_ICON_CALENDAR = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>`;
+
+const TILE_ICON_PRINT = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/><path d="M6 10V6h12v4"/></svg>`;
+
+const TILE_ICON_NOTE = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4"/><path d="M2 6h4"/><path d="M2 10h4"/><path d="M2 14h4"/><path d="M2 18h4"/><path d="M21.378 5.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z"/></svg>`;
+
+const TILE_ICON_PIN = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1z"/></svg>`;
+
+const TILE_ICON_REMOVE = `<svg class="tile-remove-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`;
+
+const TILE_ICON_SAVE = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.2 3a2 2 0 0 1 1.4.6l2.8 2.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/></svg>`;
+
+const FEED_LOADING_SPINNER_HTML = `<svg class="feed-loading-spinner" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>`;
+
 function setTileLayoutIconButton(btn, iconHtml, title) {
   btn.classList.add("tile-btn", "tile-btn-icon");
   btn.innerHTML = iconHtml;
@@ -442,17 +681,95 @@ function setTileLayoutIconButton(btn, iconHtml, title) {
   btn.setAttribute("aria-label", title);
 }
 
-function createLayoutButtons({ showDoubleHeight = true } = {}) {
+function createTileIconActionButton(iconHtml, title, extraClass = "") {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = `btn btn-ghost tile-btn tile-btn-icon ${extraClass}`.trim();
+  setTileLayoutIconButton(btn, iconHtml, title);
+  return btn;
+}
+
+function createTileRemoveButton(title, extraClass = "") {
+  return createTileIconActionButton(TILE_ICON_REMOVE, title, `btn-tile-remove ${extraClass}`.trim());
+}
+
+function closeAllTileMenus() {
+  document.querySelectorAll(".tile-menu").forEach((menu) => menu.classList.add("hidden"));
+  document.querySelectorAll(".tile-menu-trigger").forEach((trigger) => {
+    trigger.setAttribute("aria-expanded", "false");
+  });
+}
+
+function bindTileMenuDismiss() {
+  if (document.body.dataset.tileMenuDismissBound) return;
+  document.body.dataset.tileMenuDismissBound = "1";
+  document.addEventListener("click", () => closeAllTileMenus());
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeAllTileMenus();
+  });
+}
+
+function createTileMenu({ label, className = "", items }) {
+  bindTileMenuDismiss();
+  const wrap = document.createElement("div");
+  wrap.className = "tile-menu-wrap";
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.className = `btn btn-ghost tile-menu-trigger ${className}`.trim();
+  trigger.textContent = label;
+  trigger.setAttribute("aria-haspopup", "true");
+  trigger.setAttribute("aria-expanded", "false");
+  const menu = document.createElement("div");
+  menu.className = "tile-menu hidden";
+  menu.setAttribute("role", "menu");
+  for (const item of items) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "tile-menu-item";
+    if (item.danger) row.classList.add("tile-menu-item--danger");
+    row.textContent = item.label;
+    row.setAttribute("role", "menuitem");
+    row.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeAllTileMenus();
+      item.onSelect();
+    });
+    menu.appendChild(row);
+  }
+  wrap.appendChild(trigger);
+  wrap.appendChild(menu);
+  trigger.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const willOpen = menu.classList.contains("hidden");
+    closeAllTileMenus();
+    if (willOpen) {
+      menu.classList.remove("hidden");
+      trigger.setAttribute("aria-expanded", "true");
+    }
+  });
+  menu.addEventListener("click", (e) => e.stopPropagation());
+  return wrap;
+}
+
+function createLayoutButtons({ showDoubleHeight = true, showQuarterWidth = false } = {}) {
   const wrap = document.createElement("div");
   wrap.className = "tile-layout-btns";
 
+  let quarterBtn = null;
+  if (showQuarterWidth) {
+    quarterBtn = document.createElement("button");
+    quarterBtn.type = "button";
+    setTileLayoutIconButton(quarterBtn, TILE_ICON_WINDOW_QUARTER, "Quarter width (1/4)");
+    wrap.appendChild(quarterBtn);
+  }
+
   const halfBtn = document.createElement("button");
   halfBtn.type = "button";
-  setTileLayoutIconButton(halfBtn, TILE_ICON_WINDOW_RESTORE, "Contract tile (half width)");
+  setTileLayoutIconButton(halfBtn, TILE_ICON_WINDOW_RESTORE, "Half width (1/2)");
 
   const fullBtn = document.createElement("button");
   fullBtn.type = "button";
-  setTileLayoutIconButton(fullBtn, TILE_ICON_WINDOW_MAXIMIZE, "Expand tile (full width)");
+  setTileLayoutIconButton(fullBtn, TILE_ICON_WINDOW_MAXIMIZE, "Full width");
 
   wrap.appendChild(halfBtn);
   wrap.appendChild(fullBtn);
@@ -464,13 +781,14 @@ function createLayoutButtons({ showDoubleHeight = true } = {}) {
     setTileLayoutIconButton(tallBtn, TILE_ICON_HEIGHT_EXPAND, "Double tile height (two grid rows)");
     wrap.appendChild(tallBtn);
   }
-  return { wrap, halfBtn, fullBtn, tallBtn };
+  return { wrap, quarterBtn, halfBtn, fullBtn, tallBtn };
 }
 
-function bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn) {
+function bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn, quarterBtn = null) {
   const syncTileLayout = () => {
     const w = tileWidth(tileId);
     const h = tileHeight(tileId);
+    if (quarterBtn) quarterBtn.classList.toggle("tile-btn-active", w === "quarter");
     halfBtn.classList.toggle("tile-btn-active", w === "half");
     fullBtn.classList.toggle("tile-btn-active", w === "full");
     if (tallBtn) tallBtn.classList.toggle("tile-btn-active", h === "double");
@@ -478,6 +796,11 @@ function bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn) {
     if (tileId === "tile-tasks") renderTasksByUser();
     if (PANEL_TILE_IDS.has(tileId)) syncPanelRowLayout();
   };
+  quarterBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setTileWidth(tileId, "quarter");
+    syncTileLayout();
+  });
   halfBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     setTileWidth(tileId, "half");
@@ -596,6 +919,7 @@ function bindTileChrome(tileEl, tileId) {
   attachTileCollapseButton(tileEl, tileId);
   applyTileBodyCollapsed(tileEl, tileId);
   if (isAutoRefreshTileId(tileId)) ensureTileAutoRefreshButton(tileEl, tileId);
+  if (tileId === "tile-feed") ensureFeedHiddenToolbarButton(tileEl);
   if (tileId === "tile-tasks") ensureTasksNewTaskButton(tileEl);
 }
 
@@ -717,15 +1041,13 @@ function bindGroupTileChrome(section, group, tileId) {
     templateSelect.appendChild(opt);
   }
 
-  const saveTplBtn = document.createElement("button");
-  saveTplBtn.type = "button";
-  saveTplBtn.className = "btn btn-ghost btn-save-template";
-  saveTplBtn.textContent = "Save template";
+  const saveTplBtn = createTileIconActionButton(
+    TILE_ICON_SAVE,
+    "Save current filters as a template",
+    "btn-save-template"
+  );
 
-  const removeBtn = document.createElement("button");
-  removeBtn.type = "button";
-  removeBtn.className = "btn btn-danger btn-remove-group";
-  removeBtn.textContent = "Remove";
+  const removeBtn = createTileRemoveButton("Remove this grouping from the board", "btn-remove-group");
 
   const { wrap, halfBtn, fullBtn, tallBtn } = createLayoutButtons();
 
@@ -874,12 +1196,14 @@ function renderFeedTile() {
     tile.innerHTML = `
       <div class="panel-header panel-header-feed">
         <input type="search" id="feed-keyword-filter" class="feed-keyword-filter" placeholder="${escapeHtml(feedFilterPlaceholder())}" autocomplete="off" />
+        <span class="feed-loading-indicator hidden" title="Loading notifications" aria-label="Loading notifications">${FEED_LOADING_SPINNER_HTML}</span>
         <span class="panel-sub feed-range-hint">Last ${FEED_DAYS} days</span>
       </div>
       <ul id="notification-feed" class="feed-list" aria-live="polite"></ul>
     `;
     $("#dashboard-panel-row")?.appendChild(tile);
     bindTileChrome(tile, tileId);
+    bindFeedInfiniteScroll();
     const kw = $("#feed-keyword-filter", tile);
     if (kw) {
       kw.value = state.feedKeywordFilter || "";
@@ -894,6 +1218,7 @@ function renderFeedTile() {
   ensurePanelToolbarCount(tile, tileId);
   ensurePanelLayoutButtons(tile, tileId);
   ensureTileAutoRefreshButton(tile, tileId);
+  ensureFeedHiddenToolbarButton(tile);
   syncFeedFilterPlaceholder();
   const kw = $("#feed-keyword-filter", tile);
   if (kw) {
@@ -907,6 +1232,7 @@ function renderFeedTile() {
       });
     }
   }
+  bindFeedInfiniteScroll();
   return tile;
 }
 
@@ -949,6 +1275,17 @@ function refreshDashboardTileLayouts() {
     const id = el.dataset.tileId;
     attachTileCollapseButton(el, id);
     applyTileBodyCollapsed(el, id);
+    if (tileBodyCollapsed(id) && isCrmDataTileId(id)) {
+      const msg =
+        id === "tile-feed"
+          ? "Minimized — expand to load notifications"
+          : id === "tile-tasks"
+            ? "Minimized — expand to load tasks"
+            : id.startsWith("calendar-")
+              ? "Minimized — expand to load calendar"
+              : "Minimized — expand to load deals";
+      showTileCollapsedHint(id, msg);
+    }
   });
 }
 
@@ -1664,6 +2001,10 @@ async function fetchCalendarFeed(feedUrl) {
 
 async function loadCalendarForTile(cal, { quiet = false } = {}) {
   const tid = calendarTileId(cal);
+  if (tileBodyCollapsed(tid)) {
+    showTileCollapsedHint(tid, "Minimized — expand to load calendar");
+    return;
+  }
   const section = cal._el;
   if (section) section.classList.toggle("calendar-loading", true);
   try {
@@ -1754,10 +2095,7 @@ function bindCalendarTileChrome(section, cal, tileId) {
   populateCalendarTimezoneSelect(tzSelect, resolveCalendarTimezone(cal));
   tzWrap.appendChild(tzSelect);
 
-  const removeBtn = document.createElement("button");
-  removeBtn.type = "button";
-  removeBtn.className = "btn btn-danger btn-remove-calendar";
-  removeBtn.textContent = "Remove";
+  const removeBtn = createTileRemoveButton("Remove this calendar tile from the dashboard", "btn-remove-calendar");
 
   const { wrap, halfBtn, fullBtn, tallBtn } = createLayoutButtons();
 
@@ -1847,10 +2185,17 @@ function renderCalendarTiles(dash) {
     applyTileLayoutClasses(section, tileId);
     applyTileBodyCollapsed(section, tileId);
     const tid = calendarTileId(cal);
-    if (state.calendarCache[tid]) {
+    if (tileBodyCollapsed(tileId)) {
+      const body = section.querySelector(".calendar-month-body");
+      if (body) {
+        body.innerHTML =
+          '<p class="tile-collapsed-hint">Minimized — expand to load calendar</p>';
+      }
+    } else if (state.calendarCache[tid]) {
       renderCalendarMonthBody(section, cal);
     } else {
-      loadCalendarForTile(cal, { quiet: true }).catch(() => {});
+      const body = section.querySelector(".calendar-month-body");
+      if (body) body.innerHTML = '<p class="calendar-loading-hint">Loading calendar…</p>';
     }
   }
 }
@@ -1860,15 +2205,242 @@ function stripNotesRuntimeFields(notes) {
   return rest;
 }
 
+/** Fallback when CRM opportunity user-field definitions are not loaded yet. */
+const CHECKLIST_FIELD_NAMES_FALLBACK = [
+  "Measurement Report",
+  "Insurance Documents",
+  "Inspection Photos",
+];
+
+/** Checkbox user fields used for the “Missing Checklist info” card warning and Claim checklist preset. */
+function opportunityChecklistFieldLabels() {
+  if (!state.customFieldDefs.length) return [...CHECKLIST_FIELD_NAMES_FALLBACK];
+
+  const defs = state.customFieldDefs;
+  let inChecklistSection = false;
+  const sectionLabels = [];
+
+  for (const def of defs) {
+    const label = customFieldLabel(def);
+    const code = customFieldTypeCode(def);
+    if (code === 4) {
+      const key = normalizeUserFieldLabelKey(label);
+      if (key.includes("checklist") || key.includes("claim")) {
+        inChecklistSection = true;
+        continue;
+      }
+      if (inChecklistSection) break;
+      continue;
+    }
+    if (inChecklistSection && code === 3 && !isCreateOppExcludedUserField(def) && label) {
+      sectionLabels.push(label);
+    }
+  }
+  if (sectionLabels.length) return sectionLabels;
+
+  const matched = [];
+  for (const def of defs) {
+    if (customFieldTypeCode(def) !== 3) continue;
+    if (isCreateOppExcludedUserField(def)) continue;
+    const label = customFieldLabel(def);
+    if (!label) continue;
+    if (CHECKLIST_FIELD_NAMES_FALLBACK.some((name) => fieldNameMatches(label, [name]))) {
+      matched.push(label);
+    }
+  }
+  if (matched.length) return matched;
+
+  const checkboxes = [];
+  for (const def of defs) {
+    if (customFieldTypeCode(def) !== 3) continue;
+    if (isCreateOppExcludedUserField(def)) continue;
+    const label = customFieldLabel(def);
+    if (label) checkboxes.push(label);
+  }
+  return checkboxes.length ? checkboxes : [...CHECKLIST_FIELD_NAMES_FALLBACK];
+}
+
+function notesClaimChecklistContent() {
+  const lines = opportunityChecklistFieldLabels().map((label) => `- [ ] ${label}`);
+  return `## Claim checklist\n\n${lines.join("\n")}\n`;
+}
+
+const NOTES_ADD_PRESETS = [
+  { id: "blank", label: "Blank notes", name: "Notes", content: "" },
+  { id: "daily", label: "Daily", name: "Daily", content: "## Today\n\n- [ ] \n" },
+  { id: "followups", label: "Follow-ups", name: "Follow-ups", content: "## Follow-ups\n\n- [ ] \n" },
+  { id: "week", label: "This week", name: "This week", content: "## This week\n\n- [ ] \n" },
+  { id: "checklist", label: "Claim checklist", name: "Claim checklist", content: null },
+];
+
+function notesPresetContent(preset) {
+  if (!preset) return "";
+  if (preset.id === "checklist") return notesClaimChecklistContent();
+  return preset.content || "";
+}
+
+const NOTES_ACCENT_OPTIONS = [
+  { value: "", label: "No accent" },
+  { value: "#5b8def", label: "Blue" },
+  { value: "#3d9a6a", label: "Green" },
+  { value: "#c9a227", label: "Gold" },
+  { value: "#c45c5c", label: "Red" },
+  { value: "#9b7ed9", label: "Purple" },
+];
+
 function newNotesTile(overrides = {}) {
-  return {
+  const base = {
     id: crypto.randomUUID(),
     name: "Notes",
     content: "",
     viewMode: "edit",
+    defaultViewMode: null,
+    accent: "",
     updatedAt: null,
-    ...overrides,
   };
+  const merged = { ...base, ...overrides };
+  if (merged.defaultViewMode !== "preview" && merged.defaultViewMode !== "edit") {
+    merged.defaultViewMode = null;
+  }
+  return merged;
+}
+
+function activeNotesTiles() {
+  return state.notesTiles.filter((n) => !n.archived);
+}
+
+function archivedNotesTiles() {
+  return state.notesTiles.filter((n) => n.archived);
+}
+
+async function archiveNotesTile(notes) {
+  const label = notes.name?.trim() || "this notes tile";
+  const ok = await confirmDialog({
+    title: "Archive notes tile?",
+    message: `Archive “${label}”? It will be hidden from the dashboard. Restore its text later from File → Restore from archive on any notes tile.`,
+    confirmLabel: "Archive",
+    danger: false,
+  });
+  if (!ok) return;
+  notes.archived = true;
+  notes.archivedAt = new Date().toISOString();
+  touchNotesTile(notes);
+  const tid = notesTileId(notes);
+  state.tileLayout.order = state.tileLayout.order.filter((id) => id !== tid);
+  delete state.tileLayout.widths[tid];
+  delete state.tileLayout.heights[tid];
+  delete state.tileLayout.collapsed?.[tid];
+  saveLayoutToStorage();
+  scheduleUserProfileSave();
+  renderBoardGroups();
+  showToast("Notes tile archived");
+}
+
+function applyArchivedNotesContentToTile(targetNotes, archived) {
+  if (!targetNotes || !archived) return;
+  targetNotes.content = archived.content || "";
+  touchNotesTile(targetNotes);
+  scheduleNotesTileSave(targetNotes);
+  if (targetNotes._el) {
+    syncNotesTileBody(targetNotes._el, targetNotes);
+  }
+  showToast(`Loaded archive from “${archived.name?.trim() || "Notes"}”`);
+}
+
+function openNotesRestoreFromArchiveModal(targetNotes) {
+  const modal = $("#notes-archive-restore-modal");
+  const list = $("#notes-archive-restore-list");
+  if (!modal || !list) return;
+
+  const archived = archivedNotesTiles().sort((a, b) => {
+    const ta = new Date(a.archivedAt || 0).getTime();
+    const tb = new Date(b.archivedAt || 0).getTime();
+    return tb - ta;
+  });
+
+  list.innerHTML = "";
+  if (!archived.length) {
+    list.innerHTML = `<li class="notes-archive-restore-empty">No archived notes yet. Use File → Archive to save a tile to the archive.</li>`;
+  } else {
+    for (const entry of archived) {
+      const li = document.createElement("li");
+      li.className = "notes-archive-restore-item";
+      const meta = document.createElement("button");
+      meta.type = "button";
+      meta.className = "notes-archive-restore-pick";
+      const title = entry.name?.trim() || "Notes";
+      const when = entry.archivedAt ? new Date(entry.archivedAt).toLocaleString() : "Unknown date";
+      meta.innerHTML = `<span class="notes-archive-restore-name">${escapeHtml(title)}</span><span class="notes-archive-restore-date">${escapeHtml(when)}</span>`;
+      meta.addEventListener("click", () => {
+        applyArchivedNotesContentToTile(targetNotes, entry);
+        closeNotesRestoreFromArchiveModal();
+      });
+      li.appendChild(meta);
+      list.appendChild(li);
+    }
+  }
+
+  modal.classList.remove("hidden");
+  modal.dataset.targetNotesId = targetNotes.id;
+}
+
+function closeNotesRestoreFromArchiveModal() {
+  const modal = $("#notes-archive-restore-modal");
+  if (!modal) return;
+  modal.classList.add("hidden");
+  delete modal.dataset.targetNotesId;
+}
+
+function bindNotesArchiveRestoreModal() {
+  const modal = $("#notes-archive-restore-modal");
+  if (!modal || modal.dataset.bound) return;
+  modal.dataset.bound = "1";
+  $("#notes-archive-restore-close")?.addEventListener("click", closeNotesRestoreFromArchiveModal);
+  modal.querySelectorAll("[data-notes-archive-dismiss]").forEach((el) => {
+    el.addEventListener("click", closeNotesRestoreFromArchiveModal);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && modal && !modal.classList.contains("hidden")) {
+      closeNotesRestoreFromArchiveModal();
+    }
+  });
+}
+
+function applyNotesDefaultViewOnLoad(notes) {
+  if (notes.defaultViewMode === "preview") notes.viewMode = "preview";
+  else if (notes.defaultViewMode === "edit") notes.viewMode = "edit";
+}
+
+function notesFilenameSafe(name) {
+  return (
+    String(name || "notes")
+      .trim()
+      .replace(/[^\w.\- ]+/g, "")
+      .replace(/\s+/g, "-")
+      .slice(0, 80) || "notes"
+  );
+}
+
+function notesTextStats(text) {
+  const s = String(text || "");
+  const words = s.trim() ? s.trim().split(/\s+/).length : 0;
+  return { chars: s.length, words };
+}
+
+function formatNotesDateStamp() {
+  const d = new Date();
+  try {
+    return d.toLocaleString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZoneName: "short",
+    });
+  } catch {
+    return d.toLocaleString();
+  }
 }
 
 function formatNotesUpdatedLabel(iso) {
@@ -1882,10 +2454,15 @@ function syncNotesUpdatedFooter(section, notes) {
   if (!section) return;
   const footer = $(".notes-tile-footer", section);
   const label = $(".notes-updated-label", section);
+  const statsEl = $(".notes-stats-label", section);
   if (!footer || !label) return;
   const text = formatNotesUpdatedLabel(notes.updatedAt);
   label.textContent = text ? `Last updated ${text}` : "Not saved yet";
   footer.title = text ? `Last saved to server: ${text}` : "Saves automatically to the server";
+  if (statsEl) {
+    const { words, chars } = notesTextStats(notes.content);
+    statsEl.textContent = `${words} words · ${chars} characters`;
+  }
 }
 
 function touchNotesTile(notes) {
@@ -1905,7 +2482,7 @@ function buildUserProfilePayload() {
     calendarTiles: state.calendarTiles.map((c) => stripCalendarRuntimeFields(c)),
     notesTiles: state.notesTiles.map((n) => stripNotesRuntimeFields(n)),
     groupTemplates: state.groupTemplates,
-    hiddenFeedKeys: [...state.hiddenFeedKeys],
+    hiddenFeedKeys: serializeHiddenFeedEntries(),
     feedKeywordFilter: state.feedKeywordFilter || "",
   };
 }
@@ -1939,10 +2516,6 @@ function applyUserProfile(profile) {
     : [];
 
   state.groupTemplates = Array.isArray(profile.groupTemplates) ? profile.groupTemplates : [];
-  state.hiddenFeedKeys = new Set(
-    Array.isArray(profile.hiddenFeedKeys) ? profile.hiddenFeedKeys.map(String) : []
-  );
-  state.feedKeywordFilter = String(profile.feedKeywordFilter || "");
 }
 
 function persistProfileToLocalStorage() {
@@ -1973,7 +2546,7 @@ function loadLocalUserProfileBundle() {
     calendarTiles: loadCalendarsFromStorage(),
     notesTiles: loadNotesTilesFromStorage(),
     groupTemplates: loadGroupTemplates(),
-    hiddenFeedKeys: [...loadHiddenFeedKeys()],
+    hiddenFeedKeys: hiddenFeedEntriesToPayload(loadHiddenFeedEntriesFromStorage()),
     feedKeywordFilter: localStorage.getItem(FEED_KEYWORD_STORAGE_KEY) || "",
   };
 }
@@ -1996,11 +2569,7 @@ async function loadUserProfileFromServer() {
   if (profileHasDashboardData(serverProfile)) {
     applyUserProfile(serverProfile);
     persistProfileToLocalStorage();
-    userProfileReady = true;
-    return;
-  }
-
-  if (
+  } else if (
     localBundle.groups.length ||
     localBundle.calendarTiles.length ||
     localBundle.notesTiles.length ||
@@ -2012,23 +2581,24 @@ async function loadUserProfileFromServer() {
     } catch {
       /* keep local */
     }
-    userProfileReady = true;
-    return;
+    persistProfileToLocalStorage();
+  } else {
+    applyUserProfile({
+      groups: [
+        newGroup({ name: "Open pipeline", dealStatus: "open", groupBy: "stage" }),
+        newGroup({ name: "Tagged deals", dealStatus: "all", groupBy: "tag", tagTitles: [] }),
+      ],
+      tileLayout: { order: [], widths: {}, heights: {}, collapsed: {} },
+      calendarTiles: [],
+      notesTiles: [],
+      groupTemplates: [],
+    });
+    persistProfileToLocalStorage();
   }
 
-  applyUserProfile({
-    groups: [
-      newGroup({ name: "Open pipeline", dealStatus: "open", groupBy: "stage" }),
-      newGroup({ name: "Tagged deals", dealStatus: "all", groupBy: "tag", tagTitles: [] }),
-    ],
-    tileLayout: { order: [], widths: {}, heights: {}, collapsed: {} },
-    calendarTiles: [],
-    notesTiles: [],
-    groupTemplates: [],
-    hiddenFeedKeys: [],
-    feedKeywordFilter: "",
-  });
-  persistProfileToLocalStorage();
+  if (serverProfile) applyFeedUserPreferences(serverProfile);
+  else applyFeedUserPreferences(localBundle);
+
   userProfileReady = true;
 }
 
@@ -2097,6 +2667,7 @@ function renderBasicMarkdown(text) {
   const out = [];
   let inUl = false;
   let inOl = false;
+  let inCheck = false;
 
   const closeLists = () => {
     if (inUl) {
@@ -2107,11 +2678,16 @@ function renderBasicMarkdown(text) {
       out.push("</ol>");
       inOl = false;
     }
+    if (inCheck) {
+      out.push("</ul>");
+      inCheck = false;
+    }
   };
 
   const inlineFormat = (raw) => {
     let s = escapeHtml(raw);
     s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+    s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>");
     s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     s = s.replace(/\*([^*]+)\*/g, "<em>$1</em>");
     s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label, url) => {
@@ -2119,16 +2695,28 @@ function renderBasicMarkdown(text) {
       if (!/^https?:\/\//i.test(href) && !/^mailto:/i.test(href)) return escapeHtml(label);
       return `<a href="${href}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
     });
+    s = s.replace(
+      /(https?:\/\/[^\s<]+[^\s<.,;:!?)\]'"])/gi,
+      (url) =>
+        `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>`
+    );
     return s;
   };
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     const trimmed = line.trimEnd();
-    if (!trimmed.trim()) {
+    const compact = trimmed.trim();
+    if (!compact) {
       closeLists();
       continue;
     }
-    const hm = trimmed.match(/^(#{1,3})\s+(.+)$/);
+    if (/^---+$/.test(compact) || /^\*\*\*+$/.test(compact)) {
+      closeLists();
+      out.push('<hr class="notes-md-hr" />');
+      continue;
+    }
+    const hm = compact.match(/^(#{1,3})\s+(.+)$/);
     if (hm) {
       closeLists();
       const level = hm[1].length;
@@ -2140,31 +2728,192 @@ function renderBasicMarkdown(text) {
       out.push(`<blockquote class="notes-md-quote">${inlineFormat(trimmed.replace(/^>\s?/, ""))}</blockquote>`);
       continue;
     }
-    const ulm = trimmed.match(/^[-*+]\s+(.+)$/);
+    const checkm = compact.match(/^-\s+\[([ xX])\]\s*(.*)$/);
+    if (checkm) {
+      if (!inCheck) {
+        closeLists();
+        out.push('<ul class="notes-md-checklist">');
+        inCheck = true;
+      }
+      const checked = checkm[1].toLowerCase() === "x";
+      const body = checkm[2] || "";
+      out.push(
+        `<li class="notes-md-check-item" data-line="${i}"><label class="notes-md-check-label"><input type="checkbox" class="notes-md-check-input" data-line="${i}"${checked ? " checked" : ""} /><span class="notes-md-check-text">${inlineFormat(body) || "&nbsp;"}</span></label></li>`
+      );
+      continue;
+    }
+    const ulm = compact.match(/^[-*+]\s+(.+)$/);
     if (ulm) {
       if (!inUl) {
         closeLists();
-        out.push("<ul class=\"notes-md-list\">");
+        out.push('<ul class="notes-md-list">');
         inUl = true;
       }
       out.push(`<li>${inlineFormat(ulm[1])}</li>`);
       continue;
     }
-    const olm = trimmed.match(/^\d+\.\s+(.+)$/);
+    const olm = compact.match(/^\d+\.\s+(.+)$/);
     if (olm) {
       if (!inOl) {
         closeLists();
-        out.push("<ol class=\"notes-md-list\">");
+        out.push('<ol class="notes-md-list">');
         inOl = true;
       }
       out.push(`<li>${inlineFormat(olm[1])}</li>`);
       continue;
     }
     closeLists();
-    out.push(`<p>${inlineFormat(trimmed)}</p>`);
+    out.push(`<p>${inlineFormat(compact)}</p>`);
   }
   closeLists();
   return out.join("") || '<p class="notes-md-empty">Nothing to preview yet.</p>';
+}
+
+function toggleNotesCheckboxLine(notes, lineIndex, checked) {
+  const lines = String(notes.content || "").split(/\r?\n/);
+  if (lineIndex < 0 || lineIndex >= lines.length) return false;
+  const line = lines[lineIndex];
+  const m = line.match(/^(\s*-\s+\[)[ xX](\]\s*.*)$/);
+  if (!m) return false;
+  lines[lineIndex] = `${m[1]}${checked ? "x" : " "}${m[2]}`;
+  notes.content = lines.join("\n");
+  return true;
+}
+
+function insertNotesEditorText(editor, insert) {
+  if (!editor) return;
+  const start = editor.selectionStart ?? editor.value.length;
+  const end = editor.selectionEnd ?? start;
+  const val = editor.value;
+  editor.value = val.slice(0, start) + insert + val.slice(end);
+  const pos = start + insert.length;
+  editor.selectionStart = editor.selectionEnd = pos;
+  editor.focus();
+}
+
+function downloadNotesFile(notes, ext) {
+  const body = notes.content || "";
+  const type = ext === "md" ? "text/markdown;charset=utf-8" : "text/plain;charset=utf-8";
+  const blob = new Blob([body], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${notesFilenameSafe(notes.name)}.${ext}`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast(`Downloaded .${ext}`);
+}
+
+function printNotesPreview(section, notes) {
+  const preview = $(".notes-preview", section);
+  if (!preview) return;
+  const w = window.open("", "_blank", "noopener,noreferrer");
+  if (!w) {
+    showToast("Allow pop-ups to print", true);
+    return;
+  }
+  const title = escapeHtml(notes.name || "Notes");
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>
+<style>
+body{font:14px/1.5 system-ui,sans-serif;margin:1.25rem;color:#111;}
+h1{font-size:1.25rem;margin:0 0 1rem;}
+hr{border:none;border-top:1px solid #ccc;margin:1rem 0;}
+ul,ol{margin:0.35rem 0 0.35rem 1.25rem;}
+del{opacity:0.65;}
+code{background:#f0f0f0;padding:0.1em 0.3em;border-radius:3px;}
+blockquote{border-left:3px solid #ccc;margin:0.5rem 0;padding-left:0.75rem;color:#444;}
+.notes-md-checklist{list-style:none;padding-left:0;}
+.notes-md-check-label{display:flex;gap:0.5rem;align-items:flex-start;}
+@media print{body{margin:0.75rem;}}
+</style></head><body>
+<h1>${title}</h1>
+${preview.innerHTML}
+</body></html>`);
+  w.document.close();
+  w.focus();
+  w.print();
+}
+
+async function copyNotesClipboard(text, okMessage) {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(okMessage || "Copied to clipboard");
+  } catch {
+    showToast("Could not copy to clipboard", true);
+  }
+}
+
+async function openQuickNoteModalFromNotes(notes) {
+  await openQuickNoteModal();
+  const bodyEl = $("#quick-note-note-body");
+  if (bodyEl && notes.content) bodyEl.value = notes.content;
+}
+
+function applyNotesTileAccent(section, notes) {
+  const accent = String(notes.accent || "").trim();
+  if (accent) {
+    section.dataset.accent = "1";
+    section.style.setProperty("--notes-accent", accent);
+  } else {
+    delete section.dataset.accent;
+    section.style.removeProperty("--notes-accent");
+  }
+}
+
+function duplicateNotesTile(notes) {
+  const copy = newNotesTile({
+    name: `${notes.name || "Notes"} (copy)`,
+    content: notes.content || "",
+    viewMode: notes.viewMode,
+    defaultViewMode: notes.defaultViewMode,
+    accent: notes.accent || "",
+    updatedAt: new Date().toISOString(),
+  });
+  state.notesTiles.push(copy);
+  const tid = notesTileId(copy);
+  if (!state.tileLayout.order.includes(tid)) state.tileLayout.order.push(tid);
+  saveLayoutToStorage();
+  scheduleUserProfileSave();
+  renderBoardGroups();
+  showToast("Notes tile duplicated");
+}
+
+async function removeNotesTile(notes) {
+  const label = notes.name?.trim() || "this notes tile";
+  const ok = await confirmDialog({
+    title: "Remove notes tile?",
+    message: `Remove “${label}” from the dashboard? This cannot be undone.`,
+    confirmLabel: "Remove",
+    danger: true,
+  });
+  if (!ok) return;
+  const tid = notesTileId(notes);
+  state.notesTiles = state.notesTiles.filter((n) => n.id !== notes.id);
+  state.tileLayout.order = state.tileLayout.order.filter((id) => id !== tid);
+  delete state.tileLayout.widths[tid];
+  delete state.tileLayout.heights[tid];
+  delete state.tileLayout.collapsed?.[tid];
+  saveLayoutToStorage();
+  scheduleUserProfileSave();
+  renderBoardGroups();
+  showToast("Notes tile removed");
+}
+
+function bindNotesPreviewInteractions(section, notes) {
+  if (!section || section.dataset.notesCheckBound) return;
+  section.dataset.notesCheckBound = "1";
+  section.addEventListener("change", (e) => {
+    const cb = e.target.closest(".notes-md-check-input");
+    if (!cb || !section.contains(cb)) return;
+    const lineIndex = Number(cb.dataset.line);
+    if (!Number.isFinite(lineIndex)) return;
+    const editor = $(".notes-editor", section);
+    if (toggleNotesCheckboxLine(notes, lineIndex, cb.checked)) {
+      if (editor) editor.value = notes.content;
+      scheduleNotesTileSave(notes);
+      syncNotesTileBody(section, notes);
+    }
+  });
 }
 
 function scheduleNotesTileSave(notes) {
@@ -2206,60 +2955,197 @@ function bindNotesTileChrome(section, notes, tileId) {
   nameInput.value = notes.name || "";
   nameInput.setAttribute("aria-label", "Notes label");
 
-  const copyBtn = document.createElement("button");
-  copyBtn.type = "button";
-  copyBtn.className = "btn btn-ghost btn-notes-copy";
-  copyBtn.textContent = "Copy all";
-  copyBtn.title = "Copy all text to clipboard";
+  const utils = document.createElement("div");
+  utils.className = "notes-tile-utils";
 
-  const editBtn = document.createElement("button");
-  editBtn.type = "button";
-  editBtn.className = "btn btn-ghost btn-notes-mode";
+  const mkTextBtn = (label, className, title) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = `btn btn-ghost ${className}`;
+    b.textContent = label;
+    if (title) b.title = title;
+    return b;
+  };
+
+  const fileMenu = createTileMenu({
+    label: "File",
+    className: "btn-notes-file-menu",
+    items: [
+      {
+        label: "Save as .txt",
+        onSelect: () => downloadNotesFile(notes, "txt"),
+      },
+      {
+        label: "Save as .md",
+        onSelect: () => downloadNotesFile(notes, "md"),
+      },
+      {
+        label: "Archive",
+        onSelect: () => {
+          archiveNotesTile(notes).catch((err) => showToast(err.message, true));
+        },
+      },
+      {
+        label: "Restore from archive…",
+        onSelect: () => openNotesRestoreFromArchiveModal(notes),
+      },
+      {
+        label: "Duplicate",
+        onSelect: () => duplicateNotesTile(notes),
+      },
+    ],
+  });
+
+  const copyBtn = createTileIconActionButton(
+    TILE_ICON_COPY,
+    "Copy selection, or all if nothing selected",
+    "btn-notes-copy"
+  );
+  const dateBtn = createTileIconActionButton(
+    TILE_ICON_CALENDAR,
+    "Insert date and time at cursor",
+    "btn-notes-date"
+  );
+  const printBtn = createTileIconActionButton(TILE_ICON_PRINT, "Print preview", "btn-notes-print");
+  const crmBtn = createTileIconActionButton(
+    TILE_ICON_NOTE,
+    "Open quick note with this text",
+    "btn-notes-quick-note"
+  );
+
+  const editBtn = mkTextBtn("Edit", "btn-notes-mode", "Edit mode");
   editBtn.dataset.mode = "edit";
-  editBtn.textContent = "Edit";
-
-  const previewBtn = document.createElement("button");
-  previewBtn.type = "button";
-  previewBtn.className = "btn btn-ghost btn-notes-mode";
+  const previewBtn = mkTextBtn("Preview", "btn-notes-mode", "Preview mode");
   previewBtn.dataset.mode = "preview";
-  previewBtn.textContent = "Preview";
 
-  const removeBtn = document.createElement("button");
-  removeBtn.type = "button";
-  removeBtn.className = "btn btn-danger btn-remove-notes";
-  removeBtn.textContent = "Remove";
+  const defaultPreviewBtn = createTileIconActionButton(
+    TILE_ICON_PIN,
+    "Always open this tile in preview on load",
+    "btn-notes-default-preview btn-notes-pin"
+  );
 
-  const { wrap, halfBtn, fullBtn, tallBtn } = createLayoutButtons();
+  const accentSel = document.createElement("select");
+  accentSel.className = "notes-accent-select";
+  accentSel.title = "Tile accent color";
+  accentSel.setAttribute("aria-label", "Accent color");
+  for (const opt of NOTES_ACCENT_OPTIONS) {
+    const o = document.createElement("option");
+    o.value = opt.value;
+    o.textContent = opt.label;
+    accentSel.appendChild(o);
+  }
+  accentSel.value = notes.accent || "";
+
+  const { wrap, quarterBtn, halfBtn, fullBtn, tallBtn } = createLayoutButtons({
+    showDoubleHeight: true,
+    showQuarterWidth: true,
+  });
+
+  utils.append(
+    fileMenu,
+    copyBtn,
+    dateBtn,
+    printBtn,
+    crmBtn,
+    accentSel,
+    defaultPreviewBtn,
+    editBtn,
+    previewBtn
+  );
+
+  const removeBtn = createTileRemoveButton("Remove this notes tile from the dashboard", "btn-remove-notes");
 
   toolbar.appendChild(hint);
   toolbar.appendChild(nameInput);
-  toolbar.appendChild(copyBtn);
-  toolbar.appendChild(editBtn);
-  toolbar.appendChild(previewBtn);
+  toolbar.appendChild(utils);
   toolbar.appendChild(removeBtn);
   toolbar.appendChild(wrap);
 
   section.prepend(toolbar);
-  bindTileLayoutButtons(section, tileId, halfBtn, fullBtn, tallBtn);
+  bindTileLayoutButtons(section, tileId, halfBtn, fullBtn, tallBtn, quarterBtn);
   bindTileDragDrop(section, tileId, toolbar);
   attachTileCollapseButton(section, tileId);
+  bindNotesPreviewInteractions(section, notes);
 
   const syncModeButtons = () => {
     const isPreview = notes.viewMode === "preview";
     editBtn.classList.toggle("tile-btn-active", !isPreview);
     previewBtn.classList.toggle("tile-btn-active", isPreview);
+    defaultPreviewBtn.classList.toggle("tile-btn-active", notes.defaultViewMode === "preview");
     syncNotesTileBody(section, notes);
+    syncNotesUpdatedFooter(section, notes);
   };
 
   copyBtn.addEventListener("click", async (e) => {
     e.stopPropagation();
-    const text = notes.content || "";
-    try {
-      await navigator.clipboard.writeText(text);
-      showToast("Copied to clipboard");
-    } catch {
-      showToast("Could not copy to clipboard", true);
+    const editor = $(".notes-editor", section);
+    let text = notes.content || "";
+    let msg = "Copied all";
+    if (editor && notes.viewMode !== "preview") {
+      const start = editor.selectionStart ?? 0;
+      const end = editor.selectionEnd ?? 0;
+      if (end > start) {
+        text = editor.value.slice(start, end);
+        msg = "Copied selection";
+      }
     }
+    await copyNotesClipboard(text, msg);
+  });
+
+  dateBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const editor = $(".notes-editor", section);
+    const stamp = formatNotesDateStamp();
+    if (editor && notes.viewMode !== "preview") {
+      insertNotesEditorText(editor, stamp);
+      notes.content = editor.value;
+      scheduleNotesTileSave(notes);
+    } else {
+      notes.content = `${notes.content || ""}${notes.content ? "\n" : ""}${stamp}\n`;
+      scheduleNotesTileSave(notes);
+      syncNotesTileBody(section, notes);
+    }
+  });
+
+  printBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (notes.viewMode !== "preview") {
+      notes.viewMode = "preview";
+      saveNotesTilesToStorage();
+      syncModeButtons();
+    }
+    printNotesPreview(section, notes);
+  });
+
+  crmBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openQuickNoteModalFromNotes(notes).catch((err) => showToast(err.message, true));
+  });
+
+  removeBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    removeNotesTile(notes);
+  });
+
+  defaultPreviewBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    notes.defaultViewMode = notes.defaultViewMode === "preview" ? null : "preview";
+    if (notes.defaultViewMode === "preview") notes.viewMode = "preview";
+    scheduleNotesTileSave(notes);
+    syncModeButtons();
+    showToast(
+      notes.defaultViewMode === "preview"
+        ? "Will open in preview on load"
+        : "Default preview on load off"
+    );
+  });
+
+  accentSel.addEventListener("click", (e) => e.stopPropagation());
+  accentSel.addEventListener("change", (e) => {
+    e.stopPropagation();
+    notes.accent = accentSel.value;
+    applyNotesTileAccent(section, notes);
+    scheduleNotesTileSave(notes);
   });
 
   editBtn.addEventListener("click", (e) => {
@@ -2295,30 +3181,13 @@ function bindNotesTileChrome(section, notes, tileId) {
     scheduleNotesTileSave(notes);
   });
 
-  removeBtn.addEventListener("click", async () => {
-    const label = notes.name?.trim() || "this notes tile";
-    const ok = await confirmDialog({
-      title: "Remove notes tile?",
-      message: `Remove “${label}” from the dashboard?`,
-      confirmLabel: "Remove",
-      danger: true,
-    });
-    if (!ok) return;
-    const tid = notesTileId(notes);
-    state.notesTiles = state.notesTiles.filter((n) => n.id !== notes.id);
-    state.tileLayout.order = state.tileLayout.order.filter((id) => id !== tid);
-    delete state.tileLayout.widths[tid];
-    delete state.tileLayout.heights[tid];
-    saveLayoutToStorage();
-    scheduleUserProfileSave();
-    renderBoardGroups();
-  });
-
+  applyNotesTileAccent(section, notes);
   syncModeButtons();
 }
 
 function renderNotesTiles(dash) {
-  for (const notes of state.notesTiles) {
+  for (const notes of activeNotesTiles()) {
+    applyNotesDefaultViewOnLoad(notes);
     const tileId = notesTileId(notes);
     const section = document.createElement("section");
     section.className = "dashboard-tile board-group board-group-tile notes-tile";
@@ -2327,9 +3196,12 @@ function renderNotesTiles(dash) {
     section.dataset.notesId = notes.id;
     section.innerHTML = `
       <div class="notes-tile-body">
-        <textarea class="notes-editor" placeholder="Write notes or to-dos… Markdown: **bold**, *italic*, \`code\`, # headings, - lists, [links](url)" spellcheck="true"></textarea>
+        <textarea class="notes-editor" placeholder="Notes &amp; to-dos — **bold**, *italic*, ~~strike~~, \`code\`, # headings, - [ ] tasks, --- rules, URLs auto-link" spellcheck="true"></textarea>
         <div class="notes-preview hidden" aria-live="polite"></div>
-        <div class="notes-tile-footer" aria-live="polite"><span class="notes-updated-label"></span></div>
+        <div class="notes-tile-footer" aria-live="polite">
+          <span class="notes-stats-label"></span>
+          <span class="notes-updated-label"></span>
+        </div>
       </div>
     `;
     dash.appendChild(section);
@@ -2683,29 +3555,35 @@ function resolveHistoryCategoryId(selectedValue) {
   );
 }
 
-function populateDealEditNoteCategorySelect() {
-  const sel = $("#deal-edit-note-category");
-  const field = $("#deal-edit-note-category-field");
-  if (!sel) return;
+function populateHistoryCategorySelect(selectEl, fieldWrapEl) {
+  if (!selectEl) return;
 
-  sel.innerHTML = "";
+  selectEl.innerHTML = "";
   const cats = state.historyCategories;
   if (!cats.length) {
-    if (field) field.classList.add("hidden");
+    if (fieldWrapEl) fieldWrapEl.classList.add("hidden");
     return;
   }
 
-  if (field) field.classList.toggle("hidden", cats.length <= 1);
+  if (fieldWrapEl) fieldWrapEl.classList.toggle("hidden", cats.length <= 1);
 
   for (const cat of cats) {
     const opt = document.createElement("option");
     opt.value = String(cat.id ?? cat.ID ?? "");
     opt.textContent = cat.title || cat.Title || opt.value;
-    sel.appendChild(opt);
+    selectEl.appendChild(opt);
   }
 
   const preferred = cats.findIndex((c) => /note|event|comment/i.test(String(c.title || c.Title || "")));
-  sel.selectedIndex = preferred >= 0 ? preferred : 0;
+  selectEl.selectedIndex = preferred >= 0 ? preferred : 0;
+}
+
+function populateDealEditNoteCategorySelect() {
+  populateHistoryCategorySelect($("#deal-edit-note-category"), $("#deal-edit-note-category-field"));
+}
+
+function populateQuickNoteCategorySelect() {
+  populateHistoryCategorySelect($("#quick-note-note-category"), $("#quick-note-note-category-field"));
 }
 
 function dealEditStepError(step, err) {
@@ -3052,7 +3930,6 @@ async function loadOpportunityCustomFieldDefs(force = false) {
 }
 
 const CHECKLIST_STAGE_TITLE = "New Supplement Project - Estimate Needed";
-const CHECKLIST_FIELD_NAMES = ["Measurement Report", "Insurance Documents", "Inspection Photos"];
 
 function findCustomFieldEntry(opp, ...namePatterns) {
   const lists = [
@@ -3118,7 +3995,7 @@ function isChecklistStage(opp) {
 
 function needsMissingChecklistWarning(opp) {
   if (!isChecklistStage(opp)) return false;
-  return CHECKLIST_FIELD_NAMES.some((name) => !isCustomFieldChecked(opp, name));
+  return opportunityChecklistFieldLabels().some((name) => !isCustomFieldChecked(opp, name));
 }
 
 function getOppCustomFieldValue(opp, ...namePatterns) {
@@ -3170,10 +4047,30 @@ function appendCardDetailLine(container, label, value) {
   container.appendChild(line);
 }
 
+const CARD_ICON_PREVIEW_SCREEN = `<svg class="card-action-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>`;
+
 function renderCard(opp, group, showStagePill) {
   const card = document.createElement("article");
   card.className = "card";
   card.dataset.opportunityId = opp.id;
+
+  const actions = document.createElement("div");
+  actions.className = "card-actions";
+
+  const previewBtn = document.createElement("button");
+  previewBtn.type = "button";
+  previewBtn.className = "card-preview-btn";
+  previewBtn.title = "Preview deal";
+  previewBtn.setAttribute("aria-label", "Preview deal");
+  previewBtn.innerHTML = CARD_ICON_PREVIEW_SCREEN;
+  previewBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const id = opp.id ?? opp.ID;
+    openOpportunityPreviewModal(id, opp.title || opp.Title || "", group).catch((err) =>
+      showToast(err.message, true)
+    );
+  });
 
   const editBtn = document.createElement("button");
   editBtn.type = "button";
@@ -3186,7 +4083,10 @@ function renderCard(opp, group, showStagePill) {
     e.stopPropagation();
     openDealEditModal(opp, group).catch((err) => showToast(err.message, true));
   });
-  card.appendChild(editBtn);
+
+  actions.appendChild(previewBtn);
+  actions.appendChild(editBtn);
+  card.appendChild(actions);
 
   const title = document.createElement("h3");
   title.className = "card-title";
@@ -3227,15 +4127,18 @@ function renderCard(opp, group, showStagePill) {
     details.appendChild(desc);
   }
 
-  const crmJobId = getOppCustomFieldValue(opp, "crm job/id", "crm job", "job/id");
-  if (crmJobId) appendCardDetailLine(details, "CRM Job/ID", crmJobId);
+  const customFieldsReady = opportunityHasCustomFieldLists(opp);
+  if (customFieldsReady) {
+    const crmJobId = getOppCustomFieldValue(opp, "crm job/id", "crm job", "job/id");
+    if (crmJobId) appendCardDetailLine(details, "CRM Job/ID", crmJobId);
 
-  const insuranceCarrier = getOppCustomFieldValue(opp, "insurance carrier");
-  if (insuranceCarrier) appendCardDetailLine(details, "Insurance Carrier", insuranceCarrier);
+    const insuranceCarrier = getOppCustomFieldValue(opp, "insurance carrier");
+    if (insuranceCarrier) appendCardDetailLine(details, "Insurance Carrier", insuranceCarrier);
 
-  const supplementRequest = getOppCustomFieldValue(opp, "supplement request");
-  if (!supplementRequest) {
-    appendCardDetailLine(details, null, "No Supp Request");
+    const supplementRequest = getOppCustomFieldValue(opp, "supplement request");
+    if (!supplementRequest) {
+      appendCardDetailLine(details, null, "No Supp Request");
+    }
   }
 
   card.appendChild(title);
@@ -3249,7 +4152,7 @@ function renderCard(opp, group, showStagePill) {
     card.appendChild(pill);
   }
 
-  if (needsMissingChecklistWarning(opp)) {
+  if (customFieldsReady && needsMissingChecklistWarning(opp)) {
     const warn = document.createElement("p");
     warn.className = "card-checklist-warn";
     warn.textContent = "Missing Checklist info";
@@ -3268,6 +4171,7 @@ function renderCard(opp, group, showStagePill) {
 }
 
 function renderGroupBoard(group, container) {
+  disconnectGroupCardObserver(group.id);
   container.innerHTML = "";
   const columns = groupOpportunities(group);
   const showStagePill = group.groupBy !== "stage";
@@ -3304,6 +4208,7 @@ function renderGroupBoard(group, container) {
     column.appendChild(body);
     container.appendChild(column);
   }
+  observeOpportunityCardsInGroup(group);
 }
 
 function tagMultiselectLabel(group) {
@@ -3726,8 +4631,18 @@ function renderBoardGroups() {
     dash.appendChild(section);
     bindGroupTileChrome(section, group, tileId);
     group._el = section;
-    renderGroupBoard(group, $(".board", section));
-    $(".board-group-count", section).textContent = `${group.opportunities.length} deals`;
+    if (tileBodyCollapsed(tileId)) {
+      const board = $(".board", section);
+      if (group.opportunities?.length && board) {
+        renderGroupBoard(group, board);
+        $(".board-group-count", section).textContent = `${group.opportunities.length} deals (cached)`;
+      } else {
+        showTileCollapsedHint(tileId, "Minimized — expand to load deals");
+      }
+    } else {
+      renderGroupBoard(group, $(".board", section));
+      $(".board-group-count", section).textContent = `${group.opportunities.length} deals`;
+    }
     applyTileLayoutClasses(section, tileId);
     applyTileBodyCollapsed(section, tileId);
   }
@@ -4089,16 +5004,68 @@ function applyFeedKeywordFilter(items) {
   });
 }
 
+function newFeedPagination() {
+  return {
+    historyStartIndex: 0,
+    mailPage: 1,
+    historyExhausted: false,
+    mailExhausted: false,
+    historySeen: new Set(),
+    rawItems: [],
+    loadingMore: false,
+  };
+}
+
+function feedCanLoadMore() {
+  const p = state.feedPagination;
+  if (!p) return false;
+  if ((state.feedNotificationsCache || []).length >= FEED_MAX_EVENTS) return false;
+  return !p.historyExhausted || !p.mailExhausted;
+}
+
+function updateFeedLoadMoreUi() {
+  const list = $("#notification-feed");
+  if (!list) return;
+  list.querySelector(".feed-load-more")?.remove();
+  const p = state.feedPagination;
+  if (!p || !feedCanLoadMore()) return;
+  const li = document.createElement("li");
+  li.className = "feed-load-more";
+  const atCap = (state.feedNotificationsCache || []).length >= FEED_MAX_EVENTS;
+  li.textContent = p.loadingMore
+    ? "Loading more…"
+    : atCap
+      ? `Showing the ${FEED_MAX_EVENTS} most recent notifications`
+      : "Scroll for older notifications";
+  list.appendChild(li);
+}
+
+function updateFeedLoadingUi() {
+  const tile = document.querySelector('[data-tile-id="tile-feed"]');
+  const busy = state.feedLoading || state.feedPagination?.loadingMore;
+  const indicator = tile?.querySelector(".feed-loading-indicator");
+  if (indicator) indicator.classList.toggle("hidden", !busy);
+  const hint = tile?.querySelector(".feed-range-hint");
+  if (hint) {
+    hint.textContent = busy ? "Loading…" : `Last ${FEED_DAYS} days`;
+  }
+}
+
 function renderFeedNotificationList() {
   const list = $("#notification-feed");
   if (!list) return;
 
   let items = applyFeedKeywordFilter(state.feedNotificationsCache || []);
   updatePanelTileCount("tile-feed", items.length);
+  updateFeedLoadingUi();
 
   list.innerHTML = "";
   if (!items.length) {
-    const hiddenNote = state.hiddenFeedKeys.size ? " Some are hidden." : "";
+    if (state.feedLoading) {
+      list.innerHTML = '<li class="feed-loading">Loading notifications…</li>';
+      return;
+    }
+    const hiddenNote = state.hiddenFeedEntries.size ? " Some are hidden." : "";
     const kwNote = state.feedKeywordFilter?.trim() ? " Try clearing the keyword filter." : "";
     list.innerHTML = `<li>No new CRM events in the last ${FEED_DAYS} days.${hiddenNote}${kwNote}</li>`;
     return;
@@ -4107,6 +5074,21 @@ function renderFeedNotificationList() {
   for (const it of items) {
     list.appendChild(renderFeedNotificationItem(it));
   }
+  updateFeedLoadMoreUi();
+}
+
+function bindFeedInfiniteScroll() {
+  const list = $("#notification-feed");
+  if (!list || list.dataset.infiniteBound) return;
+  list.dataset.infiniteBound = "1";
+  list.addEventListener(
+    "scroll",
+    () => {
+      if (list.scrollTop + list.clientHeight < list.scrollHeight - 72) return;
+      loadMoreNotificationFeed().catch((err) => showToast(err.message, true));
+    },
+    { passive: true }
+  );
 }
 
 function tryAddRelationshipNotifyEvent(items, seen, ev, periodFrom) {
@@ -4124,76 +5106,273 @@ function tryAddRelationshipNotifyEvent(items, seen, ev, periodFrom) {
   items.push(parsed);
 }
 
-async function loadNotifyEventsForOpportunityIds(periodFrom, items, seen) {
-  const oppIds = new Set();
-  for (const g of state.groups) {
-    for (const o of g.opportunities || []) {
-      const id = o.id ?? o.ID;
-      if (id != null) oppIds.add(Number(id));
-    }
+async function fetchFeedHistoryBatch(periodFrom, pagination) {
+  const items = [];
+  if (!pagination || pagination.historyExhausted) return items;
+
+  const params = new URLSearchParams({
+    startIndex: String(pagination.historyStartIndex),
+    count: String(FEED_HISTORY_PAGE_SIZE),
+    entityType: "opportunity",
+  });
+
+  let rows = [];
+  try {
+    rows = unwrapHistoryEvents(await api(`/api/2.0/crm/history/filter?${params}`));
+  } catch {
+    pagination.historyExhausted = true;
+    return items;
   }
-  if (!oppIds.size) {
+
+  if (!rows.length && pagination.historyStartIndex === 0) {
     try {
-      const qs = new URLSearchParams({ startIndex: "0", count: "200", stageType: "0" });
-      const data = await api(`/api/2.0/crm/opportunity/filter?${qs}`);
-      for (const o of unwrap(data)) {
-        const id = o.id ?? o.ID;
-        if (id != null) {
-          oppIds.add(Number(id));
-          indexOpportunity(o);
-        }
-      }
+      const fallback = new URLSearchParams({
+        startIndex: "0",
+        count: String(FEED_HISTORY_PAGE_SIZE),
+      });
+      rows = unwrapHistoryEvents(await api(`/api/2.0/crm/history/filter?${fallback}`));
     } catch {
-      /* optional */
+      pagination.historyExhausted = true;
+      return items;
     }
   }
 
-  const ids = [...oppIds].filter((id) => Number.isFinite(id) && id > 0).slice(0, 120);
-  const concurrency = 10;
-  for (let i = 0; i < ids.length; i += concurrency) {
-    await Promise.all(
-      ids.slice(i, i + concurrency).map(async (oppId) => {
-        try {
-          const params = new URLSearchParams({
-            startIndex: "0",
-            count: "40",
-            entityType: "opportunity",
-            entityId: String(oppId),
-          });
-          const data = await api(`/api/2.0/crm/history/filter?${params}`);
-          for (const ev of unwrapHistoryEvents(data)) {
-            tryAddRelationshipNotifyEvent(items, seen, ev, periodFrom);
-          }
-        } catch {
-          /* per-deal optional */
-        }
+  for (const ev of rows) {
+    tryAddRelationshipNotifyEvent(items, pagination.historySeen, ev, periodFrom);
+  }
+
+  pagination.historyStartIndex += rows.length;
+  if (rows.length < FEED_HISTORY_PAGE_SIZE) pagination.historyExhausted = true;
+  return items;
+}
+
+async function loadCrmRelationshipNotifyEventsBulk(periodFrom, pagination) {
+  const items = [];
+  let maxRows = 0;
+
+  const primary = new URLSearchParams({
+    startIndex: "0",
+    count: String(FEED_MAX_EVENTS),
+    entityType: "opportunity",
+  });
+  try {
+    const rows = unwrapHistoryEvents(await api(`/api/2.0/crm/history/filter?${primary}`));
+    maxRows = rows.length;
+    for (const ev of rows) {
+      tryAddRelationshipNotifyEvent(items, pagination.historySeen, ev, periodFrom);
+    }
+  } catch {
+    /* history optional */
+  }
+
+  if (!maxRows) {
+    try {
+      const fallback = new URLSearchParams({ startIndex: "0", count: String(FEED_MAX_EVENTS) });
+      const rows = unwrapHistoryEvents(await api(`/api/2.0/crm/history/filter?${fallback}`));
+      maxRows = rows.length;
+      for (const ev of rows) {
+        tryAddRelationshipNotifyEvent(items, pagination.historySeen, ev, periodFrom);
+      }
+    } catch {
+      /* try next query shape */
+    }
+  }
+
+  pagination.historyStartIndex = Math.max(pagination.historyStartIndex, maxRows);
+  pagination.historyExhausted = true;
+
+  return items;
+}
+
+async function fetchFeedMailInitial(periodFrom, existingRaw = []) {
+  const items = [];
+  const seen = new Set();
+  const myUserName = (state.currentUser?.userName || state.currentUser?.UserName || "").toLowerCase();
+  const queries = [];
+  const mailPageSize = Math.min(FEED_MAIL_PAGE_SIZE, FEED_MAX_EVENTS);
+
+  for (const search of FEED_MAIL_SEARCHES) {
+    queries.push(
+      new URLSearchParams({
+        search,
+        page_size: String(mailPageSize),
+        sortorder: "descending",
+        page: "1",
+        period_from: new Date(periodFrom).toISOString(),
+      }),
+      new URLSearchParams({
+        search,
+        page_size: String(mailPageSize),
+        sortorder: "descending",
+        page: "1",
       })
     );
   }
-}
 
-async function loadCrmRelationshipNotifyEvents(periodFrom) {
-  const items = [];
-  const seen = new Set();
+  const atFeedCap = () => buildFeedNotificationList([...existingRaw, ...items]).length >= FEED_MAX_EVENTS;
 
-  const queries = [
-    new URLSearchParams({ startIndex: "0", count: "500", entityType: "opportunity" }),
-    new URLSearchParams({ startIndex: "0", count: "500" }),
-  ];
-
-  for (const params of queries) {
+  for (const q of queries) {
+    if (atFeedCap()) break;
     try {
-      const data = await api(`/api/2.0/crm/history/filter?${params}`);
-      for (const ev of unwrapHistoryEvents(data)) {
-        tryAddRelationshipNotifyEvent(items, seen, ev, periodFrom);
+      const rows = unwrap(await api(`/api/2.0/mail/messages?${q}`));
+      for (const mail of rows) {
+        if (atFeedCap()) break;
+        const parsed = parseMailNotifyMessage(mail);
+        if (!parsed) continue;
+        if (!isWithinFeedWindow(parsed.date)) continue;
+        const fromAddr = String(
+          (typeof mail.from === "string" ? mail.from : mail.from?.email || mail.from?.Email) || ""
+        ).toLowerCase();
+        if (myUserName && fromAddr && fromAddr === myUserName) continue;
+        const dedupe = `${parsed.id}-${parsed.text}-${parsed.author}-${parsed.date || ""}`;
+        if (seen.has(dedupe)) continue;
+        seen.add(dedupe);
+        items.push(parsed);
       }
     } catch {
-      /* try next */
+      /* try next query */
     }
   }
 
-  await loadNotifyEventsForOpportunityIds(periodFrom, items, seen);
   return items;
+}
+
+async function fetchFeedMailBatch(periodFrom, pagination) {
+  const items = [];
+  if (!pagination || pagination.mailExhausted) return items;
+
+  const myUserName = (state.currentUser?.userName || state.currentUser?.UserName || "").toLowerCase();
+  const q = new URLSearchParams({
+    search: FEED_MAIL_SEARCH,
+    page_size: String(FEED_MAIL_PAGE_SIZE),
+    sortorder: "descending",
+    page: String(pagination.mailPage),
+    period_from: new Date(periodFrom).toISOString(),
+  });
+
+  let rows = [];
+  try {
+    rows = unwrap(await api(`/api/2.0/mail/messages?${q}`));
+  } catch {
+    pagination.mailExhausted = true;
+    return items;
+  }
+
+  for (const mail of rows) {
+    const parsed = parseMailNotifyMessage(mail);
+    if (!parsed) continue;
+    if (!isWithinFeedWindow(parsed.date)) continue;
+    const fromAddr = String(
+      (typeof mail.from === "string" ? mail.from : mail.from?.email || mail.from?.Email) || ""
+    ).toLowerCase();
+    if (myUserName && fromAddr && fromAddr === myUserName) continue;
+    items.push(parsed);
+  }
+
+  pagination.mailPage += 1;
+  if (rows.length < FEED_MAIL_PAGE_SIZE) pagination.mailExhausted = true;
+  return items;
+}
+
+function commitFeedRawItems(rawItems) {
+  state.feedRawItems = rawItems;
+  let unique = buildFeedNotificationList(rawItems);
+  const atCap = unique.length >= FEED_MAX_EVENTS;
+  if (atCap) unique = unique.slice(0, FEED_MAX_EVENTS);
+  if (atCap && state.feedPagination) {
+    state.feedPagination.historyExhausted = true;
+    state.feedPagination.mailExhausted = true;
+  }
+  applyFeedNotificationCache(unique);
+}
+
+async function loadMoreNotificationFeed() {
+  const p = state.feedPagination;
+  if (!p || p.loadingMore || !feedCanLoadMore()) return;
+  if ((state.feedNotificationsCache || []).length >= FEED_MAX_EVENTS) return;
+  p.loadingMore = true;
+  updateFeedLoadingUi();
+  updateFeedLoadMoreUi();
+
+  const periodFrom = feedWindowStart();
+  try {
+    let batch = [];
+    if (!p.historyExhausted) {
+      batch = await fetchFeedHistoryBatch(periodFrom, p);
+    } else if (!p.mailExhausted) {
+      batch = await fetchFeedMailBatch(periodFrom, p);
+    }
+    if (batch.length) {
+      p.rawItems.push(...batch);
+      commitFeedRawItems(p.rawItems);
+    } else if (!feedCanLoadMore()) {
+      updateFeedLoadMoreUi();
+    }
+  } finally {
+    p.loadingMore = false;
+    updateFeedLoadingUi();
+    updateFeedLoadMoreUi();
+  }
+}
+
+function isFeedCacheFresh() {
+  return (
+    state.feedFetchedAt != null &&
+    Date.now() - state.feedFetchedAt < FEED_CACHE_TTL_MS &&
+    state.feedNotificationsCache.length > 0 &&
+    state.feedPagination != null
+  );
+}
+
+function buildFeedNotificationList(rawItems) {
+  const mergedByEvent = new Map();
+  for (const it of rawItems) {
+    const mergeKey = `${it.id}-${(it.text || "").slice(0, 60)}-${it.author}`;
+    const prev = mergedByEvent.get(mergeKey);
+    if (!prev || (prev.source === "history" && it.source === "mail")) {
+      mergedByEvent.set(mergeKey, it);
+    }
+  }
+
+  const seen = new Set();
+  const unique = [];
+  for (const it of mergedByEvent.values()) {
+    const key = feedNotificationKey(it);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (isFeedKeyHidden(key)) {
+      const entry = state.hiddenFeedEntries.get(key);
+      if (entry) {
+        entry.snapshot = {
+          id: it.id,
+          title: it.title,
+          text: it.text,
+          author: it.author,
+          date: it.date,
+        };
+      }
+      continue;
+    }
+    unique.push({ ...it, key });
+  }
+
+  unique.sort((a, b) => {
+    const da = a.date ? new Date(a.date).getTime() : 0;
+    const db = b.date ? new Date(b.date).getTime() : 0;
+    return db - da;
+  });
+
+  return unique;
+}
+
+function applyFeedNotificationCache(unique) {
+  state.feedNotificationsCache = unique;
+  state.feedFetchedAt = Date.now();
+  const hiddenCountBefore = state.hiddenFeedEntries.size;
+  pruneHiddenFeedEntries();
+  if (state.hiddenFeedEntries.size < hiddenCountBefore) saveHiddenFeedEntries();
+  else updateFeedHiddenToolbarButton();
+  renderFeedNotificationList();
 }
 
 function decodeHtmlEntities(text) {
@@ -4225,7 +5404,7 @@ function isNotifyTemplateSpam(text) {
 }
 
 /** Plain text for feed tiles — strips HTML, wiki/markdown mail templates, and CRM boilerplate. */
-function toPlainDisplayText(raw) {
+function toPlainDisplayText(raw, maxLen = 220) {
   if (raw == null) return "";
   let s = String(raw);
   if (!s.trim()) return "";
@@ -4253,16 +5432,16 @@ function toPlainDisplayText(raw) {
   const added = s.match(/has added a new event[^:]*:\s*(.+)$/i);
   if (added) {
     const inner = added[1].replace(/\s+/g, " ").trim();
-    if (inner && !isNotifyTemplateSpam(inner)) return inner.slice(0, 220);
+    if (inner && !isNotifyTemplateSpam(inner)) return inner.slice(0, maxLen);
   }
 
   const crmLine = s.match(/CRM\.\s*New event added to\s+(.+?)(?:\s{2,}|$)/i);
   if (crmLine) {
     const title = crmLine[1].trim();
-    if (title && !isNotifyTemplateSpam(title)) return title.slice(0, 220);
+    if (title && !isNotifyTemplateSpam(title)) return title.slice(0, maxLen);
   }
 
-  return s.slice(0, 220);
+  return s.slice(0, maxLen);
 }
 
 function parseFeedDate(value) {
@@ -4521,8 +5700,7 @@ function renderFeedNotificationItem(it) {
   hideBtn.setAttribute("aria-label", "Hide notification");
   hideBtn.textContent = "Hide";
   hideBtn.addEventListener("click", () => {
-    state.hiddenFeedKeys.add(it.key);
-    saveHiddenFeedKeys();
+    hideFeedNotification(it);
     state.feedNotificationsCache = state.feedNotificationsCache.filter((n) => n.key !== it.key);
     li.classList.add("feed-item-hiding");
     setTimeout(() => {
@@ -4537,89 +5715,192 @@ function renderFeedNotificationItem(it) {
   return li;
 }
 
-async function loadNotificationFeed() {
+async function loadNotificationFeed({ force = false } = {}) {
   renderFeedTile();
+  if (tileBodyCollapsed("tile-feed")) {
+    showTileCollapsedHint("tile-feed", "Minimized — expand to load notifications");
+    return;
+  }
   const list = $("#notification-feed");
   if (!list) return;
-  list.innerHTML = '<li class="feed-loading">Loading…</li>';
-  updatePanelTileCount("tile-feed", 0);
-  if (!state.hiddenFeedKeys.size) state.hiddenFeedKeys = loadHiddenFeedKeys();
 
-  const myUserName = (state.currentUser?.userName || state.currentUser?.UserName || "").toLowerCase();
+  if (!state.hiddenFeedEntries.size) {
+    state.hiddenFeedEntries = loadHiddenFeedEntriesFromStorage();
+    pruneHiddenFeedEntries();
+  }
+
+  if (!force && isFeedCacheFresh() && state.feedRawItems.length) {
+    renderFeedNotificationList();
+    return;
+  }
+
+  state.feedLoading = true;
+  updateFeedLoadingUi();
+  list.innerHTML = '<li class="feed-loading">Loading notifications…</li>';
+  updatePanelTileCount("tile-feed", 0);
+
   const periodFrom = feedWindowStart();
-  const items = [];
+  const pagination = newFeedPagination();
+  state.feedPagination = pagination;
 
   try {
-    items.push(...(await loadCrmRelationshipNotifyEvents(periodFrom)));
+    const historyItems = await loadCrmRelationshipNotifyEventsBulk(periodFrom, pagination);
+    pagination.rawItems.push(...historyItems);
+
+    const mailItems = await fetchFeedMailInitial(periodFrom, pagination.rawItems);
+    pagination.rawItems.push(...mailItems);
+    pagination.mailPage = 2;
+    if (mailItems.length < FEED_MAIL_PAGE_SIZE) pagination.mailExhausted = true;
+
+    if (!tileBodyCollapsed("tile-feed")) commitFeedRawItems(pagination.rawItems);
   } catch {
-    /* history module optional */
+    if (!tileBodyCollapsed("tile-feed")) commitFeedRawItems(pagination.rawItems);
+  } finally {
+    state.feedLoading = false;
+    updateFeedLoadingUi();
   }
+}
 
-  const mailSearches = ["CRM. New event added to", "CRM New event added to"];
-  const mailQueries = [];
-  for (const search of mailSearches) {
-    mailQueries.push(
-      new URLSearchParams({
-        search,
-        page_size: "60",
-        sortorder: "descending",
-        page: "1",
-        period_from: new Date(periodFrom).toISOString(),
-      }),
-      new URLSearchParams({
-        search,
-        page_size: "60",
-        sortorder: "descending",
-        page: "1",
-      })
-    );
-  }
+function hideFeedNotification(it) {
+  if (!it?.key) return;
+  const prev = state.hiddenFeedEntries.get(it.key);
+  state.hiddenFeedEntries.set(it.key, {
+    hiddenAt: new Date().toISOString(),
+    snapshot: {
+      id: it.id,
+      title: it.title,
+      text: it.text,
+      author: it.author,
+      date: it.date,
+    },
+  });
+  saveHiddenFeedEntries();
+}
 
-  for (const q of mailQueries) {
-    try {
-      const mailData = await api(`/api/2.0/mail/messages?${q}`);
-      for (const mail of unwrap(mailData)) {
-        const parsed = parseMailNotifyMessage(mail);
-        if (!parsed) continue;
-        if (!isWithinFeedWindow(parsed.date)) continue;
-        const fromAddr = String(
-          (typeof mail.from === "string" ? mail.from : mail.from?.email || mail.from?.Email) || ""
-        ).toLowerCase();
-        if (myUserName && fromAddr && fromAddr === myUserName) continue;
-        items.push(parsed);
-      }
-    } catch {
-      /* try next query shape */
-    }
-  }
+function unhideFeedNotification(key) {
+  if (!key) return;
+  state.hiddenFeedEntries.delete(key);
+  saveHiddenFeedEntries();
+}
 
-  const mergedByEvent = new Map();
-  for (const it of items) {
-    const mergeKey = `${it.id}-${(it.text || "").slice(0, 60)}-${it.author}`;
-    const prev = mergedByEvent.get(mergeKey);
-    if (!prev || (prev.source === "history" && it.source === "mail")) {
-      mergedByEvent.set(mergeKey, it);
-    }
-  }
+const FEED_HIDDEN_ICON_HTML = `<svg class="tile-toolbar-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/></svg>`;
 
-  const seen = new Set();
-  const unique = [];
-  for (const it of mergedByEvent.values()) {
-    const key = feedNotificationKey(it);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    if (state.hiddenFeedKeys.has(key)) continue;
-    unique.push({ ...it, key });
-  }
+function updateFeedHiddenToolbarButton() {
+  const btn = document.querySelector(".btn-feed-hidden-toggle");
+  if (!btn) return;
+  pruneHiddenFeedEntries();
+}
 
-  unique.sort((a, b) => {
-    const da = a.date ? new Date(a.date).getTime() : 0;
-    const db = b.date ? new Date(b.date).getTime() : 0;
-    return db - da;
+function ensureFeedHiddenToolbarButton(tileEl) {
+  if (!tileEl || tileEl.dataset.tileId !== "tile-feed") return;
+  const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
+  if (!toolbar || toolbar.querySelector(".btn-feed-hidden-toggle")) return;
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "tile-btn tile-btn-icon btn-feed-hidden-toggle";
+  btn.title = "Show hidden notifications";
+  btn.setAttribute("aria-label", "Show hidden notifications");
+  btn.innerHTML = FEED_HIDDEN_ICON_HTML;
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openFeedHiddenModal();
   });
 
-  state.feedNotificationsCache = unique;
-  renderFeedNotificationList();
+  const refreshBtn = toolbar.querySelector(".btn-tile-refresh");
+  if (refreshBtn) toolbar.insertBefore(btn, refreshBtn);
+  else {
+    const layoutBtns = toolbar.querySelector(".tile-layout-btns");
+    if (layoutBtns) toolbar.insertBefore(btn, layoutBtns);
+    else toolbar.appendChild(btn);
+  }
+  updateFeedHiddenToolbarButton();
+}
+
+function openFeedHiddenModal() {
+  const modal = $("#feed-hidden-modal");
+  if (!modal) return;
+  renderFeedHiddenModalList();
+  modal.classList.remove("hidden");
+}
+
+function closeFeedHiddenModal() {
+  $("#feed-hidden-modal")?.classList.add("hidden");
+}
+
+function renderFeedHiddenModalList() {
+  const list = $("#feed-hidden-list");
+  if (!list) return;
+  pruneHiddenFeedEntries();
+  const entries = [...state.hiddenFeedEntries.entries()].sort((a, b) => {
+    const ta = new Date(a[1].hiddenAt).getTime();
+    const tb = new Date(b[1].hiddenAt).getTime();
+    return tb - ta;
+  });
+
+  list.innerHTML = "";
+  if (!entries.length) {
+    list.innerHTML = `<li class="feed-hidden-empty">No hidden notifications. Hidden items are kept for ${HIDDEN_FEED_RETENTION_DAYS} days.</li>`;
+    return;
+  }
+
+  for (const [key, entry] of entries) {
+    const snap = entry.snapshot || {};
+    const li = document.createElement("li");
+    li.className = "feed-hidden-item";
+
+    const body = document.createElement("div");
+    body.className = "feed-item-body";
+    if (snap.id != null) {
+      const a = document.createElement("a");
+      a.href = crmOpportunityUrl(snap.id);
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = snap.title || `Opportunity #${snap.id}`;
+      body.appendChild(a);
+    } else {
+      const span = document.createElement("span");
+      span.textContent = snap.title || "Notification";
+      body.appendChild(span);
+    }
+    const meta = document.createElement("span");
+    meta.className = "feed-meta";
+    const when = snap.date ? new Date(snap.date).toLocaleString() : "";
+    const hiddenWhen = entry.hiddenAt ? new Date(entry.hiddenAt).toLocaleDateString() : "";
+    meta.textContent = `${snap.author || ""}${when ? " · " + when : ""}${snap.text ? " — " + snap.text : ""}${hiddenWhen ? ` · Hidden ${hiddenWhen}` : ""}`;
+    body.appendChild(meta);
+
+    const restoreBtn = document.createElement("button");
+    restoreBtn.type = "button";
+    restoreBtn.className = "feed-restore-btn";
+    restoreBtn.textContent = "Show";
+    restoreBtn.title = "Show this notification in the feed again";
+    restoreBtn.addEventListener("click", async () => {
+      unhideFeedNotification(key);
+      li.remove();
+      if (!state.hiddenFeedEntries.size) {
+        list.innerHTML = `<li class="feed-hidden-empty">No hidden notifications. Hidden items are kept for ${HIDDEN_FEED_RETENTION_DAYS} days.</li>`;
+      }
+      renderFeedNotificationList();
+    });
+
+    li.appendChild(body);
+    li.appendChild(restoreBtn);
+    list.appendChild(li);
+  }
+}
+
+function bindFeedHiddenModal() {
+  const modal = $("#feed-hidden-modal");
+  if (!modal || modal.dataset.bound) return;
+  modal.dataset.bound = "1";
+  $("#feed-hidden-close")?.addEventListener("click", closeFeedHiddenModal);
+  modal.querySelectorAll("[data-feed-hidden-dismiss]").forEach((el) => {
+    el.addEventListener("click", closeFeedHiddenModal);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && modal && !modal.classList.contains("hidden")) closeFeedHiddenModal();
+  });
 }
 
 const TILE_REFRESH_ICON_HTML = `<svg class="tile-refresh-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M21 21v-5h-5"/></svg>`;
@@ -4642,11 +5923,7 @@ function isDashboardAppVisible() {
 
 async function refreshAutoRefreshTilesQuietly() {
   if (!isDashboardAppVisible() || !isDashboardActivityFresh()) return;
-  const jobs = [loadNotificationFeed(), loadTasks()];
-  for (const cal of state.calendarTiles) {
-    jobs.push(loadCalendarForTile(cal, { quiet: true }));
-  }
-  await Promise.all(jobs);
+  await loadExpandedDashboardTiles({ quiet: true });
 }
 
 function stopPanelTileAutoRefresh() {
@@ -4700,12 +5977,7 @@ function ensureTileAutoRefreshButton(tileEl, tileId) {
     btn.disabled = true;
     btn.classList.add("is-refreshing");
     try {
-      if (tileId === "tile-feed") await loadNotificationFeed();
-      else if (tileId === "tile-tasks") await loadTasks();
-      else {
-        const cal = getCalendarByTileId(tileId);
-        if (cal) await loadCalendarForTile(cal);
-      }
+      await loadTileCrmData(tileId, { force: true });
     } catch (err) {
       showToast(err.message, true);
     } finally {
@@ -4760,14 +6032,16 @@ function tagIdForTitle(title, catalog = buildTagCatalog()) {
   return catalog.byTitleLower.get(key)?.id ?? null;
 }
 
-function renderDealEditTagChips() {
-  const wrap = $("#deal-edit-tags");
-  const addSel = $("#deal-edit-tag-add");
-  if (!wrap || !state.dealEdit) return;
+function renderOpportunityTagChips(mode) {
+  const isQuickNote = mode === "quickNote";
+  const edit = isQuickNote ? state.quickNote : state.dealEdit;
+  const wrap = $(isQuickNote ? "#quick-note-tags" : "#deal-edit-tags");
+  const addSel = $(isQuickNote ? "#quick-note-tag-add" : "#deal-edit-tag-add");
+  if (!wrap || !edit) return;
 
   wrap.innerHTML = "";
   const catalog = buildTagCatalog();
-  const current = new Set(state.dealEdit.tags.map((t) => normalizeTagTitle(t)).filter(Boolean));
+  const current = new Set(edit.tags.map((t) => normalizeTagTitle(t)).filter(Boolean));
 
   for (const title of [...current].sort((a, b) => a.localeCompare(b))) {
     const chip = document.createElement("span");
@@ -4780,8 +6054,8 @@ function renderDealEditTagChips() {
     rm.setAttribute("aria-label", `Remove tag ${title}`);
     rm.textContent = "×";
     rm.addEventListener("click", () => {
-      state.dealEdit.tags = state.dealEdit.tags.filter((t) => !tagsEqual(t, title, catalog));
-      renderDealEditTagChips();
+      edit.tags = edit.tags.filter((t) => !tagsEqual(t, title, catalog));
+      renderOpportunityTagChips(mode);
     });
     chip.appendChild(rm);
     wrap.appendChild(chip);
@@ -4802,6 +6076,14 @@ function renderDealEditTagChips() {
   }
 }
 
+function renderDealEditTagChips() {
+  renderOpportunityTagChips("dealEdit");
+}
+
+function renderQuickNoteTagChips() {
+  renderOpportunityTagChips("quickNote");
+}
+
 function populateDealEditStageSelect(opp) {
   const sel = $("#deal-edit-stage");
   if (!sel) return;
@@ -4816,10 +6098,9 @@ function populateDealEditStageSelect(opp) {
   }
 }
 
-function populateDealEditNotifySelect() {
-  const sel = $("#deal-edit-notify");
-  if (!sel) return;
-  sel.innerHTML = "";
+function populateNotifyUserSelect(selectEl) {
+  if (!selectEl) return;
+  selectEl.innerHTML = "";
   const users = new Map();
   for (const u of state.portalUsers) {
     if (u.id != null) users.set(String(u.id), u.displayName || u.id);
@@ -4831,8 +6112,16 @@ function populateDealEditNotifySelect() {
     const opt = document.createElement("option");
     opt.value = id;
     opt.textContent = name;
-    sel.appendChild(opt);
+    selectEl.appendChild(opt);
   }
+}
+
+function populateDealEditNotifySelect() {
+  populateNotifyUserSelect($("#deal-edit-notify"));
+}
+
+function populateQuickNoteNotifySelect() {
+  populateNotifyUserSelect($("#quick-note-notify"));
 }
 
 async function loadDealEditTags(opp) {
@@ -5051,6 +6340,263 @@ function bindDealEditModal() {
     }
     e.target.value = "";
   });
+}
+
+function setQuickNoteError(message) {
+  const el = $("#quick-note-error");
+  if (!el) return;
+  if (message) {
+    el.textContent = message;
+    el.classList.remove("hidden");
+  } else {
+    el.textContent = "";
+    el.classList.add("hidden");
+  }
+}
+
+function closeQuickNoteModal() {
+  const modal = $("#quick-note-modal");
+  if (modal) modal.classList.add("hidden");
+  state.quickNote = null;
+  setQuickNoteError("");
+}
+
+function clearQuickNoteOpportunitySelection() {
+  state.quickNote = null;
+  const search = $("#quick-note-opportunity-search");
+  const selected = $("#quick-note-opportunity-selected");
+  const crmLink = $("#quick-note-crm-link");
+  if (search) search.value = "";
+  if (selected) selected.textContent = "";
+  if (crmLink) {
+    crmLink.classList.add("hidden");
+    crmLink.href = "#";
+  }
+  const due = $("#quick-note-due");
+  if (due) due.value = "";
+  const tags = $("#quick-note-tags");
+  if (tags) tags.innerHTML = "";
+}
+
+function updateQuickNoteOpportunitySelectedUi() {
+  const ctx = state.quickNote;
+  const selected = $("#quick-note-opportunity-selected");
+  const search = $("#quick-note-opportunity-search");
+  const crmLink = $("#quick-note-crm-link");
+  if (!selected) return;
+  if (ctx?.oppId) {
+    selected.innerHTML = `${escapeHtml(ctx.oppTitle || `Opportunity #${ctx.oppId}`)} <span class="contact-clear" role="button" tabindex="0">clear</span>`;
+    $(".contact-clear", selected)?.addEventListener("click", () => {
+      clearQuickNoteOpportunitySelection();
+      renderQuickNoteTagChips();
+    });
+    if (crmLink) {
+      crmLink.href = crmOpportunityUrl(ctx.oppId);
+      crmLink.classList.remove("hidden");
+    }
+    if (search) search.value = "";
+  } else {
+    selected.textContent = "";
+    if (crmLink) crmLink.classList.add("hidden");
+  }
+}
+
+async function applyQuickNoteOpportunity(oppSummary) {
+  const id = Number(oppSummary.id ?? oppSummary.ID);
+  if (!Number.isFinite(id) || id <= 0) throw new Error("Invalid opportunity");
+
+  const opp = await fetchOpportunityForUpdate(id);
+  if (!opp) throw new Error("Could not load opportunity");
+
+  if (!state.allTags.length) await loadAllTags();
+  const tags = await loadDealEditTags(opp);
+  const oppId = Number(opp.id ?? opp.ID ?? id);
+
+  state.quickNote = {
+    oppId,
+    oppTitle: opp.title || opp.Title || oppSummary.title || `Opportunity #${oppId}`,
+    initialTags: [...tags],
+    tags: [...tags],
+    initialDue: dueDateToInputValue(opportunityDueDateRaw(opp)),
+    group: state.groups.find((g) => (g.opportunities || []).some((o) => Number(o.id ?? o.ID) === oppId)) || null,
+  };
+
+  const dueInput = $("#quick-note-due");
+  if (dueInput) dueInput.value = state.quickNote.initialDue;
+
+  updateQuickNoteOpportunitySelectedUi();
+  renderQuickNoteTagChips();
+  $("#quick-note-note-body")?.focus();
+}
+
+async function openQuickNoteModal() {
+  const modal = $("#quick-note-modal");
+  const form = $("#quick-note-form");
+  if (!modal || !form) return;
+
+  setQuickNoteError("");
+  form.reset();
+  clearQuickNoteOpportunitySelection();
+  state.quickNote = null;
+
+  await loadHistoryCategories();
+  populateQuickNoteCategorySelect();
+  if (!state.allTags.length) await loadAllTags();
+  if (!state.portalUsers.length) await loadPortalUsers();
+  populateQuickNoteNotifySelect();
+
+  const results = $("#quick-note-opportunity-results");
+  if (results) results.classList.add("hidden");
+
+  modal.classList.remove("hidden");
+  $("#quick-note-opportunity-search")?.focus();
+}
+
+async function submitQuickNoteForm(e) {
+  e.preventDefault();
+  setQuickNoteError("");
+  const ctx = state.quickNote;
+  if (!ctx?.oppId) {
+    setQuickNoteError("Select an opportunity for this note.");
+    return;
+  }
+
+  const noteBody = $("#quick-note-note-body")?.value?.trim() ?? "";
+  if (!noteBody) {
+    setQuickNoteError("Event note is required.");
+    return;
+  }
+
+  const submitBtn = $("#quick-note-submit");
+  if (submitBtn) submitBtn.disabled = true;
+
+  try {
+    const oppId = ctx.oppId;
+    const dueVal = $("#quick-note-due")?.value ?? "";
+    const notifySel = $("#quick-note-notify");
+    const notifyUserList = notifySel
+      ? [...notifySel.selectedOptions].map((o) => o.value).filter(Boolean)
+      : [];
+    const dueChanged = dueVal !== ctx.initialDue;
+    const categoryId = resolveHistoryCategoryId($("#quick-note-note-category")?.value);
+
+    if (dueChanged) {
+      try {
+        await updateOpportunityDueDate(oppId, dueVal);
+      } catch (err) {
+        throw dealEditStepError("Due date", err);
+      }
+    }
+
+    if (dealTagsChanged(ctx.initialTags, ctx.tags)) {
+      try {
+        await applyDealTagChanges(oppId, ctx.initialTags, ctx.tags);
+      } catch (err) {
+        throw dealEditStepError("Tags", err);
+      }
+    }
+
+    try {
+      await createOpportunityHistoryEvent(oppId, {
+        content: noteBody,
+        categoryId,
+        notifyUserList,
+      });
+    } catch (err) {
+      throw dealEditStepError("Event note", err);
+    }
+
+    const group = ctx.group;
+    closeQuickNoteModal();
+    showToast("Note saved");
+    if (group) await refreshGroup(group);
+    else await refreshAll();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    setQuickNoteError(msg || "Could not save note");
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
+
+function bindQuickNoteOpportunityPicker() {
+  const input = $("#quick-note-opportunity-search");
+  const results = $("#quick-note-opportunity-results");
+  if (!input || !results || input.dataset.bound) return;
+  input.dataset.bound = "1";
+  let debounce;
+
+  input.addEventListener("input", () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(async () => {
+      const q = input.value.trim();
+      results.innerHTML = "";
+      if (q.length < 1) {
+        results.classList.add("hidden");
+        return;
+      }
+      try {
+        const opps = await searchOpportunitiesByTitle(q);
+        results.classList.remove("hidden");
+        if (!opps.length) {
+          results.innerHTML = '<button type="button" disabled>No matches</button>';
+          return;
+        }
+        for (const o of opps) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = o.title;
+          btn.addEventListener("click", () => {
+            results.classList.add("hidden");
+            applyQuickNoteOpportunity(o).catch((err) => setQuickNoteError(err.message));
+          });
+          results.appendChild(btn);
+        }
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    }, 300);
+  });
+
+  document.addEventListener("click", (e) => {
+    const wrap = input.closest(".opportunity-picker-field");
+    if (wrap && !wrap.contains(e.target)) results.classList.add("hidden");
+  });
+}
+
+function bindQuickNoteModal() {
+  const modal = $("#quick-note-modal");
+  const form = $("#quick-note-form");
+  if (!modal || !form || form.dataset.bound) return;
+  form.dataset.bound = "1";
+
+  form.addEventListener("submit", (e) => {
+    submitQuickNoteForm(e).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      setQuickNoteError(msg || "Could not save note");
+    });
+  });
+
+  $("#quick-note-cancel")?.addEventListener("click", closeQuickNoteModal);
+  modal.querySelectorAll("[data-quick-note-dismiss]").forEach((el) => {
+    el.addEventListener("click", closeQuickNoteModal);
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !modal.classList.contains("hidden")) closeQuickNoteModal();
+  });
+
+  $("#quick-note-tag-add")?.addEventListener("change", (e) => {
+    const title = e.target.value;
+    if (!title || !state.quickNote) return;
+    if (!state.quickNote.tags.some((t) => tagsEqual(t, title))) {
+      state.quickNote.tags.push(title);
+      renderQuickNoteTagChips();
+    }
+    e.target.value = "";
+  });
+
+  bindQuickNoteOpportunityPicker();
 }
 
 function setCreateOpportunityError(message) {
@@ -5824,19 +7370,53 @@ function showAddTileCalendarForm() {
   urlInput?.focus();
 }
 
+function populateAddNotesPresetSelect() {
+  const sel = $("#add-tile-notes-preset");
+  if (!sel || sel.dataset.bound) return;
+  sel.dataset.bound = "1";
+  sel.innerHTML = "";
+  for (const p of NOTES_ADD_PRESETS) {
+    const o = document.createElement("option");
+    o.value = p.id;
+    o.textContent = p.label;
+    sel.appendChild(o);
+  }
+  sel.addEventListener("change", () => {
+    const preset = NOTES_ADD_PRESETS.find((p) => p.id === sel.value);
+    const nameInput = $("#add-tile-notes-name");
+    if (preset && nameInput && (!nameInput.value.trim() || nameInput.value === "Notes")) {
+      nameInput.value = preset.name;
+    }
+  });
+}
+
 function showAddTileNotesForm() {
   $("#add-tile-options")?.classList.add("hidden");
   $("#add-tile-calendar-form")?.classList.add("hidden");
   $("#add-tile-notes-form")?.classList.remove("hidden");
   $("#add-tile-modal-actions")?.classList.add("hidden");
+  loadOpportunityCustomFieldDefs().catch(() => {});
+  populateAddNotesPresetSelect();
+  const presetSel = $("#add-tile-notes-preset");
   const nameInput = $("#add-tile-notes-name");
-  if (nameInput && !nameInput.value) nameInput.value = "Notes";
+  const previewDefault = $("#add-tile-notes-preview-default");
+  if (presetSel) presetSel.value = "blank";
+  if (nameInput) nameInput.value = "Notes";
+  if (previewDefault) previewDefault.checked = false;
   nameInput?.focus();
 }
 
 function addNotesTileFromForm() {
-  const name = $("#add-tile-notes-name")?.value?.trim() || "Notes";
-  const notes = newNotesTile({ name, content: "", updatedAt: new Date().toISOString() });
+  const preset = NOTES_ADD_PRESETS.find((p) => p.id === $("#add-tile-notes-preset")?.value) || NOTES_ADD_PRESETS[0];
+  const name = $("#add-tile-notes-name")?.value?.trim() || preset.name || "Notes";
+  const openPreview = $("#add-tile-notes-preview-default")?.checked === true;
+  const notes = newNotesTile({
+    name,
+    content: notesPresetContent(preset),
+    viewMode: openPreview ? "preview" : "edit",
+    defaultViewMode: openPreview ? "preview" : null,
+    updatedAt: new Date().toISOString(),
+  });
   state.notesTiles.push(notes);
   scheduleUserProfileSave();
   const tid = notesTileId(notes);
@@ -6107,6 +7687,1460 @@ async function searchOpportunitiesForTaskPicker(query) {
   return searchOpportunitiesByTitle(query);
 }
 
+const ICON_EXTERNAL_LINK = `<svg class="crm-open-external-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>`;
+
+const OPP_PREVIEW_HISTORY_PAGE = 50;
+const OPP_PREVIEW_HISTORY_MAX = 500;
+const oppPreviewMailCache = new Map();
+/** @type {{ oppId: number | null, opp: object | null, group: object | null }} */
+let oppPreviewContext = { oppId: null, opp: null, group: null };
+
+function createCrmOpenLink(oppId, { className = "crm-open-external", title = "Open in CRM" } = {}) {
+  const a = document.createElement("a");
+  a.href = crmOpportunityUrl(oppId);
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  a.className = className;
+  a.title = title;
+  a.setAttribute("aria-label", title);
+  a.innerHTML = ICON_EXTERNAL_LINK;
+  a.addEventListener("click", (e) => e.stopPropagation());
+  return a;
+}
+
+function historyEventDate(ev) {
+  return (
+    ev.createdOn?.value ??
+    ev.createdOn ??
+    ev.CreatedOn?.value ??
+    ev.CreatedOn ??
+    ev.created?.value ??
+    ev.created ??
+    ev.Created?.value ??
+    ev.Created ??
+    ev.createOn?.value ??
+    ev.createOn ??
+    ev.CreateOn?.value ??
+    ev.CreateOn ??
+    ev.date?.value ??
+    ev.date ??
+    ev.Date?.value ??
+    ev.Date ??
+    null
+  );
+}
+
+function historyEventCategoryId(ev) {
+  const cat = ev.category ?? ev.Category;
+  if (cat == null || cat === "") return null;
+  if (typeof cat === "number" && Number.isFinite(cat)) return Math.floor(cat);
+  if (typeof cat === "string" && /^\d+$/.test(cat.trim())) return Number(cat.trim());
+  const id = cat?.id ?? cat?.ID ?? cat?.categoryId ?? cat?.CategoryId;
+  return id != null && Number.isFinite(Number(id)) ? Number(id) : null;
+}
+
+function historyEventCategoryLabel(ev) {
+  const cat = ev.category ?? ev.Category;
+  if (typeof cat === "string" && cat.trim()) return cat.trim();
+  const direct = String(cat?.title || cat?.Title || "").trim();
+  if (direct) return direct;
+
+  const catId = historyEventCategoryId(ev);
+  if (catId != null && state.historyCategories?.length) {
+    const found = state.historyCategories.find((c) => Number(c.id ?? c.ID) === catId);
+    const title = String(found?.title || found?.Title || "").trim();
+    if (title) return title;
+  }
+  return "";
+}
+
+const HISTORY_ICON_MAIL = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>`;
+const HISTORY_ICON_PHONE = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>`;
+const HISTORY_ICON_SMS = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/></svg>`;
+const HISTORY_ICON_NOTE = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8Z"/><path d="M15 3v4a2 2 0 0 0 2 2h4"/></svg>`;
+const HISTORY_ICON_MEETING = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>`;
+const HISTORY_ICON_DEFAULT = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`;
+
+function historyCategoryIconHtml(ev) {
+  const cat = historyEventCategoryLabel(ev).toLowerCase();
+  if (/\b(mail|email)\b/.test(cat)) return HISTORY_ICON_MAIL;
+  if (/\b(phone|call|voicemail)\b/.test(cat)) return HISTORY_ICON_PHONE;
+  if (/\b(text|sms)\b/.test(cat) || /\btext message\b/.test(cat)) return HISTORY_ICON_SMS;
+  if (/\b(meeting|appointment)\b/.test(cat)) return HISTORY_ICON_MEETING;
+  if (/\b(note|comment|event)\b/.test(cat)) return HISTORY_ICON_NOTE;
+  return HISTORY_ICON_DEFAULT;
+}
+
+function unescapeLooseJsonString(s) {
+  return String(s || "")
+    .replace(/\\"/g, '"')
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\r")
+    .replace(/\\t/g, "\t")
+    .replace(/\\\\/g, "\\")
+    .trim();
+}
+
+function subjectFromPlainMailContent(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  const jsonSubj = s.match(/"subject"\s*:\s*"((?:\\.|[^"\\])*)"/i);
+  if (jsonSubj) return unescapeLooseJsonString(jsonSubj[1]);
+  const received = s.match(/the email \["([^"]+)"\]/i);
+  if (received) return received[1].trim();
+  const firstLine = s.split(/\n/).map((l) => l.trim()).find(Boolean) || s;
+  const reMatch = firstLine.match(/^re:\s*(.+)$/i);
+  if (reMatch) {
+    const subj = reMatch[1].trim();
+    const dash = subj.match(/^(.+?)\s*[—–-]\s+/);
+    return (dash ? dash[1] : subj).trim();
+  }
+  return "";
+}
+
+function subjectFromEmailHtml(raw) {
+  const s = String(raw || "").trim();
+  if (!s || !historyContentLooksLikeHtml(s)) return "";
+  try {
+    const doc = new DOMParser().parseFromString(s, "text/html");
+    const title = doc.querySelector("title")?.textContent?.trim();
+    if (title && title.length > 1 && title.length < 500) return title;
+  } catch {
+    /* ignore */
+  }
+  return subjectFromPlainMailContent(htmlToPlainText(s));
+}
+
+function historyEventMailSubject(ev, mailPayload) {
+  if (mailPayload?.subject) return mailPayload.subject;
+  const payload = mailPayload ?? parseHistoryMailPayload(ev);
+  if (payload?.subject) return payload.subject;
+  const raw = historyEventRawContent(ev);
+  const fromPlain = subjectFromPlainMailContent(raw);
+  if (fromPlain) return fromPlain;
+  const fromHtml = subjectFromEmailHtml(raw);
+  if (fromHtml) return fromHtml;
+  return "";
+}
+
+function historyContentLooksLikeMailNote(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return false;
+  if (/"message_id"\s*:/i.test(s) || /action=mailmessage/i.test(s)) return true;
+  if (/the email \["[^"]+"\]\s+has been received/i.test(s)) return true;
+  if (/^re:\s/im.test(s) && s.length < 4000) return true;
+  return false;
+}
+
+function isHistoryMailEvent(ev, mailPayload = null) {
+  const payload = mailPayload ?? parseHistoryMailPayload(ev);
+  if (payload) return true;
+  if (isMailCategoryEvent(ev)) return true;
+  if (extractMailMessageIdsFromFields(ev).length) return true;
+  if (historyContentLooksLikeMailNote(historyEventRawContent(ev))) return true;
+  return false;
+}
+
+function crmMailReceivedLine(subject) {
+  const subj = String(subject || "").trim();
+  if (!subj) return "An email has been received.";
+  return `The email ["${subj}"] has been received.`;
+}
+
+function historyEventAuthor(ev) {
+  const createBy = ev.createBy || ev.CreateBy || ev.createdBy || ev.CreatedBy;
+  return String(
+    createBy?.displayName ||
+      createBy?.DisplayName ||
+      createBy?.userName ||
+      createBy?.UserName ||
+      ""
+  ).trim();
+}
+
+function historyEventPlainContent(ev) {
+  return toPlainDisplayText(ev.content || ev.Content || ev.description || ev.Description || "", 12000);
+}
+
+function historyEventRawContent(ev) {
+  return String(ev.content ?? ev.Content ?? ev.description ?? ev.Description ?? "");
+}
+
+function historyContentLooksLikeHtml(s) {
+  return /<[a-z][\s\S]*>/i.test(String(s || ""));
+}
+
+function portalAbsoluteUrl(pathOrUrl) {
+  const raw = String(pathOrUrl || "").trim();
+  if (!raw) return "";
+  if (/^https?:\/\//i.test(raw)) return raw;
+  const base = state.portalUrl.replace(/\/$/, "");
+  return raw.startsWith("/") ? `${base}${raw}` : `${base}/${raw}`;
+}
+
+function portalFileDownloadUrl(fileId) {
+  const id = String(fileId || "").trim();
+  if (!id) return "";
+  const base = state.portalUrl.replace(/\/$/, "");
+  return `${base}/Products/Files/HttpHandlers/filehandler.ashx?action=download&fileid=${encodeURIComponent(id)}`;
+}
+
+function portalMailMessageUrl(messageId) {
+  const id = String(messageId || "").trim();
+  if (!id) return "";
+  const base = state.portalUrl.replace(/\/$/, "");
+  return `${base}/Products/Mail/#message/${id}`;
+}
+
+function sanitizeHistoryHtml(html) {
+  const wrap = document.createElement("div");
+  wrap.innerHTML = html;
+  wrap.querySelectorAll("script, style, iframe, object, embed, link, meta, base").forEach((el) => el.remove());
+  wrap.querySelectorAll("*").forEach((el) => {
+    for (const attr of [...el.attributes]) {
+      const name = attr.name.toLowerCase();
+      if (name.startsWith("on") || name === "srcdoc") el.removeAttribute(attr.name);
+    }
+    if (el.tagName === "A") {
+      const href = el.getAttribute("href");
+      if (href) {
+        el.setAttribute("href", portalAbsoluteUrl(href));
+        el.setAttribute("target", "_blank");
+        el.setAttribute("rel", "noopener noreferrer");
+      }
+    }
+  });
+  return wrap.innerHTML;
+}
+
+function collectNumericIdsFromValue(value, out) {
+  if (value == null) return;
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    out.add(Math.floor(value));
+    return;
+  }
+  const s = String(value).trim();
+  if (!s) return;
+  if (/^\d+$/.test(s)) {
+    out.add(Number(s));
+    return;
+  }
+  const re =
+    /(?:mail\/messages\/|messageId[=:]|message_id[=:]|#message\/|action=mailmessage(?:&amp;|&)?message_id=|idmessage[=:]|mailmessageid[=:])(\d+)/gi;
+  let m;
+  while ((m = re.exec(s))) out.add(Number(m[1]));
+}
+
+function extractJsonObjectSubstring(s) {
+  const text = String(s || "");
+  const start = text.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+function tryParseJsonObject(raw) {
+  if (raw == null || raw === "") return null;
+  if (typeof raw === "object" && !Array.isArray(raw)) return raw;
+  let s = String(raw).trim();
+  if (!s) return null;
+  if (s.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(s);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    } catch {
+      /* try embedded object */
+    }
+  }
+  const embedded = extractJsonObjectSubstring(s);
+  if (embedded) {
+    try {
+      const parsed = JSON.parse(embedded);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function parseLooseMailMetadataFromText(text) {
+  const s = String(text || "");
+  if (!s) return null;
+
+  let messageId = null;
+  const idPatterns = [
+    /"message_id"\s*:\s*"?(\d+)"?/i,
+    /"messageId"\s*:\s*"?(\d+)"?/i,
+    /"mailMessageId"\s*:\s*"?(\d+)"?/i,
+    /message_id\s*[=:]\s*"?(\d+)"?/i,
+    /action=mailmessage(?:&amp;|&)?message_id=(\d+)/i,
+    /#message\/(\d+)/i,
+    /mail\/messages\/(\d+)/i,
+  ];
+  for (const re of idPatterns) {
+    const m = s.match(re);
+    if (m) {
+      messageId = Number(m[1]);
+      break;
+    }
+  }
+  if (!Number.isFinite(messageId) || messageId <= 0) return null;
+
+  let subject = "";
+  const subjMatch = s.match(/"subject"\s*:\s*"((?:\\.|[^"\\])*)"/i);
+  if (subjMatch) subject = unescapeLooseJsonString(subjMatch[1]);
+
+  return {
+    message_id: messageId,
+    subject,
+  };
+}
+
+function collectMailIdsFromObject(value, out, depth = 0, seen = null) {
+  if (depth > 10 || value == null) return;
+  const visited = seen || new WeakSet();
+  if (typeof value === "object") {
+    if (visited.has(value)) return;
+    visited.add(value);
+  }
+
+  if (typeof value === "string") {
+    collectNumericIdsFromValue(value, out);
+    const loose = parseLooseMailMetadataFromText(value);
+    if (loose?.message_id) out.add(loose.message_id);
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) collectMailIdsFromObject(item, out, depth + 1, visited);
+    return;
+  }
+
+  if (typeof value !== "object") return;
+
+  for (const v of Object.values(value)) {
+    collectMailIdsFromObject(v, out, depth + 1, visited);
+  }
+}
+
+function mailObjectFromEvent(ev) {
+  for (const key of [
+    "mailMessage",
+    "MailMessage",
+    "mail",
+    "Mail",
+    "email",
+    "Email",
+    "message",
+    "Message",
+  ]) {
+    const m = ev[key];
+    if (m && typeof m === "object" && !Array.isArray(m)) return m;
+  }
+  return null;
+}
+
+function normalizeCrmMailPayload(obj) {
+  if (!obj || typeof obj !== "object") return null;
+  const midRaw = obj.message_id ?? obj.messageId ?? obj.MessageId ?? obj.mailMessageId ?? obj.id ?? obj.ID;
+  const messageId = Number(typeof midRaw === "string" ? midRaw.trim() : midRaw);
+  if (!Number.isFinite(messageId) || messageId <= 0) return null;
+
+  const fromRaw = String(obj.from ?? obj.From ?? "").trim();
+  const from = fromRaw.replace(/^["']+|["']+$/g, "").trim();
+  const messageUrl = portalAbsoluteUrl(obj.message_url ?? obj.messageUrl ?? obj.MessageUrl ?? "");
+
+  return {
+    messageId,
+    from,
+    to: String(obj.to ?? obj.To ?? "").trim(),
+    cc: String(obj.cc ?? obj.Cc ?? "").trim(),
+    bcc: String(obj.bcc ?? obj.Bcc ?? "").trim(),
+    subject: String(obj.subject ?? obj.Subject ?? "").trim(),
+    date: String(
+      obj.date_created ?? obj.dateCreated ?? obj.DateCreated ?? obj.date_sent ?? obj.dateSent ?? ""
+    ).trim(),
+    introduction: String(
+      obj.introduction ?? obj.Introduction ?? obj.preview ?? obj.Preview ?? obj.textBody ?? ""
+    ).trim(),
+    messageUrl: messageUrl || portalMailMessageUrl(messageId),
+  };
+}
+
+function historyMailTextSources(ev) {
+  const sources = [];
+  const push = (v) => {
+    if (v == null || v === "") return;
+    if (typeof v === "string") sources.push(v);
+    else if (typeof v === "object") {
+      try {
+        sources.push(JSON.stringify(v));
+      } catch {
+        /* skip */
+      }
+    }
+  };
+  push(historyEventRawContent(ev));
+  push(ev.additionalData);
+  push(ev.AdditionalData);
+  push(ev.text);
+  push(ev.Text);
+  push(ev.description);
+  push(ev.Description);
+  const nested = mailObjectFromEvent(ev);
+  if (nested) push(nested);
+  return sources;
+}
+
+function parseHistoryMailPayload(ev) {
+  const nested = mailObjectFromEvent(ev);
+  if (nested) {
+    const fromNested = normalizeCrmMailPayload(nested);
+    if (fromNested) return fromNested;
+  }
+
+  for (const src of historyMailTextSources(ev)) {
+    const payload = normalizeCrmMailPayload(tryParseJsonObject(src));
+    if (payload) return payload;
+    const loose = parseLooseMailMetadataFromText(src);
+    if (loose) {
+      const normalized = normalizeCrmMailPayload(loose);
+      if (normalized) return normalized;
+    }
+  }
+  return null;
+}
+
+function extractMailMessageIdsFromFields(ev) {
+  const ids = new Set();
+  const payload = parseHistoryMailPayload(ev);
+  if (payload?.messageId) ids.add(payload.messageId);
+
+  const fields = [
+    ev.messageId,
+    ev.MessageId,
+    ev.mailMessageId,
+    ev.MailMessageId,
+    ev.idMessage,
+    ev.IdMessage,
+  ];
+  for (const f of fields) collectNumericIdsFromValue(f, ids);
+
+  let ad = tryParseJsonObject(ev.additionalData ?? ev.AdditionalData) ?? ev.additionalData ?? ev.AdditionalData;
+  if (ad && typeof ad === "object") {
+    collectNumericIdsFromValue(ad.message_id ?? ad.messageId ?? ad.MessageId ?? ad.mailMessageId, ids);
+    collectNumericIdsFromValue(ad.message_url ?? ad.messageUrl ?? ad.MessageUrl, ids);
+    collectMailIdsFromObject(ad, ids);
+  }
+
+  for (const src of historyMailTextSources(ev)) {
+    collectNumericIdsFromValue(src, ids);
+    const loose = parseLooseMailMetadataFromText(src);
+    if (loose?.message_id) ids.add(loose.message_id);
+  }
+
+  const nested = mailObjectFromEvent(ev);
+  if (nested) collectMailIdsFromObject(nested, ids);
+
+  return [...ids].filter((id) => Number.isFinite(id) && id > 0);
+}
+
+function extractMailMessageIds(ev) {
+  const ids = extractMailMessageIdsFromFields(ev);
+  if (ids.length) return ids;
+  const raw = historyEventRawContent(ev);
+  if (isMailCategoryEvent(ev) || shouldCollapseHistoryNoteContent(ev, raw)) {
+    const fromContent = new Set();
+    collectNumericIdsFromValue(raw, fromContent);
+    return [...fromContent];
+  }
+  return [];
+}
+
+function isMailCategoryEvent(ev) {
+  const cat = historyEventCategoryLabel(ev).toLowerCase();
+  return /\b(mail|email)\b/.test(cat);
+}
+
+function historyContentLooksLikeEmailDump(raw) {
+  const s = String(raw || "");
+  if (!s.trim()) return false;
+  if (/<!DOCTYPE|<html[\s>]/i.test(s)) return true;
+  if (NOTIFY_TEMPLATE_MARKERS.some((re) => re.test(s))) return true;
+  if (/MIME-Version:|Content-Type:\s*text\/html|multipart\/alternative/i.test(s)) return true;
+  if (/mso-|MsoNormal|urn:schemas-microsoft|xmlns:v=|xmlns:o=|<o:p>|<v:shape/i.test(s)) return true;
+  if (s.length > 900 && /<table[\s>]/i.test(s)) return true;
+  if (s.length > 500 && (s.match(/<style[\s>]/gi) || []).length >= 1) return true;
+  if (s.length > 400 && (s.match(/style="/gi) || []).length >= 4) return true;
+  return false;
+}
+
+function shouldCollapseHistoryNoteContent(ev, raw) {
+  const content = String(raw || "").trim();
+  if (!content) return false;
+  if (parseHistoryMailPayload(ev)) return true;
+  if (extractMailMessageIdsFromFields(ev).length) return true;
+  if (isMailCategoryEvent(ev)) return true;
+  if (historyContentLooksLikeEmailDump(content)) return true;
+  if (historyContentLooksLikeHtml(content) && content.length > 500) return true;
+  return false;
+}
+
+function isMailLinkedHistoryEvent(ev) {
+  return shouldCollapseHistoryNoteContent(ev, historyEventRawContent(ev));
+}
+
+function htmlToPlainText(html) {
+  const s = String(html || "").trim();
+  if (!s) return "";
+  if (!historyContentLooksLikeHtml(s)) return s;
+  try {
+    const doc = new DOMParser().parseFromString(s, "text/html");
+    const text = doc.body?.textContent || "";
+    return text.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+  } catch {
+    return toPlainDisplayText(s, 50000);
+  }
+}
+
+function attachmentDedupeKey(file) {
+  return String(file.url || file.id || file.title || "");
+}
+
+function extractHistoryAttachments(ev) {
+  const seen = new Set();
+  const out = [];
+
+  const push = (raw) => {
+    if (!raw) return;
+    if (typeof raw === "string") {
+      const idMatch = raw.match(/fileid=([^&"'\s]+)/i);
+      if (idMatch) {
+        const id = decodeURIComponent(idMatch[1]);
+        const file = { id, title: id, url: portalFileDownloadUrl(id) };
+        const key = attachmentDedupeKey(file);
+        if (!seen.has(key)) {
+          seen.add(key);
+          out.push(file);
+        }
+      }
+      return;
+    }
+    if (typeof raw !== "object") return;
+
+    const id = raw.id ?? raw.ID ?? raw.fileId ?? raw.FileId ?? raw.documentId ?? raw.DocumentId;
+    const title =
+      raw.title ||
+      raw.Title ||
+      raw.fileName ||
+      raw.FileName ||
+      raw.name ||
+      raw.Name ||
+      raw.displayName ||
+      raw.DisplayName ||
+      (id ? `File ${id}` : "");
+    let url =
+      raw.viewUrl ||
+      raw.ViewUrl ||
+      raw.downloadUrl ||
+      raw.DownloadUrl ||
+      raw.url ||
+      raw.Url ||
+      raw.link ||
+      raw.Link;
+    if (!url && id) url = portalFileDownloadUrl(id);
+    if (!url && !title) return;
+    const file = {
+      id: id != null ? String(id) : "",
+      title: String(title || "Attachment").trim(),
+      url: url ? portalAbsoluteUrl(url) : "",
+    };
+    const key = attachmentDedupeKey(file);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push(file);
+  };
+
+  const lists = [
+    ev.files,
+    ev.Files,
+    ev.attachments,
+    ev.Attachments,
+    ev.documents,
+    ev.Documents,
+    ev.fileList,
+    ev.FileList,
+  ];
+  for (const list of lists) {
+    if (Array.isArray(list)) list.forEach(push);
+  }
+
+  for (const key of ["fileIds", "FileIds", "filesId", "FilesId"]) {
+    const ids = ev[key];
+    if (Array.isArray(ids)) ids.forEach((id) => push({ id, title: `File ${id}` }));
+  }
+
+  let ad = ev.additionalData ?? ev.AdditionalData;
+  if (typeof ad === "string") {
+    try {
+      ad = JSON.parse(ad);
+    } catch {
+      ad = null;
+    }
+  }
+  if (ad && typeof ad === "object") {
+    for (const list of [ad.files, ad.Files, ad.attachments, ad.Attachments]) {
+      if (Array.isArray(list)) list.forEach(push);
+    }
+  }
+
+  const html = historyEventRawContent(ev);
+  if (historyContentLooksLikeHtml(html)) {
+    const wrap = document.createElement("div");
+    wrap.innerHTML = html;
+    wrap.querySelectorAll("a[href]").forEach((a) => {
+      const href = a.getAttribute("href") || "";
+      if (/filehandler\.ashx|\/files\//i.test(href) || /fileid=/i.test(href)) {
+        const label = (a.textContent || "").trim() || href.split("/").pop() || "Attachment";
+        push({ title: label, url: portalAbsoluteUrl(href) });
+      }
+    });
+  }
+
+  return out;
+}
+
+function extractEmailBodyHtml(html) {
+  let s = String(html || "").trim();
+  if (!s) return "";
+  s = s.replace(/<!--[\s\S]*?-->/g, " ");
+
+  let bodyHtml = s;
+  try {
+    const doc = new DOMParser().parseFromString(s, "text/html");
+    const body = doc.body;
+    if (body) {
+      body.querySelectorAll("script, style, meta, link, title, head").forEach((el) => el.remove());
+      body.querySelectorAll("*").forEach((el) => {
+        el.removeAttribute("style");
+        el.removeAttribute("class");
+        el.removeAttribute("id");
+        for (const attr of [...el.attributes]) {
+          if (attr.name.startsWith("data-") || attr.name.startsWith("on")) el.removeAttribute(attr.name);
+        }
+      });
+      bodyHtml = body.innerHTML;
+    }
+  } catch {
+    /* use raw */
+  }
+
+  return sanitizeHistoryHtml(bodyHtml);
+}
+
+function renderCrmMailPayloadDetail(parent, payload) {
+  const rows = [];
+  const push = (label, value) => {
+    const v = String(value || "").trim();
+    if (v) rows.push({ label, value: v });
+  };
+  push("From", payload.from);
+  push("To", payload.to);
+  push("Cc", payload.cc);
+  push("Subject", payload.subject);
+  push("Date", payload.date);
+
+  if (rows.length) renderPreviewFieldGrid(parent, rows);
+
+  if (payload.introduction) {
+    const pre = document.createElement("pre");
+    pre.className = "opp-preview-mail-text";
+    pre.textContent = payload.introduction;
+    parent.appendChild(pre);
+  }
+
+  const foot = document.createElement("div");
+  foot.className = "opp-preview-mail-foot";
+  const open = document.createElement("a");
+  open.href = payload.messageUrl;
+  open.target = "_blank";
+  open.rel = "noopener noreferrer";
+  open.textContent = "Open in Mail";
+  foot.appendChild(open);
+  parent.appendChild(foot);
+}
+
+function pickMailBodyForDisplay(norm, { allowIntroFallback = false, crmPayload = null } = {}) {
+  const text = String(norm.textBody || "")
+    .replace(/\r\n/g, "\n")
+    .trim();
+  const html = String(norm.htmlBody || "").trim();
+
+  if (html.length > 40) {
+    const cleaned = extractEmailBodyHtml(html);
+    if (cleaned.length > 20) return { mode: "html", content: cleaned };
+  }
+
+  const plainFromHtml = html ? htmlToPlainText(extractEmailBodyHtml(html) || html) : "";
+  const plainFromText = text.includes("<") ? htmlToPlainText(text) : text;
+
+  if (html && plainFromHtml.length > Math.max(plainFromText.length, 80)) {
+    return { mode: "html", content: extractEmailBodyHtml(html) };
+  }
+
+  const candidates = [plainFromText, plainFromHtml].filter((s) => s && s.length > 2);
+  if (allowIntroFallback && crmPayload?.introduction) {
+    candidates.push(crmPayload.introduction);
+  }
+
+  let best = "";
+  for (const c of candidates) {
+    if (c.length > best.length && !isNotifyTemplateSpam(c.slice(0, 1200))) best = c;
+  }
+  if (!best && candidates.length) best = candidates[0];
+
+  if (best.length) return { mode: "text", content: best };
+  return { mode: "empty", content: "" };
+}
+
+function mailBodyIframeSrcdoc(htmlContent) {
+  const body = sanitizeHistoryHtml(htmlContent);
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><base target="_blank"><style>
+body{margin:0.65rem;font:13px/1.45 system-ui,-apple-system,sans-serif;background:#181b24;color:#e8ecf4;line-height:1.45;word-break:break-word;}
+a{color:#7eb8ff;}img{max-width:100%;height:auto;}table{max-width:100%;}
+p{margin:0 0 0.5rem;}blockquote{margin:0.5rem 0;padding-left:0.75rem;border-left:2px solid #3d4659;color:#b8c0d4;}
+</style></head><body>${body}</body></html>`;
+}
+
+function historyEventDateIso(ev) {
+  const raw = historyEventDate(ev);
+  if (raw == null || raw === "") return "";
+  return parseFeedDate(crmDateTimeFromApi(raw) || raw) || "";
+}
+
+function formatHistoryEventDateTime(ev) {
+  const raw = historyEventDate(ev);
+  if (raw == null || raw === "") return "";
+  const iso = parseFeedDate(crmDateTimeFromApi(raw) || raw);
+  if (!iso) return String(raw).trim();
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(raw).trim();
+  try {
+    return d.toLocaleString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZoneName: "short",
+    });
+  } catch {
+    return d.toLocaleString();
+  }
+}
+
+function renderHistoryEventMeta(metaEl, ev) {
+  const cat = historyEventCategoryLabel(ev);
+  const author = historyEventAuthor(ev);
+  const whenLabel = formatHistoryEventDateTime(ev);
+  const iso = historyEventDateIso(ev);
+
+  metaEl.replaceChildren();
+
+  const appendSep = () => {
+    const sep = document.createElement("span");
+    sep.className = "opp-preview-history-meta-sep";
+    sep.setAttribute("aria-hidden", "true");
+    sep.textContent = "·";
+    metaEl.appendChild(sep);
+  };
+
+  if (cat) {
+    const span = document.createElement("span");
+    span.className = "opp-preview-history-meta-part";
+    span.textContent = cat;
+    metaEl.appendChild(span);
+  }
+
+  if (author || whenLabel) {
+    if (metaEl.childElementCount) appendSep();
+    const line = document.createElement("span");
+    line.className = "opp-preview-history-meta-author-line";
+
+    if (author) {
+      const authorSpan = document.createElement("span");
+      authorSpan.className = "opp-preview-history-meta-author";
+      authorSpan.textContent = author;
+      line.appendChild(authorSpan);
+    }
+
+    if (whenLabel) {
+      const timeEl = document.createElement("time");
+      timeEl.className = "opp-preview-history-meta-when";
+      if (iso) timeEl.dateTime = iso;
+      timeEl.textContent = whenLabel;
+      line.appendChild(timeEl);
+    }
+
+    metaEl.appendChild(line);
+  }
+}
+
+function renderHistoryMailReceivedSummary(container, ev, mailPayload = null) {
+  const payload = mailPayload ?? parseHistoryMailPayload(ev);
+  container.classList.add("opp-preview-history-body--mail-received");
+  const p = document.createElement("p");
+  p.className = "opp-preview-mail-summary";
+  p.textContent = crmMailReceivedLine(historyEventMailSubject(ev, payload));
+  container.replaceChildren(p);
+}
+
+function renderHistoryNoteBody(container, ev) {
+  const raw = historyEventRawContent(ev).trim();
+  const mailPayload = parseHistoryMailPayload(ev);
+  const mailIds = extractMailMessageIds(ev);
+
+  if (isHistoryMailEvent(ev, mailPayload) || (shouldCollapseHistoryNoteContent(ev, raw) && (mailPayload || mailIds.length))) {
+    renderHistoryMailReceivedSummary(container, ev, mailPayload);
+    return;
+  }
+
+  if (!raw) {
+    container.textContent = "(No text)";
+    return;
+  }
+
+  if (shouldCollapseHistoryNoteContent(ev, raw)) {
+    renderHistoryMailReceivedSummary(container, ev, mailPayload);
+    return;
+  }
+
+  if (historyContentLooksLikeHtml(raw)) {
+    const plain = htmlToPlainText(raw);
+    if (plain.length > 0 && plain.length < raw.length * 0.85) {
+      container.classList.add("opp-preview-history-body--plain");
+      container.textContent = plain;
+      return;
+    }
+    container.classList.add("opp-preview-history-body--html");
+    container.innerHTML = sanitizeHistoryHtml(raw);
+    return;
+  }
+  container.textContent = raw;
+}
+
+async function fetchMailMessage(messageId) {
+  const id = Number(messageId);
+  if (!Number.isFinite(id) || id <= 0) throw new Error("Invalid mail message id");
+  if (oppPreviewMailCache.has(id)) return oppPreviewMailCache.get(id);
+
+  const paths = [`/api/2.0/mail/messages/${id}`, `/api/2.0/mail/messages/${id}.json`];
+  let lastErr;
+  for (const path of paths) {
+    try {
+      const data = await api(path);
+      const mail = data?.response ?? data?.result ?? data;
+      oppPreviewMailCache.set(id, mail);
+      return mail;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error("Could not load mail message");
+}
+
+function normalizeMailMessage(mail) {
+  if (!mail || typeof mail !== "object") return null;
+  const subject = mail.subject || mail.Subject || "";
+  const fromRaw = mail.from || mail.From || mail.fromEmail || mail.FromEmail;
+  const from =
+    typeof fromRaw === "string"
+      ? fromRaw
+      : fromRaw?.displayName || fromRaw?.title || fromRaw?.email || fromRaw?.Email || "";
+  const htmlBody =
+    mail.htmlBody ||
+    mail.HtmlBody ||
+    mail.bodyHtml ||
+    mail.BodyHtml ||
+    mail.body?.html ||
+    mail.Body?.Html ||
+    "";
+  const textBody =
+    mail.textBody ||
+    mail.TextBody ||
+    mail.plainText ||
+    mail.PlainText ||
+    mail.bodyText ||
+    mail.BodyText ||
+    mail.body?.text ||
+    mail.Body?.Text ||
+    "";
+  const date =
+    mail.dateSent?.value ??
+    mail.dateSent ??
+    mail.DateSent?.value ??
+    mail.DateSent ??
+    mail.receivedDate?.value ??
+    mail.receivedDate;
+  const toList = mailAddressesFromMessage(mail).join(", ");
+  return { subject, from, toList, htmlBody, textBody, date };
+}
+
+function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openUrl = "" } = {}) {
+  panel.innerHTML = "";
+  const norm = normalizeMailMessage(mail);
+  if (!norm) {
+    panel.innerHTML = '<p class="opp-preview-mail-error">Could not read mail message.</p>';
+    return;
+  }
+
+  const head = document.createElement("div");
+  head.className = "opp-preview-mail-head";
+  const subject = norm.subject || crmPayload?.subject || "";
+  const from = norm.from || crmPayload?.from || "";
+  const toList = norm.toList || crmPayload?.to || "";
+  const date = norm.date || crmPayload?.date || "";
+  const lines = [
+    subject ? `<strong>${escapeHtml(subject)}</strong>` : "",
+    from ? `From: ${escapeHtml(from)}` : "",
+    toList ? `To: ${escapeHtml(toList)}` : "",
+    date ? escapeHtml(formatPreviewDateTime(date) || date) : "",
+  ].filter(Boolean);
+  head.innerHTML = lines.map((l) => `<div>${l}</div>`).join("");
+
+  const bodyWrap = document.createElement("div");
+  bodyWrap.className = "opp-preview-mail-body";
+
+  const bodyPick = pickMailBodyForDisplay(norm, { allowIntroFallback: false, crmPayload });
+  if (bodyPick.mode === "html" && bodyPick.content) {
+    const iframe = document.createElement("iframe");
+    iframe.className = "opp-preview-mail-iframe";
+    iframe.setAttribute("sandbox", "allow-same-origin");
+    iframe.setAttribute("title", "Email body");
+    iframe.srcdoc = mailBodyIframeSrcdoc(bodyPick.content);
+    iframe.addEventListener("load", () => {
+      try {
+        const doc = iframe.contentDocument;
+        const h = doc?.body?.scrollHeight;
+        if (h && h > 80) {
+          iframe.style.height = `${Math.min(Math.max(h + 20, 240), 1400)}px`;
+        }
+      } catch {
+        /* ignore */
+      }
+    });
+    bodyWrap.appendChild(iframe);
+  } else if (bodyPick.mode === "text" && bodyPick.content) {
+    const pre = document.createElement("pre");
+    pre.className = "opp-preview-mail-text";
+    pre.textContent = bodyPick.content;
+    bodyWrap.appendChild(pre);
+  } else {
+    bodyWrap.innerHTML = '<p class="opp-preview-empty">No readable message body. Open in Mail for the full message.</p>';
+  }
+
+  const foot = document.createElement("div");
+  foot.className = "opp-preview-mail-foot";
+  const open = document.createElement("a");
+  open.href = openUrl || crmPayload?.messageUrl || portalMailMessageUrl(messageId);
+  open.target = "_blank";
+  open.rel = "noopener noreferrer";
+  open.textContent = "Open in Mail";
+  foot.appendChild(open);
+
+  panel.appendChild(head);
+  panel.appendChild(bodyWrap);
+  panel.appendChild(foot);
+}
+
+function renderHistoryAttachmentsAside(parent, attachments) {
+  if (!attachments.length) return;
+  const aside = document.createElement("aside");
+  aside.className = "opp-preview-history-attachments";
+  aside.setAttribute("aria-label", "Attachments");
+  for (const file of attachments) {
+    const a = document.createElement("a");
+    a.className = "opp-preview-attachment-link";
+    a.href = file.url || portalFileDownloadUrl(file.id);
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.title = file.title;
+    a.textContent = file.title;
+    aside.appendChild(a);
+  }
+  parent.appendChild(aside);
+}
+
+function renderHistoryEventItem(ev) {
+  const li = document.createElement("li");
+  li.className = "opp-preview-history-item";
+
+  const metaRow = document.createElement("div");
+  metaRow.className = "opp-preview-history-meta-row";
+
+  const icon = document.createElement("span");
+  icon.className = "opp-preview-history-type-icon";
+  icon.innerHTML = historyCategoryIconHtml(ev);
+  icon.setAttribute("aria-hidden", "true");
+
+  const meta = document.createElement("div");
+  meta.className = "opp-preview-history-meta";
+  renderHistoryEventMeta(meta, ev);
+
+  metaRow.appendChild(icon);
+  metaRow.appendChild(meta);
+  li.appendChild(metaRow);
+
+  const row = document.createElement("div");
+  row.className = "opp-preview-history-row";
+
+  const main = document.createElement("div");
+  main.className = "opp-preview-history-main";
+
+  const note = document.createElement("div");
+  note.className = "opp-preview-history-body";
+  renderHistoryNoteBody(note, ev);
+  main.appendChild(note);
+
+  const mailPayload = parseHistoryMailPayload(ev);
+  const mailIds = extractMailMessageIds(ev);
+  const messageId = mailIds[0] || mailPayload?.messageId || null;
+  let mailToggle = null;
+  let mailPanel = null;
+  if (messageId) {
+    mailToggle = document.createElement("button");
+    mailToggle.type = "button";
+    mailToggle.className = "opp-preview-mail-toggle";
+    mailToggle.textContent = "Show linked email";
+    mailPanel = document.createElement("div");
+    mailPanel.className = "opp-preview-mail-embed hidden";
+    mailPanel.setAttribute("hidden", "");
+
+    mailToggle.addEventListener("click", async () => {
+      const open = !mailPanel.hasAttribute("hidden");
+      if (open) {
+        mailPanel.setAttribute("hidden", "");
+        mailPanel.classList.add("hidden");
+        mailToggle.textContent = "Show linked email";
+        return;
+      }
+      mailPanel.removeAttribute("hidden");
+      mailPanel.classList.remove("hidden");
+      mailToggle.textContent = "Hide linked email";
+
+      if (!messageId) {
+        mailPanel.innerHTML =
+          '<p class="opp-preview-mail-error">No mail message id on this event. Open the deal in CRM to view this email.</p>';
+        return;
+      }
+
+      if (mailPanel.dataset.loaded === String(messageId)) return;
+
+      mailPanel.innerHTML = '<p class="opp-preview-mail-loading">Loading email…</p>';
+      try {
+        const mail = await fetchMailMessage(messageId);
+        renderMailEmbedPanel(mailPanel, mail, messageId, { crmPayload: mailPayload });
+        mailPanel.dataset.loaded = String(messageId);
+      } catch (err) {
+        mailPanel.innerHTML = `<p class="opp-preview-mail-error">Could not load email (${escapeHtml(err.message)}).</p>`;
+        const retry = document.createElement("a");
+        retry.href =
+          mailPayload?.messageUrl || portalMailMessageUrl(messageId);
+        retry.target = "_blank";
+        retry.rel = "noopener noreferrer";
+        retry.className = "opp-preview-mail-fallback";
+        retry.textContent = "Open in Mail";
+        mailPanel.appendChild(retry);
+      }
+    });
+
+    main.appendChild(mailToggle);
+    main.appendChild(mailPanel);
+  }
+
+  row.appendChild(main);
+  renderHistoryAttachmentsAside(row, extractHistoryAttachments(ev));
+  li.appendChild(row);
+  return li;
+}
+
+function formatPreviewDateTime(raw) {
+  if (raw == null || raw === "") return "";
+  const iso = crmDateTimeFromApi(raw) || raw;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(raw);
+  return d.toLocaleString();
+}
+
+function formatResponsibleLabel(opp) {
+  const r = opp.responsible || opp.Responsible;
+  if (r && typeof r === "object") {
+    return (
+      r.displayName || r.DisplayName || r.userName || r.UserName || r.title || r.Title || ""
+    ).trim();
+  }
+  const rid = opp.responsibleId ?? opp.responsibleid ?? opp.responsibleID;
+  if (rid != null && state.portalUsers.length) {
+    const u = state.portalUsers.find((p) => sameUserId(p.id, rid));
+    if (u) return u.displayName || String(rid);
+  }
+  return rid != null ? String(rid) : "";
+}
+
+function formatMembersLabel(opp) {
+  const members = Array.isArray(opp.members) ? opp.members : Array.isArray(opp.Members) ? opp.Members : [];
+  if (!members.length) return "";
+  return members
+    .map((m) => {
+      if (typeof m === "string") return m;
+      return (
+        m.displayName ||
+        m.DisplayName ||
+        m.userName ||
+        m.UserName ||
+        m.title ||
+        m.Title ||
+        m.id ||
+        m.ID ||
+        ""
+      );
+    })
+    .filter(Boolean)
+    .join(", ");
+}
+
+function formatCustomFieldValueForDisplay(def, rawValue) {
+  const code = customFieldTypeCode(def);
+  if (code === 3) {
+    const t = String(rawValue ?? "").trim().toLowerCase();
+    if (t === "false" || t === "0" || t === "no" || t === "off" || t === "") return "No";
+    return "Yes";
+  }
+  if (code === 4) return "";
+  return formatCustomFieldValueForApi(def, rawValue) || "—";
+}
+
+function resolveStageTitle(opp) {
+  const sid = resolveOppStageId(opp);
+  const stage = state.stages.find((s) => String(s.id ?? s.ID) === String(sid));
+  return (opp.stage?.title || opp.stage?.Title || stage?.title || stage?.Title || sid || "").trim();
+}
+
+function buildOpportunityPreviewStandardFields(opp, tags) {
+  const rows = [];
+  const push = (label, value) => {
+    const v = value == null ? "" : String(value).trim();
+    if (!v) return;
+    rows.push({ label, value: v });
+  };
+
+  push("Stage", resolveStageTitle(opp));
+  push("Contact", getOpportunityContactLabel(opp));
+  push("Responsible", formatResponsibleLabel(opp));
+  push("Members", formatMembersLabel(opp));
+  push("Value", formatMoney(opp));
+  push(
+    "Success probability",
+    opp.successProbability ?? opp.SuccessProbability ?? opp.stage?.successProbability ?? ""
+  );
+  push("Expected close", formatPreviewDateTime(opportunityDueDateRaw(opp)));
+  push("Actual close", formatPreviewDateTime(opp.actualCloseDate ?? opp.ActualCloseDate));
+  push("Created", formatPreviewDateTime(opp.createOn ?? opp.created ?? opp.Created));
+  push("Tags", tags.length ? tags.join(", ") : "");
+  if (opp.isPrivate ?? opp.IsPrivate) push("Private", "Yes");
+  push("Bid type", opp.bidType ?? opp.BidType);
+  return rows;
+}
+
+function buildOpportunityPreviewUserFields(opp, customFieldValues) {
+  const rows = [];
+  const valuesByFieldId = new Map();
+  for (const item of customFieldValues) {
+    const fieldId = item.id ?? item.ID ?? item.fieldId ?? item.FieldId;
+    if (fieldId != null) valuesByFieldId.set(String(fieldId), item);
+  }
+
+  const defs = state.customFieldDefs.length ? state.customFieldDefs : [];
+  const seen = new Set();
+
+  for (const def of defs) {
+    const fieldId = customFieldDefinitionId(def);
+    if (fieldId == null) continue;
+    if (customFieldTypeCode(def) === 4) continue;
+    const key = String(fieldId);
+    seen.add(key);
+    const item = valuesByFieldId.get(key);
+    const raw = item ? readSavedCustomFieldValue(item) : getOppCustomFieldValue(opp, customFieldLabel(def));
+    const label = customFieldLabel(def) || `Field ${fieldId}`;
+    const value = formatCustomFieldValueForDisplay(def, raw);
+    if (!value || value === "—") continue;
+    rows.push({ label, value });
+  }
+
+  for (const item of customFieldValues) {
+    const fieldId = item.id ?? item.ID ?? item.fieldId ?? item.FieldId;
+    if (fieldId == null) continue;
+    const key = String(fieldId);
+    if (seen.has(key)) continue;
+    const def = state.customFieldById.get(key);
+    if (def && customFieldTypeCode(def) === 4) continue;
+    const label = customFieldLabel(item) || customFieldLabel(def) || `Field ${fieldId}`;
+    const value = formatCustomFieldValueForDisplay(def, readSavedCustomFieldValue(item));
+    if (!value || value === "—") continue;
+    rows.push({ label, value });
+  }
+
+  return rows;
+}
+
+async function fetchAllOpportunityHistory(oppId) {
+  const all = [];
+  let startIndex = 0;
+  while (all.length < OPP_PREVIEW_HISTORY_MAX) {
+    const params = new URLSearchParams({
+      startIndex: String(startIndex),
+      count: String(OPP_PREVIEW_HISTORY_PAGE),
+      entityType: "opportunity",
+      entityId: String(oppId),
+    });
+    const data = await api(`/api/2.0/crm/history/filter?${params}`);
+    const page = unwrapHistoryEvents(data);
+    if (!page.length) break;
+    all.push(...page);
+    if (page.length < OPP_PREVIEW_HISTORY_PAGE) break;
+    startIndex += page.length;
+  }
+
+  all.sort((a, b) => {
+    const ta = new Date(historyEventDate(a) || 0).getTime();
+    const tb = new Date(historyEventDate(b) || 0).getTime();
+    return tb - ta;
+  });
+  return all.slice(0, OPP_PREVIEW_HISTORY_MAX);
+}
+
+async function fetchOpportunityPreviewData(oppId) {
+  const id = Number(oppId);
+  if (!Number.isFinite(id) || id <= 0) throw new Error("Invalid opportunity id");
+
+  await Promise.all([
+    state.stages.length ? Promise.resolve() : loadStages(),
+    state.customFieldDefs.length ? Promise.resolve() : loadOpportunityCustomFieldDefs(),
+    state.portalUsers.length ? Promise.resolve() : loadPortalUsers(),
+    loadHistoryCategories(),
+  ]);
+
+  const opp = await fetchOpportunityForUpdate(id);
+  const [customFieldValues, history, tags] = await Promise.all([
+    fetchOpportunityCustomFieldValues(id),
+    fetchAllOpportunityHistory(id),
+    loadDealEditTags(opp),
+  ]);
+
+  return { opp, customFieldValues, history, tags, oppId: id };
+}
+
+function appendPreviewSection(container, title, renderContent) {
+  const section = document.createElement("section");
+  section.className = "opp-preview-section";
+  const h = document.createElement("h3");
+  h.className = "opp-preview-section-title";
+  h.textContent = title;
+  section.appendChild(h);
+  renderContent(section);
+  container.appendChild(section);
+}
+
+function renderPreviewFieldGrid(parent, rows) {
+  if (!rows.length) {
+    const p = document.createElement("p");
+    p.className = "opp-preview-empty";
+    p.textContent = "None";
+    parent.appendChild(p);
+    return;
+  }
+  const dl = document.createElement("dl");
+  dl.className = "opp-preview-fields";
+  for (const { label, value } of rows) {
+    const row = document.createElement("div");
+    row.className = "opp-preview-field";
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    dd.textContent = value;
+    row.appendChild(dt);
+    row.appendChild(dd);
+    dl.appendChild(row);
+  }
+  parent.appendChild(dl);
+}
+
+function renderOpportunityPreviewBody(data) {
+  const body = $("#opp-preview-body");
+  if (!body) return;
+  body.innerHTML = "";
+
+  const { opp, customFieldValues, history, tags } = data;
+  const standardRows = buildOpportunityPreviewStandardFields(opp, tags);
+  const userRows = buildOpportunityPreviewUserFields(opp, customFieldValues);
+  const description = String(opp.description ?? opp.Description ?? "").trim();
+
+  appendPreviewSection(body, "Deal fields", (section) => {
+    renderPreviewFieldGrid(section, standardRows);
+  });
+
+  appendPreviewSection(body, "Description", (section) => {
+    if (!description) {
+      const p = document.createElement("p");
+      p.className = "opp-preview-empty";
+      p.textContent = "No description";
+      section.appendChild(p);
+      return;
+    }
+    const p = document.createElement("p");
+    p.className = "opp-preview-description";
+    p.textContent = description;
+    section.appendChild(p);
+  });
+
+  appendPreviewSection(body, "User fields", (section) => {
+    renderPreviewFieldGrid(section, userRows);
+  });
+
+  appendPreviewSection(body, "History & notes", (section) => {
+    if (!history.length) {
+      const p = document.createElement("p");
+      p.className = "opp-preview-empty";
+      p.textContent = "No history events";
+      section.appendChild(p);
+      return;
+    }
+    const ul = document.createElement("ul");
+    ul.className = "opp-preview-history";
+    for (const ev of history) {
+      ul.appendChild(renderHistoryEventItem(ev));
+    }
+    section.appendChild(ul);
+  });
+}
+
+function setOpportunityPreviewCrmLink(oppId) {
+  const wrap = $("#opp-preview-open-crm-wrap");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  const link = createCrmOpenLink(oppId, { className: "opp-preview-open-crm" });
+  wrap.appendChild(link);
+}
+
+function findGroupForOpportunity(oppId) {
+  const id = Number(oppId);
+  if (!Number.isFinite(id)) return null;
+  for (const g of state.groups) {
+    for (const col of groupOpportunities(g)) {
+      for (const o of col.items || []) {
+        if (Number(o.id ?? o.ID) === id) return g;
+      }
+    }
+  }
+  return null;
+}
+
+function setOpportunityPreviewContext(oppId, opp = null, group = null) {
+  if (oppId == null) {
+    oppPreviewContext = { oppId: null, opp: null, group: null };
+    return;
+  }
+  const id = Number(oppId);
+  oppPreviewContext = {
+    oppId: Number.isFinite(id) ? id : null,
+    opp: opp || null,
+    group: group || null,
+  };
+}
+
+async function openDealEditFromOpportunityPreview() {
+  const { oppId, opp, group } = oppPreviewContext;
+  if (oppId == null) {
+    showToast("Opportunity not loaded", true);
+    return;
+  }
+  let deal = opp;
+  if (!deal) {
+    try {
+      deal = await fetchOpportunityForUpdate(oppId);
+    } catch (err) {
+      showToast(err.message, true);
+      return;
+    }
+  }
+  const refreshGroup = group || findGroupForOpportunity(oppId);
+  closeOpportunityPreviewModal();
+  try {
+    await openDealEditModal(deal, refreshGroup);
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+function closeOpportunityPreviewModal() {
+  oppPreviewMailCache.clear();
+  setOpportunityPreviewContext(null);
+  $("#opp-preview-modal")?.classList.add("hidden");
+}
+
+async function openOpportunityPreviewModal(oppId, titleHint = "", group = null) {
+  const modal = $("#opp-preview-modal");
+  const body = $("#opp-preview-body");
+  const titleEl = $("#opp-preview-title");
+  if (!modal || !body || !titleEl) return;
+
+  const id = Number(oppId);
+  oppPreviewMailCache.clear();
+  setOpportunityPreviewContext(id, null, group);
+  titleEl.textContent = titleHint || "Opportunity";
+  body.innerHTML = '<p class="opp-preview-loading">Loading opportunity…</p>';
+  setOpportunityPreviewCrmLink(id);
+  modal.classList.remove("hidden");
+
+  try {
+    const data = await fetchOpportunityPreviewData(id);
+    const resolvedGroup = group || findGroupForOpportunity(id);
+    setOpportunityPreviewContext(id, data.opp, resolvedGroup);
+    titleEl.textContent = data.opp.title || data.opp.Title || titleHint || `Opportunity #${id}`;
+    renderOpportunityPreviewBody(data);
+  } catch (err) {
+    body.innerHTML = `<p class="opp-preview-error">${escapeHtml(err.message)}</p>`;
+    showToast(err.message, true);
+  }
+}
+
+function bindOpportunityPreviewModal() {
+  const modal = $("#opp-preview-modal");
+  if (!modal || modal.dataset.bound) return;
+  modal.dataset.bound = "1";
+  $("#opp-preview-close")?.addEventListener("click", closeOpportunityPreviewModal);
+  $("#opp-preview-edit")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openDealEditFromOpportunityPreview();
+  });
+  modal.querySelectorAll("[data-opp-preview-dismiss]").forEach((el) => {
+    el.addEventListener("click", closeOpportunityPreviewModal);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && modal && !modal.classList.contains("hidden")) closeOpportunityPreviewModal();
+  });
+}
+
 function bindGlobalOpportunitySearch() {
   const wrap = $("#global-opp-search");
   const input = $("#global-opp-search-input");
@@ -6133,17 +9167,29 @@ function bindGlobalOpportunitySearch() {
       return;
     }
     for (const o of opps) {
-      const a = document.createElement("a");
-      a.href = crmOpportunityUrl(o.id);
-      a.target = "_blank";
-      a.rel = "noopener noreferrer";
-      a.textContent = o.title;
-      a.setAttribute("role", "option");
-      a.addEventListener("click", () => {
+      const row = document.createElement("div");
+      row.className = "global-opp-search-item";
+      row.setAttribute("role", "option");
+
+      const titleBtn = document.createElement("button");
+      titleBtn.type = "button";
+      titleBtn.className = "global-opp-search-item-title";
+      titleBtn.textContent = o.title;
+      titleBtn.addEventListener("click", (e) => {
+        e.preventDefault();
         input.value = "";
         hideResults();
+        openOpportunityPreviewModal(o.id, o.title).catch((err) => showToast(err.message, true));
       });
-      results.appendChild(a);
+
+      const openLink = createCrmOpenLink(o.id, {
+        className: "global-opp-search-open",
+        title: "Open in CRM",
+      });
+
+      row.appendChild(titleBtn);
+      row.appendChild(openLink);
+      results.appendChild(row);
     }
   };
 
@@ -6366,6 +9412,10 @@ function bindNewTaskModal() {
 }
 
 async function loadTasks() {
+  if (tileBodyCollapsed("tile-tasks")) {
+    showTileCollapsedHint("tile-tasks", "Minimized — expand to load tasks");
+    return;
+  }
   renderTasksTile();
   const params = new URLSearchParams({ startIndex: "0", count: "200", isClosed: "false" });
   const filterUser = $("#tasks-user-filter")?.value;
@@ -6544,44 +9594,156 @@ function renderTasksByUser() {
   }
 }
 
+const groupCardObservers = new Map();
+const oppCustomFieldEnrich = {
+  queue: [],
+  inFlight: new Set(),
+  pending: new Set(),
+};
+
+function opportunityHasCustomFieldLists(opp) {
+  const lists = [
+    opp.customFields,
+    opp.CustomFields,
+    opp.customFieldList,
+    opp.CustomFieldList,
+    opp.fieldValues,
+    opp.FieldValues,
+  ];
+  return lists.some((l) => Array.isArray(l) && l.length);
+}
+
+function findOpportunityInGroup(group, oppId) {
+  const id = String(oppId);
+  return (group.opportunities || []).find((o) => String(o.id ?? o.ID) === id) || null;
+}
+
+async function fetchOpportunityCustomFields(opp) {
+  const id = opp.id ?? opp.ID;
+  if (id == null) return false;
+  const paths = [
+    `/api/2.0/crm/opportunity/${id}/customfield`,
+    `/api/2.0/crm/opportunity/${id}/customfields`,
+    `/api/2.0/crm/opportunity/${id}/customfield/`,
+  ];
+  for (const path of paths) {
+    try {
+      const fields = unwrap(await api(path));
+      if (fields.length) {
+        opp.customFields = fields;
+        indexOpportunity(opp);
+        return true;
+      }
+    } catch {
+      /* try next */
+    }
+  }
+  return false;
+}
+
+function updateOpportunityCardDom(opp, group) {
+  const root = group._el;
+  if (!root) return;
+  const card = root.querySelector(`.card[data-opportunity-id="${opp.id}"]`);
+  if (!card) return;
+  const showStagePill = group.groupBy !== "stage";
+  const next = renderCard(opp, group, showStagePill);
+  card.replaceWith(next);
+  const board = $(".board", root);
+  const entry = groupCardObservers.get(group.id);
+  if (board && entry?.observer) entry.observer.observe(next);
+}
+
+async function drainOppCustomFieldEnrichQueue() {
+  while (
+    oppCustomFieldEnrich.queue.length > 0 &&
+    oppCustomFieldEnrich.inFlight.size < OPP_CUSTOM_FIELD_ENRICH_CONCURRENCY
+  ) {
+    const job = oppCustomFieldEnrich.queue.shift();
+    if (!job) break;
+    const opp = job.opp;
+    const group = job.group;
+    const id = String(opp.id ?? opp.ID);
+    if (!id || opportunityHasCustomFieldLists(opp)) {
+      oppCustomFieldEnrich.pending.delete(id);
+      continue;
+    }
+    oppCustomFieldEnrich.inFlight.add(id);
+    try {
+      await fetchOpportunityCustomFields(opp);
+      updateOpportunityCardDom(opp, group);
+    } catch {
+      /* card keeps base fields */
+    } finally {
+      oppCustomFieldEnrich.inFlight.delete(id);
+      oppCustomFieldEnrich.pending.delete(id);
+    }
+  }
+}
+
+function enqueueOpportunityCustomFieldEnrich(opp, group) {
+  const id = String(opp.id ?? opp.ID);
+  if (!id || !group) return;
+  if (opportunityHasCustomFieldLists(opp)) return;
+  if (oppCustomFieldEnrich.pending.has(id) || oppCustomFieldEnrich.inFlight.has(id)) return;
+  oppCustomFieldEnrich.pending.add(id);
+  oppCustomFieldEnrich.queue.push({ opp, group });
+  drainOppCustomFieldEnrichQueue();
+}
+
+function disconnectGroupCardObserver(groupId) {
+  const entry = groupCardObservers.get(groupId);
+  if (!entry) return;
+  entry.observer.disconnect();
+  groupCardObservers.delete(groupId);
+}
+
+function observeOpportunityCardsInGroup(group) {
+  disconnectGroupCardObserver(group.id);
+  const board = group._el?.querySelector(".board");
+  if (!board) return;
+
+  const tileRoot = group._el?.closest(".dashboard-tile") || null;
+  const observer = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const card = entry.target;
+        const oppId = card.dataset.opportunityId;
+        const opp = findOpportunityInGroup(group, oppId);
+        if (opp) enqueueOpportunityCustomFieldEnrich(opp, group);
+      }
+    },
+    { root: tileRoot, rootMargin: "160px 0px", threshold: 0.02 }
+  );
+
+  for (const card of board.querySelectorAll(".card[data-opportunity-id]")) {
+    observer.observe(card);
+  }
+  groupCardObservers.set(group.id, { observer });
+}
+
+/** Legacy batch enrich — prefer visible-card queue; kept for explicit bulk refresh if needed. */
 async function enrichOpportunitiesCustomFields(items) {
   if (!items.length || !state.customFieldDefs.length) return items;
-  const missing = items.filter((o) => {
-    const lists = [o.customFields, o.CustomFields, o.customFieldList, o.CustomFieldList];
-    return !lists.some((l) => Array.isArray(l) && l.length);
-  });
+  const missing = items.filter((o) => !opportunityHasCustomFieldLists(o));
   await Promise.all(
-    missing.slice(0, 40).map(async (opp) => {
-      const id = opp.id ?? opp.ID;
-      if (id == null) return;
-      const paths = [
-        `/api/2.0/crm/opportunity/${id}/customfield`,
-        `/api/2.0/crm/opportunity/${id}/customfields`,
-        `/api/2.0/crm/opportunity/${id}/customfield/`,
-      ];
-      for (const path of paths) {
-        try {
-          const fields = unwrap(await api(path));
-          if (fields.length) {
-            opp.customFields = fields;
-            return;
-          }
-        } catch {
-          /* try next */
-        }
-      }
-    })
+    missing.slice(0, 40).map((opp) => fetchOpportunityCustomFields(opp))
   );
   return items;
 }
 
-async function refreshGroup(group) {
+async function refreshGroup(group, { force = false } = {}) {
+  const tileId = `group-${group.id}`;
+  if (!force && tileBodyCollapsed(tileId)) {
+    showTileCollapsedHint(tileId, "Minimized — expand to load deals");
+    return;
+  }
   try {
     let items = await fetchOpportunitiesForGroup(group);
     if (group.dealStatus !== "all" && !group.stageType) {
       items = applyClientDealStatus(items, group.dealStatus);
     }
-    items = await enrichOpportunitiesCustomFields(items);
     group.opportunities = items;
     for (const o of items) indexOpportunity(o);
 
@@ -6604,27 +9766,22 @@ async function refreshAll() {
   noteDashboardActivity();
   $("#status-text").textContent = "Loading…";
   try {
-    loadFeedKeywordFromStorage();
     state.opportunityById = new Map();
     state.tileLayout = loadLayoutFromStorage();
     await loadCurrentUser();
     syncFeedFilterPlaceholder();
-    await loadPortalUsers();
-    await Promise.all([loadStages(), loadAllTags(), loadOpportunityCustomFieldDefs()]);
-    await loadUserProfileFromServer();
+    await Promise.all([
+      loadPortalUsers(),
+      loadUserProfileFromServer(),
+      loadStages(),
+      loadAllTags(),
+      loadOpportunityCustomFieldDefs(),
+    ]);
     syncFeedFilterPlaceholder();
     renderBoardGroups();
     refreshDashboardTileLayouts();
     populateTasksUserFilter();
-    await Promise.all(state.groups.map((g) => refreshGroup(g)));
-    await Promise.all([
-      loadNotificationFeed(),
-      loadTasks(),
-      ...state.calendarTiles.map((cal) => loadCalendarForTile(cal, { quiet: true })),
-    ]);
-    const openOpps = countOpenOpportunities();
-    const openTasks = state.tasks.length;
-    $("#status-text").textContent = `${openOpps} open opportunities · ${openTasks} open tasks`;
+    await loadExpandedDashboardTiles({ quiet: true });
   } catch (err) {
     $("#status-text").textContent = "Error";
     showToast(err.message, true);
@@ -6662,17 +9819,25 @@ async function init() {
   state.calendarTiles = [];
   state.notesTiles = [];
   state.tileLayout = { order: [], widths: {}, heights: {}, collapsed: {} };
-  state.hiddenFeedKeys = new Set();
+  state.hiddenFeedEntries = new Map();
   state.groupTemplates = [];
   userProfileReady = false;
   bindNewTaskModal();
   bindDealEditModal();
+  bindQuickNoteModal();
   bindCreateOpportunityModal();
   bindGlobalOpportunitySearch();
+  bindOpportunityPreviewModal();
   bindDashboardActivityTracking();
+  bindFeedHiddenModal();
+  bindNotesArchiveRestoreModal();
 
   $("#new-opportunity-btn")?.addEventListener("click", () => {
     openCreateOpportunityModal().catch((err) => showToast(err.message, true));
+  });
+
+  $("#quick-note-btn")?.addEventListener("click", () => {
+    openQuickNoteModal().catch((err) => showToast(err.message, true));
   });
 
   bindAddTileModal();

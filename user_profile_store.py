@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data" / "user-profiles"
 LEGACY_NOTES_DIR = ROOT / "data" / "dashboard-notes"
 PROFILE_VERSION = 2
+HIDDEN_FEED_RETENTION_DAYS = 30
 
 
 def _safe_segment(value: str, fallback: str = "unknown") -> str:
@@ -48,12 +49,19 @@ def _clean_notes_tiles(tiles: Any) -> list[dict[str, Any]]:
         updated_at = str(item.get("updatedAt") or "").strip()
         if not updated_at:
             updated_at = datetime.now(timezone.utc).isoformat()
+        default_vm = item.get("defaultViewMode")
         out.append(
             {
                 "id": str(item["id"]),
                 "name": str(item.get("name") or "Notes")[:200],
                 "content": str(item.get("content") or ""),
                 "viewMode": "preview" if item.get("viewMode") == "preview" else "edit",
+                "defaultViewMode": "preview"
+                if default_vm == "preview"
+                else ("edit" if default_vm == "edit" else None),
+                "accent": str(item.get("accent") or "")[:32],
+                "archived": bool(item.get("archived")),
+                "archivedAt": str(item.get("archivedAt") or "")[:64] or None,
                 "updatedAt": updated_at,
             }
         )
@@ -81,6 +89,81 @@ def _clean_calendar_tiles(tiles: Any) -> list[dict[str, Any]]:
             del out[-1]["viewYear"]
         if out[-1]["viewMonth"] is None:
             del out[-1]["viewMonth"]
+    return out
+
+
+def _parse_iso_datetime(value: str) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def _hidden_feed_cutoff() -> datetime:
+    return datetime.now(timezone.utc) - timedelta(days=HIDDEN_FEED_RETENTION_DAYS)
+
+
+def _clean_hidden_feed_snapshot(snapshot: Any) -> dict[str, Any] | None:
+    if not isinstance(snapshot, dict):
+        return None
+    out: dict[str, Any] = {}
+    if snapshot.get("id") is not None:
+        out["id"] = snapshot["id"]
+    title = str(snapshot.get("title") or "").strip()
+    if title:
+        out["title"] = title[:300]
+    text = str(snapshot.get("text") or "").strip()
+    if text:
+        out["text"] = text[:500]
+    author = str(snapshot.get("author") or "").strip()
+    if author:
+        out["author"] = author[:200]
+    date = str(snapshot.get("date") or "").strip()
+    if date:
+        out["date"] = date[:80]
+    return out or None
+
+
+def _clean_hidden_feed_keys(hidden: Any) -> list[dict[str, Any]]:
+    """Normalize hidden CRM notification entries; drop items older than retention."""
+    if not isinstance(hidden, list):
+        return []
+    cutoff = _hidden_feed_cutoff()
+    now = datetime.now(timezone.utc).isoformat()
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in hidden:
+        key = ""
+        hidden_at = ""
+        snapshot: dict[str, Any] | None = None
+        if isinstance(item, str):
+            key = item.strip()
+            hidden_at = now
+        elif isinstance(item, dict):
+            key = str(item.get("key") or "").strip()
+            hidden_at = str(item.get("hiddenAt") or "").strip() or now
+            snapshot = _clean_hidden_feed_snapshot(item.get("snapshot"))
+        if not key or key in seen:
+            continue
+        hidden_dt = _parse_iso_datetime(hidden_at)
+        if hidden_dt is None:
+            hidden_at = now
+            hidden_dt = _parse_iso_datetime(hidden_at)
+        if hidden_dt and hidden_dt < cutoff:
+            continue
+        seen.add(key)
+        row: dict[str, Any] = {"key": key[:500], "hiddenAt": hidden_at[:80]}
+        if snapshot:
+            row["snapshot"] = snapshot
+        out.append(row)
     return out
 
 
@@ -138,8 +221,7 @@ def load_user_profile(portal: str, user_id: str) -> dict[str, Any]:
     profile["notesTiles"] = _clean_notes_tiles(data.get("notesTiles"))
     templates = data.get("groupTemplates")
     profile["groupTemplates"] = templates if isinstance(templates, list) else []
-    hidden = data.get("hiddenFeedKeys")
-    profile["hiddenFeedKeys"] = [str(k) for k in hidden] if isinstance(hidden, list) else []
+    profile["hiddenFeedKeys"] = _clean_hidden_feed_keys(data.get("hiddenFeedKeys"))
     profile["feedKeywordFilter"] = str(data.get("feedKeywordFilter") or "")[:500]
     profile["updatedAt"] = str(data.get("updatedAt") or "")
     return _migrate_legacy_notes(portal, user_id, profile)
@@ -163,9 +245,7 @@ def save_user_profile(portal: str, user_id: str, payload: dict[str, Any]) -> dic
         "groupTemplates": payload.get("groupTemplates")
         if isinstance(payload.get("groupTemplates"), list)
         else [],
-        "hiddenFeedKeys": payload.get("hiddenFeedKeys")
-        if isinstance(payload.get("hiddenFeedKeys"), list)
-        else [],
+        "hiddenFeedKeys": _clean_hidden_feed_keys(payload.get("hiddenFeedKeys")),
         "feedKeywordFilter": str(payload.get("feedKeywordFilter") or "")[:500],
     }
     path.write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
