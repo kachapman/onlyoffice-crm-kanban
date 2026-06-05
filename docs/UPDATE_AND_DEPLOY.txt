@@ -133,6 +133,79 @@ TROUBLESHOOTING
 
 
 --------------------------------------------------------------------------------
+VERSIONING & ROLLBACK
+--------------------------------------------------------------------------------
+
+Yes — the project is versioned with Git. Every commit on GitHub is a restore
+point for CODE. There is no separate "app version number" in the UI; use Git
+commits or tags.
+
+What is versioned:
+  - All source (public/, server.py, Docker files, deploy/) in GitHub
+  - Branch: main (default)
+
+What is NOT rolled back by git checkout:
+  - Server .env (secrets; stays on droplet only)
+  - User dashboard settings in Docker volume dashboard-data (profiles, notes)
+  - /opt/estimate-enhancer/nginx.conf (back up manually before nginx edits)
+  - Let's Encrypt certificates
+
+Mark this working production baseline (do once, or after each stable release):
+
+  cd ~/crm-kanban
+  git tag -a v1.0.0-production-2026-06-05 -m "Working: dashboard.vanguardadj.com deployed"
+  git push origin v1.0.0-production-2026-06-05
+
+List tags:  git tag -l
+List history: git log --oneline -15
+
+ROLLBACK — code on the server (to a previous commit or tag)
+
+  ssh root@YOUR_DROPLET_IP
+  cd /opt/vanguard/onlyoffice-crm-kanban
+
+  # See history
+  git fetch origin
+  git log --oneline -15
+  git tag -l
+
+  # Option A: roll back to a tag
+  git checkout v1.0.0-production-2026-06-05
+
+  # Option B: roll back to a specific commit (example hash)
+  # git checkout a9554b5
+
+  docker compose build
+  docker compose up -d
+  curl -s http://127.0.0.1:8765/api/config
+
+  # Return to latest later:
+  # git checkout main && git pull && docker compose up -d --build
+
+ROLLBACK — desktop clone only
+
+  cd ~/crm-kanban
+  git fetch origin
+  git checkout v1.0.0-production-2026-06-05   # or a commit hash
+
+  # Return to latest:
+  # git checkout main && git pull
+
+Optional: keep last Docker image before risky upgrade (on server)
+
+  docker tag onlyoffice-crm-kanban-dashboard:latest onlyoffice-crm-kanban-dashboard:backup-2026-06-05
+  # Restore image later only if you did not rebuild from different code:
+  # docker tag onlyoffice-crm-kanban-dashboard:backup-2026-06-05 onlyoffice-crm-kanban-dashboard:latest
+  # docker compose up -d
+
+Back up user profile data before major changes (server):
+
+  cd /opt/vanguard/onlyoffice-crm-kanban
+  docker run --rm -v onlyoffice-crm-kanban_dashboard-data:/data -v $(pwd):/backup alpine \
+    tar czf /backup/dashboard-data-$(date +%F).tar.gz -C /data .
+
+
+--------------------------------------------------------------------------------
 QUICK REFERENCE (copy/paste)
 --------------------------------------------------------------------------------
 

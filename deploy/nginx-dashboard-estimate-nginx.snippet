@@ -1,0 +1,47 @@
+# Append to /opt/estimate-enhancer/nginx.conf (host file mounted into estimate-nginx).
+# Prerequisites:
+#   NET=$(docker inspect estimate-nginx --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+#   docker network connect "$NET" vanguard-crm-dashboard
+#   docker exec estimate-nginx wget -qO- http://vanguard-crm-dashboard:8765/api/config
+#
+# TLS (on host, after HTTP block is loaded):
+#   certbot certonly --webroot -w /var/www/certbot -d dashboard.vanguardadj.com
+#   docker exec estimate-nginx nginx -t && docker exec estimate-nginx nginx -s reload
+
+server {
+    listen 80;
+    server_name dashboard.vanguardadj.com;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name dashboard.vanguardadj.com;
+
+    ssl_certificate /etc/letsencrypt/live/dashboard.vanguardadj.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/dashboard.vanguardadj.com/privkey.pem;
+    ssl_trusted_certificate /etc/letsencrypt/live/dashboard.vanguardadj.com/chain.pem;
+
+    location / {
+        proxy_pass http://vanguard-crm-dashboard:8765;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 120s;
+    }
+
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+}

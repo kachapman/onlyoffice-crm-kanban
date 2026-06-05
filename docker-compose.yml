@@ -12,6 +12,13 @@ services:
       - dashboard-data:/app/data
     ports:
       - "127.0.0.1:8765:8765"
+    networks:
+      - estimate-network
+
+networks:
+  estimate-network:
+    external: true
+    name: estimate-enhancer_estimate-network
 
 volumes:
   dashboard-data:

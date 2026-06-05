@@ -1,0 +1,164 @@
+================================================================================
+  PRODUCTION SERVER NOTES — dashboard.vanguardadj.com
+  Droplet: ubuntu-webapp1-estimateanalyzer (159.89.229.126)
+================================================================================
+
+These settings were applied during initial deploy (June 2026). They live
+OUTSIDE the onlyoffice-crm-kanban git repo. git pull on the CRM repo does NOT
+change them. Back up these paths before major edits.
+
+
+--------------------------------------------------------------------------------
+DNS (Bluehost / vanguardadj.com)
+--------------------------------------------------------------------------------
+
+  Host: dashboard
+  Type: A
+  Value: 159.89.229.126
+
+Verify:
+
+  dig +short dashboard.vanguardadj.com A @8.8.8.8
+
+Expected: 159.89.229.126 (not Cloudways or other IPs).
+
+
+--------------------------------------------------------------------------------
+CRM dashboard app (git repo on server)
+--------------------------------------------------------------------------------
+
+  Path:     /opt/vanguard/onlyoffice-crm-kanban
+  Clone:    https://github.com/kachapman/onlyoffice-crm-kanban.git
+  Container: vanguard-crm-dashboard
+  Image:    onlyoffice-crm-kanban-dashboard
+  Host port: 127.0.0.1:8765 only (not public; nginx proxies)
+
+  Config:   .env on server (NOT in git). Example keys:
+            ONLYOFFICE_PORTAL_URL=https://office.vanguardadj.com
+            COOKIE_SECURE=true
+
+  User data: Docker volume onlyoffice-crm-kanban_dashboard-data
+             (profiles, notes — backup separately; see DEPLOY.md)
+
+  Update app:
+
+    cd /opt/vanguard/onlyoffice-crm-kanban
+    git pull
+    docker compose up -d --build
+
+  docker-compose.yml attaches container to estimate network (see below).
+  If HTTPS breaks after recreate, test:
+
+    docker exec estimate-nginx wget -qO- http://vanguard-crm-dashboard:8765/api/config
+
+
+--------------------------------------------------------------------------------
+Public HTTPS — estimate-enhancer stack (NOT in CRM git repo)
+--------------------------------------------------------------------------------
+
+  Ports 80/443 on this droplet are owned by Docker container:
+
+    estimate-nginx  (image: nginx:alpine)
+
+  Host nginx / apache are inactive. Do NOT use host certbot --nginx for
+  dashboard.vanguardadj.com.
+
+  Nginx config file (bind-mounted):
+
+    /opt/estimate-enhancer/nginx.conf
+      -> /etc/nginx/conf.d/default.conf inside estimate-nginx
+
+  Existing sites in same file:
+    - enhancer.sherwoodestimates.com  -> app:8000
+    - iwscalc.sherwoodestimates.com   -> iws-calculator:80
+    - dashboard.vanguardadj.com       -> vanguard-crm-dashboard:8765
+
+  Reference copy of dashboard blocks (for edits / disaster recovery):
+
+    onlyoffice-crm-kanban/deploy/nginx-dashboard-estimate-nginx.snippet
+
+  Reload nginx after editing nginx.conf:
+
+    docker exec estimate-nginx nginx -t
+    docker exec estimate-nginx nginx -s reload
+
+  Backups created on server during setup:
+
+    /opt/estimate-enhancer/nginx.conf.bak.*
+
+
+--------------------------------------------------------------------------------
+Docker network (CRM <-> estimate-nginx)
+--------------------------------------------------------------------------------
+
+  Network name: estimate-enhancer_estimate-network
+
+  Members must include:
+    estimate-nginx, estimate-enhancer, iws-calculator, vanguard-crm-dashboard
+
+  CRM compose file wires this via external network (see docker-compose.yml).
+
+  Manual fix if wget from nginx to dashboard fails:
+
+    docker network connect estimate-enhancer_estimate-network vanguard-crm-dashboard
+
+
+--------------------------------------------------------------------------------
+TLS / Let's Encrypt
+--------------------------------------------------------------------------------
+
+  Certificates on host: /etc/letsencrypt
+  Mounted read-only into estimate-nginx.
+
+  Dashboard cert:
+
+    /etc/letsencrypt/live/dashboard.vanguardadj.com/
+
+  Issue / renew (on host, NOT certbot --nginx):
+
+    certbot certonly --webroot -w /var/www/certbot -d dashboard.vanguardadj.com
+
+  ACME webroot must be visible inside estimate-nginx at /var/www/certbot.
+
+  In /opt/estimate-enhancer/docker-compose.yml under nginx volumes:
+
+    - /var/www/certbot:/var/www/certbot:ro
+
+  After adding volume: cd /opt/estimate-enhancer && docker compose up -d
+
+  HTTP server block must include:
+
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+
+
+--------------------------------------------------------------------------------
+Unused on this server (safe to ignore)
+--------------------------------------------------------------------------------
+
+  /etc/nginx/sites-enabled/dashboard.vanguardadj.com
+    (host nginx site — not used; ports 80/443 are on estimate-nginx)
+
+  deploy/nginx-dashboard.conf in CRM repo
+    (for host nginx only — not used in production here)
+
+
+--------------------------------------------------------------------------------
+Quick health checks
+--------------------------------------------------------------------------------
+
+  curl -s http://127.0.0.1:8765/api/config
+  curl -s https://dashboard.vanguardadj.com/api/config
+  docker compose -f /opt/vanguard/onlyoffice-crm-kanban/docker-compose.yml ps
+  docker ps --filter name=estimate-nginx
+
+
+--------------------------------------------------------------------------------
+Related docs in git repo
+--------------------------------------------------------------------------------
+
+  docs/UPDATE_AND_DEPLOY.txt   — desktop -> GitHub -> server workflow
+  DEPLOY.md                    — general Docker / DNS guide
+  FUTURE_FEATURES.md           — roadmap
+  ISSUES.md                    — known bugs
+
+================================================================================

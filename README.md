@@ -23,6 +23,7 @@ Use **Add Tile** to add an **Opportunity Group** (kanban) or a **Calendar** tile
 ## Documentation
 
 - **[docs/UPDATE_AND_DEPLOY.txt](./docs/UPDATE_AND_DEPLOY.txt)** — step-by-step: edit locally → GitHub → update server
+- **[docs/PRODUCTION_SERVER_NOTES.txt](./docs/PRODUCTION_SERVER_NOTES.txt)** — droplet-only config (estimate-nginx, DNS, certs; not overwritten by git pull)
 - **[FUTURE_FEATURES.md](./FUTURE_FEATURES.md)** — roadmap (tile preview popup, custom fields, note attachments)
 - **[Toaster_Features](./Toaster_Features)** — suggested dashboard tiles/widgets (CRM-inspired)
 - **[ISSUES.md](./ISSUES.md)** — tracked bugs and follow-up work (e.g. New Opportunity custom user fields)
