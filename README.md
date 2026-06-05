@@ -1,3 +1,5 @@
+THIS WAS MADE BY A CLANKER. LOOK ON IT YE MIGHTY AND DESPAIR. 
+
 # CRM Kanban (Workspace dashboard)
 
 **Current version:** 1.1.0 — see [CHANGELOG.md](./CHANGELOG.md), [docs/RELEASE_v1.1.md](./docs/RELEASE_v1.1.md), and server deploy [docs/DEPLOY_v1.1_VERIFY_STEPS.md](./docs/DEPLOY_v1.1_VERIFY_STEPS.md).
