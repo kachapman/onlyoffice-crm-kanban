@@ -4,30 +4,39 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 ## [1.1.0] — 2026-06-05
 
-### CRM notifications
-- Fixed empty notifications feed after pagination refactor; restored reliable history + mail loading.
-- Feed window extended to **90 days**; display capped at **200** most recent events.
-- Discreet loading spinner in the feed header while fetching.
-- Hidden notifications stored on the server with snapshots; toolbar button to review and restore.
-- Scroll-to-load-more for older items (until the 200-event cap).
+See also [docs/RELEASE_v1.1.md](./docs/RELEASE_v1.1.md) for the full GitHub release text.
 
-### Notes tiles
-- Server-side persistence per user (`notesTiles` in user profile); archived tiles are not auto-deleted.
-- **File** menu: save as `.txt` / `.md`, archive, duplicate, **restore from archive** (pick archived tile by date; fills current note).
-- Presets including **Daily** and **Claim checklist** (from CRM checkbox user fields).
-- Quarter-width layout; Edit / Preview labels; icon actions for copy, date, print, CRM quick note.
-- Removed archived-notes list from **Add tile** (restore lives on each note tile).
+### Fixes
+- CRM notifications feed empty after pagination refactor — restored bulk history + mail loading.
+- Feed no longer shows “no events” while mail/history is still loading.
+- Hidden notifications: server-backed entries with snapshots; restore via toolbar modal.
+- Archived notes tiles no longer auto-deleted from server profile.
+- Removed non-working archived-notes UI from **Add tile** (moved to notes **File** menu).
+- Group profile saves omit embedded opportunity lists (refetch on expand).
+
+### CRM notifications (new / improved)
+- **90-day** feed window (was 30).
+- **200-event** load cap.
+- Loading spinner in feed header; scroll to load more (until cap).
+- 5-minute in-session feed cache.
+- Hidden-notifications manager (hide per item, review/restore, 30-day retention).
+
+### Notes tiles (new / improved)
+- Server persistence per user; archive retained on server.
+- **File** menu: `.txt` / `.md` export, archive, duplicate, **restore from archive** (by date → fills current note).
+- Presets: **Daily**, **Claim checklist** (CRM checkbox fields).
+- Quarter width; Edit/Preview; icon toolbar; save footer (time + stats).
+- Removed link-deal from notes; **Daily Standup** renamed to **Daily**.
 
 ### Dashboard performance
 - Minimized tiles skip CRM fetches until expanded.
-- Parallel bootstrap (profile, stages, tags, definitions).
-- Opportunity custom fields enriched on visible cards via `IntersectionObserver` (queued, limited concurrency).
+- Parallel login bootstrap; deferred per-card custom-field enrichment (`IntersectionObserver`).
 
 ### UI
-- **Red X** icon to remove group, calendar, and notes tiles.
-- **Save template** uses standard save (floppy) icon on group tiles.
-- Minimize control in tile layout group (all tile types).
-- Kanban card **preview** button (monitor icon) opens opportunity preview modal.
+- **Red X** remove icon (groups, calendar, notes).
+- **Save template** floppy-disk icon on groups.
+- Minimize + icon-based layout controls on all tiles.
+- Kanban card **preview** → opportunity preview modal.
 
 ---
 

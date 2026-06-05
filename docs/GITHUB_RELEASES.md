@@ -5,7 +5,9 @@ Tags are pushed to [onlyoffice-crm-kanban](https://github.com/kachapman/onlyoffi
 | Tag | Notes file |
 |-----|------------|
 | `v1.0.0` | [RELEASE_v1.0.md](./RELEASE_v1.0.md) |
-| `v1.1.0` | [RELEASE_v1.1.md](./RELEASE_v1.1.md) |
+| `v1.1.0` | [RELEASE_v1.1.md](./RELEASE_v1.1.md) — fixes, features, upgrade, rollback |
+
+**Server deploy (verify each step):** [DEPLOY_v1.1_VERIFY_STEPS.md](./DEPLOY_v1.1_VERIFY_STEPS.md)
 
 ## Publish releases in the GitHub UI
 

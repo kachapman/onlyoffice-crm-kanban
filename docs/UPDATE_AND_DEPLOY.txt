@@ -55,38 +55,76 @@ PART A — ON YOUR DESKTOP (development machine)
 PART B — ON THE SERVER (DigitalOcean droplet)
 --------------------------------------------------------------------------------
 
-SSH in:
+  IMPORTANT: Do one step, run its VERIFY block, then continue only if it passes.
+  Full v1.1 walkthrough: docs/DEPLOY_v1.1_VERIFY_STEPS.md
+
+  This update does NOT change DNS, estimate-nginx config, or TLS.
+
+5. SSH in
 
    ssh root@159.89.229.126
-   # (or your usual user/host)
 
-5. Pull and rebuild the dashboard container
+   VERIFY: hostname shows the droplet; you are logged in.
+
+6. (Optional) DNS check — read only
+
+   dig +short dashboard.vanguardadj.com A @8.8.8.8
+
+   VERIFY: 159.89.229.126 — if wrong, fix Bluehost before deploying.
+
+7. Backup user profiles (recommended)
 
    cd /opt/vanguard/onlyoffice-crm-kanban
-   git pull
+   docker run --rm -v onlyoffice-crm-kanban_dashboard-data:/data -v $(pwd):/backup alpine \
+     tar czf /backup/dashboard-data-$(date +%F).tar.gz -C /data .
+
+   VERIFY: ls -lh /backup/dashboard-data-*.tar.gz shows a new non-zero file.
+
+8. Pull v1.1
+
+   cd /opt/vanguard/onlyoffice-crm-kanban
+   git fetch origin
+   git checkout main
+   git pull --ff-only origin main
+   # Or: git checkout v1.1.0
+
+   VERIFY: git log -1 --oneline; cat VERSION → 1.1.0; git status clean.
+
+9. Rebuild and restart (CRM container only)
+
    docker compose build
    docker compose up -d
+   # Or: ./deploy/update.sh
 
-   Or use the helper script:
+   VERIFY: docker compose ps → dashboard "running".
 
-   cd /opt/vanguard/onlyoffice-crm-kanban
-   chmod +x deploy/update.sh
-   ./deploy/update.sh
+10. Local app health (no nginx)
 
-6. Confirm the app is healthy
-
-   docker compose ps
    curl -s http://127.0.0.1:8765/api/config
 
-   Expect JSON with portalUrl.
+   VERIFY: JSON with portalUrl. If refused, docker compose logs dashboard.
 
-7. Confirm the site (public)
+11. Docker network (nginx → dashboard)
 
-   curl -sI https://dashboard.vanguardadj.com/
+   docker exec estimate-nginx wget -qO- http://vanguard-crm-dashboard:8765/api/config
 
-   Expect HTTP/2 200 and server: nginx.
+   VERIFY: same JSON. If fail:
+   docker network connect estimate-enhancer_estimate-network vanguard-crm-dashboard
+   (retry wget before editing nginx.conf)
 
-   Browser: https://dashboard.vanguardadj.com
+12. Public site
+
+   curl -sI https://dashboard.vanguardadj.com/ | head -5
+   curl -s https://dashboard.vanguardadj.com/api/config
+
+   VERIFY: HTTP 200; JSON from /api/config. If 502 only here, nginx -t && reload
+   estimate-nginx (see PRODUCTION_SERVER_NOTES.txt).
+
+13. Browser
+
+   https://dashboard.vanguardadj.com — login, notifications feed, notes File menu.
+
+   VERIFY: data and tiles unchanged; v1.1 UI (feed loading, notes archive menu).
 
 
 --------------------------------------------------------------------------------
