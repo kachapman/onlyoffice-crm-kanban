@@ -1,0 +1,145 @@
+================================================================================
+  Vanguard CRM Dashboard — Update & deploy workflow
+  Repo: https://github.com/kachapman/onlyoffice-crm-kanban
+  Production: https://dashboard.vanguardadj.com
+================================================================================
+
+Use this checklist every time you change the app on your desktop and publish
+to the server.
+
+
+--------------------------------------------------------------------------------
+PART A — ON YOUR DESKTOP (development machine)
+--------------------------------------------------------------------------------
+
+1. Stop the local dev server (if it is running)
+
+   cd ~/crm-kanban
+   fuser -k 8765/tcp 2>/dev/null || true
+
+   (Or press Ctrl+C in the terminal that ran ./start.sh)
+
+2. Edit code
+
+   Main files:
+   - public/app.js, public/styles.css, public/index.html  (UI)
+   - server.py, user_profile_store.py, notes_store.py, ics_calendar.py  (backend)
+   - docker-compose.yml, Dockerfile, deploy/*  (production)
+
+3. Test locally (optional but recommended)
+
+   cd ~/crm-kanban
+   cp config.example.env .env    # only first time; then edit .env
+   ./start.sh
+
+   Open: http://127.0.0.1:8765
+   Log in with your OnlyOffice CRM credentials.
+
+   When done testing, stop the server again (step 1).
+
+4. Commit and push to GitHub
+
+   cd ~/crm-kanban
+   git status
+   git add <files you changed>
+   git commit -m "Short description of the change"
+   git push origin main
+
+   Notes:
+   - Do NOT commit .env (secrets) or data/ (user profiles).
+   - SSH push: git@github.com:kachapman/onlyoffice-crm-kanban.git
+   - HTTPS push: https://github.com/kachapman/onlyoffice-crm-kanban.git
+
+
+--------------------------------------------------------------------------------
+PART B — ON THE SERVER (DigitalOcean droplet)
+--------------------------------------------------------------------------------
+
+SSH in:
+
+   ssh root@159.89.229.126
+   # (or your usual user/host)
+
+5. Pull and rebuild the dashboard container
+
+   cd /opt/vanguard/onlyoffice-crm-kanban
+   git pull
+   docker compose build
+   docker compose up -d
+
+   Or use the helper script:
+
+   cd /opt/vanguard/onlyoffice-crm-kanban
+   chmod +x deploy/update.sh
+   ./deploy/update.sh
+
+6. Confirm the app is healthy
+
+   docker compose ps
+   curl -s http://127.0.0.1:8765/api/config
+
+   Expect JSON with portalUrl.
+
+7. Confirm the site (public)
+
+   curl -sI https://dashboard.vanguardadj.com/
+
+   Expect HTTP/2 200 and server: nginx.
+
+   Browser: https://dashboard.vanguardadj.com
+
+
+--------------------------------------------------------------------------------
+NGINX / TLS (only when you change hostnames or certs)
+--------------------------------------------------------------------------------
+
+The public site is served by Docker container "estimate-nginx", not host nginx.
+
+   Config file on server: /opt/estimate-enhancer/nginx.conf
+
+   Reload after nginx edits:
+
+   docker exec estimate-nginx nginx -t
+   docker exec estimate-nginx nginx -s reload
+
+   Renew certificate (if needed):
+
+   certbot certonly --webroot -w /var/www/certbot -d dashboard.vanguardadj.com
+
+
+--------------------------------------------------------------------------------
+DOCKER NETWORK (if dashboard cannot be reached after recreate)
+--------------------------------------------------------------------------------
+
+The CRM container must be on the same network as estimate-nginx.
+
+   docker network connect estimate-enhancer_estimate-network vanguard-crm-dashboard
+   docker exec estimate-nginx wget -qO- http://vanguard-crm-dashboard:8765/api/config
+
+   Permanent fix: add external network to docker-compose.yml (see DEPLOY.md).
+
+
+--------------------------------------------------------------------------------
+TROUBLESHOOTING
+--------------------------------------------------------------------------------
+
+| Problem                         | What to check                                      |
+|---------------------------------|----------------------------------------------------|
+| git pull fails                  | HTTPS clone or add SSH key on server               |
+| 502 / empty site                | docker compose logs dashboard                      |
+| Login OK locally, not production| HTTPS required (COOKIE_SECURE=true)                |
+| Settings not saved              | docker volume dashboard-data; logs dashboard       |
+| Old code after pull             | docker compose build --no-cache && up -d           |
+
+
+--------------------------------------------------------------------------------
+QUICK REFERENCE (copy/paste)
+--------------------------------------------------------------------------------
+
+Desktop:
+  cd ~/crm-kanban && git add -A && git commit -m "Describe change" && git push
+
+Server:
+  cd /opt/vanguard/onlyoffice-crm-kanban && git pull && docker compose up -d --build
+
+================================================================================
