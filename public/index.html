@@ -5,19 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Vanguard Adjusting Dashboard</title>
   <meta name="description" content="CRM Viewer and organizer for Opportunities, Notifications and Tasks." />
-  <link rel="icon" href="favicon.ico?v=3" sizes="any" />
-  <link rel="icon" type="image/png" sizes="64x64" href="favicon-64.png?v=3" />
-  <link rel="icon" type="image/png" sizes="48x48" href="favicon-48.png?v=3" />
-  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png?v=3" />
-  <link rel="apple-touch-icon" sizes="192x192" href="favicon-192.png?v=3" />
+  <link rel="icon" href="favicon.ico?v=4" sizes="any" />
+  <!-- Using white ship for better visibility (esp. dark tab bars); replace favicon-*.png with properly sized white variants from ship-logo-white.png if needed -->
+  <link rel="icon" type="image/png" sizes="64x64" href="ship-logo-white.png?v=4" />
+  <link rel="icon" type="image/png" sizes="48x48" href="ship-logo-white.png?v=4" />
+  <link rel="icon" type="image/png" sizes="32x32" href="ship-logo-white.png?v=4" />
+  <link rel="apple-touch-icon" sizes="192x192" href="ship-logo-white.png?v=4" />
   <meta property="og:type" content="website" />
   <meta property="og:title" content="Vanguard Adjusting Dashboard" />
   <meta property="og:description" content="CRM Viewer and organizer for Opportunities, Notifications and Tasks." />
-  <meta property="og:image" content="favicon-192.png" />
+  <meta property="og:image" content="ship-logo-white.png" />
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:title" content="Vanguard Adjusting Dashboard" />
   <meta name="twitter:description" content="CRM Viewer and organizer for Opportunities, Notifications and Tasks." />
-  <meta name="twitter:image" content="favicon-192.png" />
+  <meta name="twitter:image" content="ship-logo-white.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
@@ -229,6 +230,36 @@
       <div class="modal-actions">
         <button type="button" id="confirm-modal-cancel" class="btn btn-secondary">Cancel</button>
         <button type="button" id="confirm-modal-ok" class="btn btn-danger">Remove</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="template-delete-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="template-delete-modal-title">
+    <div class="modal-backdrop" data-template-delete-dismiss></div>
+    <div class="modal-card">
+      <h2 id="template-delete-modal-title" class="modal-title">Delete Templates</h2>
+      <p class="modal-message">Click × to delete a template. Changes are saved immediately.</p>
+      <div id="template-delete-list" class="template-delete-list"></div>
+      <div class="modal-actions">
+        <button type="button" id="template-delete-close" class="btn btn-secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="tasks-list-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="tasks-list-modal-title">
+    <div class="modal-backdrop" data-tasks-list-dismiss></div>
+    <div class="modal-card modal-card-tasks-list">
+      <div class="tasks-list-head">
+        <h2 id="tasks-list-modal-title" class="modal-title">All Tasks</h2>
+        <label class="tasks-list-filter">
+          <input type="checkbox" id="tasks-list-show-completed" />
+          Show completed
+        </label>
+      </div>
+      <div id="tasks-list-body" class="tasks-list-body"></div>
+      <div class="modal-actions">
+        <button type="button" id="tasks-list-close" class="btn btn-secondary">Close</button>
+        <button type="button" id="tasks-list-new" class="btn btn-primary">New Task</button>
       </div>
     </div>
   </div>
