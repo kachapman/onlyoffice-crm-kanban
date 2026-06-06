@@ -85,7 +85,7 @@ Actions in the modal:
 
 ## FEAT-002 — Fix New Opportunity custom user fields (ISSUE-001)
 
-**Status:** Blocked in UI (`CREATE_OPP_USER_FIELDS_ENABLED = false` in `public/app.js`).
+**Status:** In progress — omit-on-create + delay strategy applied; UI still blocked pending portal verification. (`CREATE_OPP_USER_FIELDS_ENABLED = false` in `public/app.js`).
 
 ### Problem
 
@@ -117,6 +117,7 @@ User fields on **New Opportunity** do not persist in CRM although the deal is cr
 
 5. **Order of operations**
    - Try: create deal **without** `customFieldList`, then only per-field `POST .../customfield/{fieldId}?fieldValue=...` after id is known (with 200ms delay if needed).
+   - **Tried (post v1.1):** `buildOpportunityCreateBody` omits `customFieldList` entirely; 300ms delay + per-field POSTs only in submit path. Updated probe tests Variant A (no-list create) vs B.
 
 6. **Re-enable UI**
    - Set `CREATE_OPP_USER_FIELDS_ENABLED = true`.
@@ -284,6 +285,70 @@ See **[Toaster_Features](./Toaster_Features)** for dashboard tile/widget ideas (
 | FEAT-006 | Export group/opportunities to CSV | Medium |
 | FEAT-007 | Global search across opportunities | High |
 | FEAT-022 | OnlyOffice document / spreadsheet tile (explore) | High — see above |
+
+### FEAT-008 — AccuLynx API research (post-v1.1, from user list)
+
+**Status:** Research complete; suggestions documented for future implementation. No code changes yet. Abandoned for now (user feedback: document and park).
+
+#### Findings (from AccuLynx public docs + integrations, June 2026)
+- AccuLynx is a leading all-in-one roofing/claims/estimating CRM and business management platform (sales, production, finance, operations). Used by contractors for leads, jobs, contacts, estimates, milestones, photos, materials pricing, etc.
+- **API:** Public REST API v2 at `https://api.acculynx.com/api/v2`. 
+  - Auth: Bearer token (API key). Admin creates/names key in AccuLynx Account Settings → API section. Include `Authorization: Bearer <key>` on all requests.
+  - Rate limits + terms apply (see their docs).
+- **Key endpoints** (examples; full reference at https://apidocs.acculynx.com ):
+  - Jobs: list, get by id (includes contacts, milestones, etc.).
+  - Estimates: list/get (with includes=job,createdBy,sections...).
+  - Contacts, users, milestones, webhooks/subscriptions for events.
+- **Existing integrations:** Hover (measurements/photos), Make/Zapier, HubSpot, accounting, etc.
+- **Suggestions for future (low-effort start on local dashboard):**
+  - Store AccuLynx API key in user profile (local dev only for safety).
+  - Manual "Import from AccuLynx" or small "AccuLynx Jobs" header widget / toaster: fetch recent jobs, map to opp create (title, contact, value, custom fields for claim # etc.).
+  - Webhook receiver (if running locally) for auto-create/update on job events.
+  - Benefits for Vanguard: faster data transfer from field tools into OnlyOffice CRM, less double entry.
+  - Risks: API keys, mapping/deduping, only useful when dashboard runs on same machine as user workflow.
+
+**References:** https://apidocs.acculynx.com, existing Hover/Make integrations.
+
+---
+
+## Other ideas (backlog)
+
+#### Findings (from AccuLynx public docs + integrations, June 2026)
+- AccuLynx is a leading all-in-one roofing/claims/estimating CRM and business management platform (sales, production, finance, operations). Used by contractors for leads, jobs, contacts, estimates, milestones, photos, materials pricing, etc.
+- **API:** Public REST API v2 at `https://api.acculynx.com/api/v2`. 
+  - Auth: Bearer token (API key). Admin creates/names key in AccuLynx Account Settings → API section. Include `Authorization: Bearer <key>` on all requests.
+  - Rate limits + terms apply (see their docs).
+- **Key endpoints** (examples; full reference at https://apidocs.acculynx.com ):
+  - Jobs: list, get by id (includes contacts, milestones, etc.).
+  - Estimates: list/get (with ?includes=job,createdBy,sections...).
+  - Contacts, users, leads, company settings, milestones.
+  - Webhooks: POST /webhooks/v2/subscriptions (subscribe to topics like job events), manage subscriptions.
+  - Search variants for contacts/jobs.
+- **Existing integrations** (patterns to follow): Hover (auto import measurements/photos), Make.com/Zapier (hundreds of actions: create contact/job, get milestone, watch jobs, make custom call), HubSpot/Angi/CallRail/Roofle (lead sync), accounting software (2-way financial sync).
+- **Code samples:** Available in their docs for .NET, Node, Python (Azure Functions examples for webhooks), etc.
+
+#### Suggested implementations for this dashboard (to speed data transfer from AccuLynx → OnlyOffice CRM / Vanguard workflow)
+- **Config:** Store AccuLynx API key securely (user profile extension like other prefs, or per-portal in .env for self-hosted; never hardcode; warn on exposure). Add simple "AccuLynx" section in settings or a tile config.
+- **Low-effort start (Phase A, days):** 
+  - "Import from AccuLynx" button or new "AccuLynx Jobs" toaster tile (addable via Add Tile, persisted as e.g. acculynxTiles[]).
+  - On demand: poll recent jobs/leads/estimates via API (using key), display list with key fields (job #, contact, estimate value, stage/milestone).
+  - Quick actions: "Create opp from this" → map to createCrmOpportunity (title, responsible, bidValue from estimate, tags, custom fields for claim#/photos link, expected close).
+  - Dedupe: match on external id or title/contact + date.
+- **Medium (Phase B):** Background or scheduled sync (server.py endpoint that polls with key; store last sync cursor); auto-create/update opps + contacts; pull estimate sections into notes or custom fields; attach "Open in AccuLynx" links.
+- **Advanced (Phase C):** Webhook subscription (AccuLynx pushes to a public /api/acculynx/webhook on our dashboard or via nginx); verify signature; react to job created/updated/milestone → create or advance opp in CRM + post history event.
+- **Data mapping ideas (Vanguard adjusting niche):** AccuLynx "job" → opp; estimate total → bidValue; photos/measurements → custom "Photo Drive Link" or notes; contacts → CRM contact link; milestones/status → stage + due date + tags; sync "Same Adjuster" or member fields.
+- **Benefits:** Eliminates double-entry from field (AccuLynx) into OnlyOffice CRM; faster intake for adjusting work; live pricing/measurements already in AccuLynx.
+- **Risks / considerations:** 
+  - API key security (server-side only for writes; profile storage ok for read but encrypt at rest if possible).
+  - Field mapping + deduping (AccuLynx job id vs CRM opp id; store externalId on opp?).
+  - Rate limits, auth for multi-user (key is company-level?).
+  - One-way vs two-way (start read-only import).
+  - Requires AccuLynx admin to enable API + generate key per user/company.
+- **Files (when implemented):** Extend user_profile_store.py + app.js profile for key/config; new tile or import modal in public/*; optional server.py routes for poll/webhook; FUTURE/Toaster updates; docs.
+
+**References:** https://apidocs.acculynx.com (getting-started, reference, webhooks, code samples), AccuLynx integrations page, Hover/ Make.com examples, Reddit threads on custom tools.
+
+See also user's post-v1.1 list in this session's plan.md and the new AGENTS.md.
 
 ---
 

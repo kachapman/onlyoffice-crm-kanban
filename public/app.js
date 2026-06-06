@@ -136,6 +136,39 @@ function showToast(message, isError = false) {
   showToast._t = setTimeout(() => el.classList.add("hidden"), 5000);
 }
 
+let _crmCrashBannerEl = null;
+let _crmCrashLastShown = 0;
+function showCrmCrashNotification() {
+  const now = Date.now();
+  if (now - _crmCrashLastShown < 15000) return; // throttle
+  _crmCrashLastShown = now;
+  if (_crmCrashBannerEl && document.body.contains(_crmCrashBannerEl)) return;
+
+  const bar = document.createElement("div");
+  bar.id = "crm-crash-banner";
+  bar.className = "crm-crash-banner";
+  bar.setAttribute("role", "alert");
+  bar.innerHTML =
+    'OnlyOffice CRM backend error (e.g. 502 on history). Dashboard may be out of date. <button type="button" id="crm-crash-refresh">Refresh page now</button> — recommended in ~30 seconds.';
+  // Insert near top (after header if present)
+  const header = document.querySelector("header");
+  if (header && header.parentNode) {
+    header.parentNode.insertBefore(bar, header.nextSibling);
+  } else {
+    document.body.prepend(bar);
+  }
+  _crmCrashBannerEl = bar;
+  const btn = document.getElementById("crm-crash-refresh");
+  if (btn) btn.addEventListener("click", () => { try { location.reload(); } catch {} });
+}
+
+function clearCrmCrashNotification() {
+  if (_crmCrashBannerEl && _crmCrashBannerEl.parentNode) {
+    _crmCrashBannerEl.parentNode.removeChild(_crmCrashBannerEl);
+  }
+  _crmCrashBannerEl = null;
+}
+
 function unwrap(data) {
   if (data == null) return [];
   if (Array.isArray(data)) return data;
@@ -298,7 +331,7 @@ function feedWindowStart() {
 }
 
 function feedFilterPlaceholder() {
-  return "Filter new events by keyword";
+  return "Filter by keyword (comma-separated, all must match)";
 }
 
 function syncFeedFilterPlaceholder() {
@@ -529,7 +562,9 @@ function applyTileBodyCollapsed(tileEl, tileId) {
   const collapsed = tileBodyCollapsed(tileId);
   tileEl.classList.toggle("tile-body-collapsed", collapsed);
   if (collapsed) {
-    tileEl.classList.remove("tile-half", "tile-quarter", "tile-double");
+    // Preserve width (half/quarter) so collapsed groups keep their "status" instead of going full-width.
+    // Only strip double-height (vertical) as collapsed is horizontal bar.
+    tileEl.classList.remove("tile-double");
   } else {
     applyTileLayoutClasses(tileEl, tileId);
   }
@@ -537,10 +572,6 @@ function applyTileBodyCollapsed(tileEl, tileId) {
 
 function applyTileLayoutClasses(tileEl, tileId) {
   if (!tileEl || !tileId) return;
-  if (tileBodyCollapsed(tileId)) {
-    tileEl.classList.remove("tile-half", "tile-quarter", "tile-double", "tasks-tile-full");
-    return;
-  }
   if (PANEL_TILE_IDS.has(tileId)) {
     if (state.tileLayout.heights?.[tileId]) {
       delete state.tileLayout.heights[tileId];
@@ -561,6 +592,10 @@ function applyTileLayoutClasses(tileEl, tileId) {
   tileEl.classList.remove("tile-half", "tile-quarter");
   if (w === "half") tileEl.classList.add("tile-half");
   else if (w === "quarter") tileEl.classList.add("tile-quarter");
+  if (tileBodyCollapsed(tileId)) {
+    tileEl.classList.remove("tile-double", "tasks-tile-full");
+    return;
+  }
   tileEl.classList.toggle("tile-double", h === "double");
 }
 
@@ -977,6 +1012,56 @@ function saveGroupTemplatesToStorage() {
   scheduleUserProfileSave();
 }
 
+function openTemplateDeleteModal() {
+  const modal = $("#template-delete-modal");
+  const listEl = $("#template-delete-list");
+  if (!modal || !listEl) return;
+
+  const renderList = () => {
+    listEl.innerHTML = "";
+    if (!state.groupTemplates || !state.groupTemplates.length) {
+      listEl.innerHTML = '<p class="modal-message">No templates saved.</p>';
+      return;
+    }
+    state.groupTemplates.forEach((tpl, idx) => {
+      const row = document.createElement("div");
+      row.className = "template-delete-row";
+      row.innerHTML = `
+        <span class="template-delete-name">${escapeHtml(tpl.name)}</span>
+        <button type="button" class="btn btn-ghost btn-delete-tpl" title="Delete template" aria-label="Delete">×</button>
+      `;
+      const delBtn = row.querySelector(".btn-delete-tpl");
+      delBtn.addEventListener("click", () => {
+        if (!confirm(`Delete template “${tpl.name}”?`)) return;
+        state.groupTemplates.splice(idx, 1);
+        saveGroupTemplatesToStorage();
+        renderBoardGroups(); // refresh selects in groups
+        renderList(); // refresh this list
+        showToast("Template deleted");
+      });
+      listEl.appendChild(row);
+    });
+  };
+
+  renderList();
+
+  // bind dismiss if not already
+  if (!modal.dataset.bound) {
+    modal.dataset.bound = "1";
+    $("#template-delete-close")?.addEventListener("click", () => modal.classList.add("hidden"));
+    modal.querySelectorAll("[data-template-delete-dismiss]").forEach((el) => {
+      el.addEventListener("click", () => modal.classList.add("hidden"));
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !modal.classList.contains("hidden")) {
+        modal.classList.add("hidden");
+      }
+    });
+  }
+
+  modal.classList.remove("hidden");
+}
+
 function groupConfigSnapshot(group) {
   return JSON.parse(JSON.stringify(stripGroupRuntimeFields(group)));
 }
@@ -1047,6 +1132,12 @@ function bindGroupTileChrome(section, group, tileId) {
     "btn-save-template"
   );
 
+  const manageTplBtn = createTileIconActionButton(
+    TILE_ICON_NOTE,
+    "Delete saved templates",
+    "btn-manage-templates"
+  );
+
   const removeBtn = createTileRemoveButton("Remove this grouping from the board", "btn-remove-group");
 
   const { wrap, halfBtn, fullBtn, tallBtn } = createLayoutButtons();
@@ -1058,6 +1149,7 @@ function bindGroupTileChrome(section, group, tileId) {
   toolbar.appendChild(toggleFiltersBtn);
   toolbar.appendChild(templateSelect);
   toolbar.appendChild(saveTplBtn);
+  toolbar.appendChild(manageTplBtn);
   toolbar.appendChild(removeBtn);
   toolbar.appendChild(wrap);
 
@@ -1111,6 +1203,10 @@ function bindGroupTileChrome(section, group, tileId) {
     showToast(`Saved template “${tpl.name}”`);
   });
 
+  manageTplBtn.addEventListener("click", () => {
+    openTemplateDeleteModal();
+  });
+
   removeBtn.addEventListener("click", async () => {
     if (state.groups.length <= 1) {
       showToast("Keep at least one group", true);
@@ -1131,6 +1227,8 @@ function bindGroupTileChrome(section, group, tileId) {
     delete state.tileLayout.heights[tid];
     saveGroupsToStorage();
     saveLayoutToStorage();
+    // Flush immediately (beyond debounce) so reloads after quick remove don't resurrect the tile from server profile.
+    saveUserProfileToServer({ quiet: true }).catch(() => {});
     renderBoardGroups();
     refreshAll();
   });
@@ -1246,6 +1344,7 @@ function renderTasksTile() {
     tile.dataset.tileLabel = "Tasks";
     tile.innerHTML = `
       <div class="panel-header panel-header-tasks">
+        <button type="button" id="tasks-list-btn" class="btn btn-ghost btn-tasks-list" title="View all tasks (open + completed)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/></svg></button>
         <label class="tasks-filter-label panel-sub">
           User
           <select id="tasks-user-filter"></select>
@@ -1265,6 +1364,12 @@ function renderTasksTile() {
     tile.dataset.tasksFilterBound = "1";
     $("#tasks-user-filter", tile)?.addEventListener("change", () => {
       loadTasks().catch((err) => showToast(err.message, true));
+    });
+  }
+  if (tile && !tile.dataset.tasksListBound) {
+    tile.dataset.tasksListBound = "1";
+    $("#tasks-list-btn", tile)?.addEventListener("click", () => {
+      openTasksListModal().catch((err) => showToast(err.message, true));
     });
   }
   return tile;
@@ -1318,9 +1423,21 @@ async function api(path, options = {}) {
   try {
     body = text ? JSON.parse(text) : {};
   } catch {
+    if (!res.ok && res.status >= 500 && /\/crm\//i.test(path)) {
+      showCrmCrashNotification();
+    }
     throw new Error(res.ok ? "Invalid JSON from server" : text.slice(0, 300) || res.statusText);
   }
-  if (!res.ok) throw new Error(parseApiError(body, res.status));
+  if (!res.ok) {
+    if (res.status >= 500 && /\/crm\//i.test(path)) {
+      showCrmCrashNotification();
+    }
+    throw new Error(parseApiError(body, res.status));
+  }
+  // Successful CRM-ish call: clear any prior crash banner
+  if (/\/crm\//i.test(path)) {
+    clearCrmCrashNotification();
+  }
   return body;
 }
 
@@ -1770,6 +1887,10 @@ function renderCalendarMonthBody(section, cal) {
   const body = $(".calendar-month-body", section);
   if (!body) return;
   const tid = calendarTileId(cal);
+  if (tileBodyCollapsed(tid)) {
+    body.innerHTML = '<p class="tile-collapsed-hint">Minimized — expand to load calendar</p>';
+    return;
+  }
   const cache = state.calendarCache[tid];
   const events = cache?.events || [];
   const y = cal.viewYear || new Date().getFullYear();
@@ -4996,11 +5117,17 @@ function shouldIncludeRelationshipNotifyEvent(_ev, parsed) {
 }
 
 function applyFeedKeywordFilter(items) {
-  const kw = (state.feedKeywordFilter || "").trim().toLowerCase();
-  if (!kw) return items;
+  const raw = (state.feedKeywordFilter || "").trim();
+  if (!raw) return items;
+  // Support comma-separated keywords (AND match: all must be present). Backward compatible with single keyword.
+  const tokens = raw
+    .split(",")
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
+  if (!tokens.length) return items;
   return items.filter((it) => {
     const blob = `${it.title || ""} ${it.text || ""} ${it.author || ""}`.toLowerCase();
-    return blob.includes(kw);
+    return tokens.every((tok) => blob.includes(tok));
   });
 }
 
@@ -6301,6 +6428,15 @@ async function submitDealEditForm(e) {
     showToast("Deal updated");
     if (group) await refreshGroup(group);
     else await refreshAll();
+
+    // Preview persistence: if the preview modal is still open for this same opp (we launched edit without closing it),
+    // refresh its content so the user sees the just-saved changes without having to re-open.
+    const previewEl = $("#opp-preview-modal");
+    const previewId = oppPreviewContext && oppPreviewContext.oppId;
+    const editedId = deal && (deal.id ?? deal.ID);
+    if (previewEl && !previewEl.classList.contains("hidden") && previewId != null && editedId != null && Number(previewId) === Number(editedId)) {
+      openOpportunityPreviewModal(editedId, deal.title || deal.Title || "", group || ctx.group).catch(() => {});
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     setDealEditError(msg || "Could not save deal");
@@ -7187,10 +7323,9 @@ function buildOpportunityCreateBody(form) {
     body.accessList = [];
   }
 
-  const customFields = form.customFields ?? [];
-  if (customFields.length) {
-    body.customFieldList = buildCustomFieldListForApi(customFields);
-  }
+  // NOTE: customFieldList intentionally omitted from create body (see ISSUE-001).
+  // Per-field POSTs after create (in applyCreateOpportunityCustomFields) are used instead.
+  // Sending on create has been observed to be silently ignored in past tests.
 
   return body;
 }
@@ -7288,6 +7423,8 @@ async function submitCreateOpportunityForm(e) {
     if (oppId == null) throw new Error("Opportunity created but no id returned");
 
     if (customFields.length) {
+      // Small delay before per-field custom value POSTs (timing/CRM indexing hypothesis per ISSUE-001).
+      await new Promise((resolve) => setTimeout(resolve, 300));
       try {
         await applyCreateOpportunityCustomFields(oppId, customFields);
       } catch (cfErr) {
@@ -8751,7 +8888,12 @@ function renderHistoryEventItem(ev) {
         renderMailEmbedPanel(mailPanel, mail, messageId, { crmPayload: mailPayload });
         mailPanel.dataset.loaded = String(messageId);
       } catch (err) {
-        mailPanel.innerHTML = `<p class="opp-preview-mail-error">Could not load email (${escapeHtml(err.message)}).</p>`;
+        const rawMsg = err && err.message ? String(err.message) : "";
+        let nice = `Could not load email (${escapeHtml(rawMsg)}).`;
+        if (/wasn['']t found|not found|404/i.test(rawMsg)) {
+          nice = "Linked email no longer available (deleted or access changed in CRM). Open the deal in CRM to view details.";
+        }
+        mailPanel.innerHTML = `<p class="opp-preview-mail-error">${nice}</p>`;
         const retry = document.createElement("a");
         retry.href =
           mailPayload?.messageUrl || portalMailMessageUrl(messageId);
@@ -9083,7 +9225,8 @@ async function openDealEditFromOpportunityPreview() {
     }
   }
   const refreshGroup = group || findGroupForOpportunity(oppId);
-  closeOpportunityPreviewModal();
+  // Do not close the preview — keep it persistent underneath the edit modal (user request).
+  // On successful edit save we will refresh the preview data if it is still the active one.
   try {
     await openDealEditModal(deal, refreshGroup);
   } catch (err) {
@@ -9427,6 +9570,137 @@ async function loadTasks() {
   renderTasksByUser();
 }
 
+async function openTasksListModal() {
+  const modal = $("#tasks-list-modal");
+  const bodyEl = $("#tasks-list-body");
+  const showCompletedCb = $("#tasks-list-show-completed");
+  if (!modal || !bodyEl || !showCompletedCb) return;
+
+  let allTasks = [];
+
+  const fetchAll = async () => {
+    const paramsOpen = new URLSearchParams({ startIndex: "0", count: "500", isClosed: "false" });
+    const paramsClosed = new URLSearchParams({ startIndex: "0", count: "500", isClosed: "true" });
+    const [openData, closedData] = await Promise.all([
+      api(`/api/2.0/crm/task/filter?${paramsOpen}`),
+      api(`/api/2.0/crm/task/filter?${paramsClosed}`),
+    ]);
+    const opens = unwrap(openData);
+    const closeds = unwrap(closedData);
+    allTasks = [...opens, ...closeds].sort((a, b) => taskSortMs(a) - taskSortMs(b));
+  };
+
+  const renderList = () => {
+    bodyEl.innerHTML = "";
+    const showClosed = !!showCompletedCb.checked;
+    const filtered = allTasks.filter((t) => showClosed || !t.isClosed);
+    if (!filtered.length) {
+      bodyEl.innerHTML = '<p class="modal-message">No tasks to show.</p>';
+      return;
+    }
+    filtered.forEach((task) => {
+      const row = document.createElement("div");
+      row.className = `tasks-list-row ${task.isClosed ? "done" : ""}`;
+
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = !!task.isClosed;
+
+      cb.addEventListener("change", async () => {
+        cb.disabled = true;
+        const wasClosed = !!task.isClosed;
+        try {
+          if (cb.checked && !wasClosed) {
+            await api(`/api/2.0/crm/task/${task.id}/close`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: "{}",
+            });
+            task.isClosed = true;
+          } else if (!cb.checked && wasClosed) {
+            await api(`/api/2.0/crm/task/${task.id}/reopen`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: "{}",
+            });
+            task.isClosed = false;
+          }
+          row.classList.toggle("done", !!task.isClosed);
+          showToast(task.isClosed ? "Task marked complete" : "Task reopened");
+          // refresh main tasks tile if present
+          setTimeout(() => { loadTasks().catch(() => {}); }, 200);
+        } catch (err) {
+          cb.checked = wasClosed;
+          showToast(err.message, true);
+        } finally {
+          cb.disabled = false;
+        }
+      });
+
+      const label = document.createElement("label");
+      const titleLink = document.createElement("a");
+      titleLink.href = crmTaskUrl(task);
+      titleLink.target = "_blank";
+      titleLink.rel = "noopener noreferrer";
+      titleLink.textContent = task.title || "(Task)";
+      label.appendChild(titleLink);
+
+      if (task.deadLine?.value || task.deadLine) {
+        const dl = document.createElement("span");
+        dl.className = "feed-meta";
+        dl.textContent = `Due ${new Date(task.deadLine?.value || task.deadLine).toLocaleDateString()}`;
+        label.appendChild(dl);
+      }
+
+      const r = task.responsible;
+      if (r?.displayName || r?.userName) {
+        const resp = document.createElement("span");
+        resp.className = "feed-meta";
+        resp.textContent = r.displayName || r.userName || r.id;
+        label.appendChild(resp);
+      }
+
+      row.appendChild(cb);
+      row.appendChild(label);
+      bodyEl.appendChild(row);
+    });
+  };
+
+  try {
+    await fetchAll();
+  } catch (err) {
+    bodyEl.innerHTML = `<p class="modal-error">Failed to load tasks: ${escapeHtml(err.message)}</p>`;
+    modal.classList.remove("hidden");
+    return;
+  }
+
+  renderList();
+
+  if (!showCompletedCb.dataset.bound) {
+    showCompletedCb.dataset.bound = "1";
+    showCompletedCb.addEventListener("change", renderList);
+  }
+
+  if (!modal.dataset.bound) {
+    modal.dataset.bound = "1";
+    $("#tasks-list-close")?.addEventListener("click", () => modal.classList.add("hidden"));
+    modal.querySelectorAll("[data-tasks-list-dismiss]").forEach((el) => {
+      el.addEventListener("click", () => modal.classList.add("hidden"));
+    });
+    $("#tasks-list-new")?.addEventListener("click", () => {
+      modal.classList.add("hidden");
+      openNewTaskModal().catch((e) => showToast(e.message, true));
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !modal.classList.contains("hidden")) {
+        modal.classList.add("hidden");
+      }
+    });
+  }
+
+  modal.classList.remove("hidden");
+}
+
 function populateTasksUserFilter() {
   const sel = $("#tasks-user-filter");
   if (!sel) return;
@@ -9524,6 +9798,14 @@ function createTaskRow(task) {
     ent.rel = "noopener noreferrer";
     ent.textContent = task.entity.entityTitle;
     label.appendChild(ent);
+  }
+
+  const desc = (task.description || task.Description || "").trim();
+  if (desc) {
+    const d = document.createElement("span");
+    d.className = "task-desc feed-meta";
+    d.textContent = desc.length > 120 ? desc.slice(0, 117) + "…" : desc;
+    label.appendChild(d);
   }
 
   row.appendChild(cb);
