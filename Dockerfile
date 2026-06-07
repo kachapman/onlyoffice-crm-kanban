@@ -4,7 +4,7 @@ WORKDIR /app
 
 RUN useradd --create-home --uid 10001 appuser
 
-COPY server.py ics_calendar.py notes_store.py user_profile_store.py ./
+COPY server.py ics_calendar.py notes_store.py user_profile_store.py presence_store.py ./
 COPY public ./public
 
 RUN mkdir -p /app/data && chown -R appuser:appuser /app
