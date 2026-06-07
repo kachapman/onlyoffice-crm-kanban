@@ -7,6 +7,7 @@ Tags are pushed to [onlyoffice-crm-kanban](https://github.com/kachapman/onlyoffi
 | `v1.0.0` | [RELEASE_v1.0.md](./RELEASE_v1.0.md) |
 | `v1.1.0` | [RELEASE_v1.1.md](./RELEASE_v1.1.md) — fixes, features, upgrade, rollback |
 | `v1.2.0` | [RELEASE_v1.2.md](./RELEASE_v1.2.md) — collapse/minimize, tasks list modal, template delete, AND keywords, crash banner, AGENTS.md, polish |
+| `v1.4.1` | [RELEASE_v1.4.1.md](./RELEASE_v1.4.1.md) — Patch: Dockerfile now copies presence_store.py (prevents ModuleNotFoundError / 502 crash-loop on deploys after presence feature) + deploy docs updated with verification + "keep COPY in sync" rule (v1.4.1) |
 | `v1.4.0` | [RELEASE_v1.4.md](./RELEASE_v1.4.md) — Local kanban title bar edit + column color + slide via edit (scrapped drag) + add-task blur crash fix; Presence demo indicator stable (no flash, session flag) + inbox unread/read shading (blue border/dot, demo special) + update on close (v1.4.0) |
 | `v1.3.0` | [RELEASE_v1.3.md](./RELEASE_v1.3.md) — Team/Presence (DMs+replies+reads+emojis+colors+inbox+admin+indicators), resizable+taller modal, instant button, routing fixes (v1.3.0) |
 

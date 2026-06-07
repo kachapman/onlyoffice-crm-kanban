@@ -98,6 +98,11 @@ PART B — ON THE SERVER (DigitalOcean droplet)
 
    VERIFY: docker compose ps → dashboard "running".
 
+   IMPORTANT (post-v1.3+): Ensure Dockerfile COPY line includes ALL .py files imported by server.py
+   (especially presence_store.py for the Team/Presence feature). Missing modules cause
+   immediate crash on "python3 server.py" → container Restarting(1) → nginx 502.
+   See the v1.4.1 release notes and the Dockerfile in the repo for the correct list.
+
 10. Local app health (no nginx)
 
    curl -s http://127.0.0.1:8765/api/config
