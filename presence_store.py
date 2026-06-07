@@ -204,6 +204,20 @@ def append_dm(portal: str, from_id: str, to_id: str, text: str, reply_to: str = 
         return {}
     path = conversation_file_path(portal, from_id, to_id)
     msgs = _load_conversation(path)
+
+    # Robustness for reply context: if only a reply_to (ts pointer) was provided
+    # (e.g. older clients or direct calls), resolve the text snippet right now
+    # while the original message is still in the loaded recent list. This ensures
+    # the stored record for the reply message *always* carries an embedded
+    # reply_text, so the history renderer can show the quoted context reliably
+    # even after history is trimmed or on later re-opens (including for sent
+    # messages in the bubbles). Client-provided reply_text is preferred.
+    if reply_to and not reply_text:
+        for cand in reversed(msgs):
+            if cand and str(cand.get("ts")) == str(reply_to):
+                reply_text = str(cand.get("text") or "")[:100]
+                break
+
     msg = {
         "from": str(from_id),
         "to": str(to_id),
@@ -212,6 +226,7 @@ def append_dm(portal: str, from_id: str, to_id: str, text: str, reply_to: str = 
         "reply_to": reply_to,
         "reply_text": reply_text,
         "read": False,
+        "read_at": None,
     }
     msgs.append(msg)
     _save_conversation(path, msgs)
@@ -275,6 +290,7 @@ def mark_messages_read(portal: str, reader_id: str, other_id: str) -> None:
     for m in msgs:
         if isinstance(m, dict) and str(m.get("from")) == str(other_id) and not m.get("read"):
             m["read"] = True
+            m["read_at"] = _now_iso()
             modified = True
     if modified:
         _save_conversation(path, msgs)

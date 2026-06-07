@@ -2093,6 +2093,14 @@ body {
   white-space: nowrap;
 }
 
+/* Local kanban controls row (now just the +status / +task buttons, since the board name is in the tile toolbar title bar above). */
+.local-kanban-header {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem 0;
+}
+
 .btn-danger {
   background: transparent;
   color: var(--danger);
@@ -2382,8 +2390,9 @@ body {
   pointer-events: none;
 }
 
-/* Self-online indicator on the presence icon (green dot). Visible even when alone (count badge may be 0 or 1).
-   Separate from the red waiting-messages flash (bottom-left) and the count badge (top-right). */
+/* Self-online indicator on the presence icon (green dot). 
+   Now the bottom-right green counter (small circle for 1 online, with number if >1) is the .presence-online-badge span.
+   The ::before is suppressed in JS when the counter badge is shown to avoid double/big green visuals. */
 #presence-btn.is-online::before {
   content: "";
   position: absolute;
@@ -2422,6 +2431,28 @@ body {
 }
 
 .presence-badge.hidden {
+  display: none;
+}
+
+.mail-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: #dc2626; /* red for unread */
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  border: 1px solid var(--surface);
+  pointer-events: none;
+}
+
+.mail-badge.hidden {
   display: none;
 }
 
@@ -2532,6 +2563,32 @@ body {
 }
 .presence-recent-row:hover {
   background: var(--surface-2);
+}
+
+/* Unread vs read shading in the Messages inbox recent list.
+   Unread = more prominent (darker surface + blue accent border for "new").
+   Read = lighter/muted (faded, less emphasis).
+   This makes it easy to see which threads have unread messages.
+   The demo message will be shaded as unread until you click it in the session. */
+.presence-recent-row.unread {
+  background: var(--surface-2);
+  border-left: 4px solid #3b82f6; /* blue accent to clearly mark unread/new */
+  font-weight: 500;
+}
+.presence-recent-row.unread::after {
+  content: "●";
+  color: #3b82f6;
+  font-size: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.presence-recent-row.read {
+  opacity: 0.65;
+}
+.presence-recent-row.read .presence-recent-who,
+.presence-recent-row.read .presence-recent-snip,
+.presence-recent-row.read .presence-recent-time {
+  color: var(--muted);
 }
 .presence-recent-who {
   font-weight: 600;
@@ -2754,6 +2811,325 @@ body {
   color: #22c55e;
   margin-top: 0.1rem;
   align-self: flex-end;
+}
+
+.presence-msg-status {
+  font-size: 0.6em;
+  margin-top: 0.1rem;
+  align-self: flex-end;
+}
+
+/* CRM Mail Inbox modal styles */
+.mail-inbox-card {
+  width: 96vw;
+  max-width: 1400px;
+  height: 85vh;
+  max-height: 900px;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.mail-inbox-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.mail-account-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+.mail-account-select {
+  min-width: 180px;
+}
+.mail-header-actions {
+  margin-left: 1rem;
+}
+.mail-toolbar {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--surface);
+}
+.mail-search {
+  flex: 1;
+  max-width: 300px;
+}
+.mail-main-area {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.mail-list-container {
+  flex: 3;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+  padding: 0.5rem;
+}
+.mail-list {
+  width: 100%;
+}
+.mail-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid #eee;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.mail-row:hover {
+  background: #f8f9fa;
+}
+.mail-row.selected {
+  background: #e6f0ff;
+}
+.mail-from,
+.mail-subject {
+  color: #aaa; /* less bright grey for readability in dark */
+}
+.mail-row-read .mail-from,
+.mail-row-read .mail-subject {
+  color: #777; /* even darker for read emails */
+}
+.mail-row input[type="checkbox"] {
+  margin-top: 0.2rem;
+  flex-shrink: 0;
+}
+.mail-from {
+  width: 160px;
+  flex-shrink: 0;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #aaa; /* less bright grey for dark bg */
+}
+.mail-subject {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #aaa; /* less bright grey instead of white */
+  font-weight: 600;
+}
+.mail-date {
+  width: 90px;
+  flex-shrink: 0;
+  text-align: right;
+  color: #666;
+  font-size: 0.8rem;
+}
+.mail-right-sidebar {
+  flex: 0 0 auto;
+  width: 210px;
+  min-width: 210px;
+  max-width: 230px;
+  padding: 0.5rem;
+  border-left: 1px solid var(--border);
+  background: var(--surface-2);
+  overflow: auto;
+  font-size: 0.75rem;
+  color: var(--text);
+}
+.mail-right-sidebar.mail-viewer-warning {
+  background: var(--surface-2);
+  border-left: 3px solid var(--warn);
+}
+.mail-viewer-warning-content h4 {
+  color: var(--warn);
+  font-size: 0.85rem;
+  margin: 0 0 .25rem 0;
+}
+.mail-viewer-warning-content p,
+.mail-viewer-warning-content ul {
+  margin: 0.15rem 0;
+  line-height: 1.2;
+}
+.mail-viewer-warning-content ul {
+  padding-left: 1rem;
+}
+.mail-viewer-warning-content li {
+  margin-bottom: 0.1rem;
+}
+.mail-viewer-warning-content p.small {
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+.mail-deal-search {
+  width: 100%;
+  margin-bottom: 0.5rem;
+}
+.mail-deal-results {
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+}
+.mail-deal-result {
+  padding: 0.25rem 0.4rem;
+  cursor: pointer;
+  border-bottom: 1px solid #f0f0f0;
+}
+.mail-deal-result:hover {
+  background: #f0f8ff;
+}
+.mail-deal-result.selected {
+  background: #d0e8ff;
+  font-weight: 500;
+}
+.mail-link-btn {
+  width: 100%;
+}
+.mail-selected-info {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: #555;
+}
+.mail-pagination {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--surface);
+  font-size: 0.9rem;
+}
+.mail-pagination button {
+  min-width: 60px;
+}
+
+#mail-inbox-btn {
+  position: relative;
+}
+
+.mail-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: #6b7280; /* passive grey, not red */
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  border: 1px solid var(--surface);
+  pointer-events: none;
+}
+
+.mail-badge.hidden {
+  display: none;
+}
+
+/* Dark mode / theme fixes for mail modal (use CSS vars, avoid hard light colors) */
+.mail-inbox-card select,
+.mail-inbox-card input[type="search"],
+.mail-deal-search {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.mail-row {
+  border-bottom-color: var(--border);
+}
+.mail-row:hover {
+  background: var(--surface-2);
+}
+.mail-row.selected {
+  background: var(--accent-soft);
+}
+.mail-deal-result {
+  border-bottom-color: var(--border);
+}
+.mail-deal-result:hover {
+  background: var(--surface-2);
+}
+.mail-deal-result.selected {
+  background: var(--accent-soft);
+}
+
+/* Additional for link field and readability */
+.mail-deal-results button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 0.25rem 0.4rem;
+  font-size: 0.85rem;
+  margin-bottom: 1px;
+}
+.mail-deal-results button.selected {
+  background: var(--accent-soft);
+  font-weight: 500;
+}
+.mail-subject {
+  color: #d0d0d0; /* muted brightness for dark bg, following other tiles' secondary text */
+  font-weight: 600;
+}
+.mail-row {
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+.mail-from {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.mail-item {
+  border-bottom: 1px solid var(--border);
+}
+.mail-detail {
+  padding: 0.5rem 0.75rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  margin: 0.1rem 0 0.4rem;
+  font-size: 0.9rem;
+}
+.mail-expand-btn {
+  font-size: 0.75rem;
+  padding: 0 0.5rem;
+  min-width: 70px; /* wider as requested */
+  margin-left: auto;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  text-align: center;
+}
+.mail-detail .opp-preview-mail-header,
+.mail-detail .opp-preview-mail-body,
+.mail-detail .opp-preview-mail-embed,
+.mail-detail .opp-preview-mail-text,
+.mail-detail .opp-preview-mail-iframe {
+  /* follow deal/other tiles contrast: darker bg for container, much darker text for body readability */
+  background: #24272e;
+  color: #222; /* dark text, not light grey */
+  border-color: var(--border);
+}
+.mail-detail .opp-preview-mail-text {
+  color: #222;
+  background: transparent;
+}
+  /* reuse some preview styles but scope for readability */
+  font-size: 0.85rem;
 }
 .presence-emoji-picker {
   position: absolute;

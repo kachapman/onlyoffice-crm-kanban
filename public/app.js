@@ -6,6 +6,7 @@ const DEFAULT_PORTAL = "https://office.vanguardadj.com";
 const GROUPS_STORAGE_KEY = "oo_board_groups_v2";
 const CALENDARS_STORAGE_KEY = "oo_board_calendars_v1";
 const NOTES_TILES_STORAGE_KEY = "oo_board_notes_v1";
+const LOCAL_KANBAN_TILES_STORAGE_KEY = "oo_board_local_kanban_v1";
 const LAYOUT_STORAGE_KEY = "oo_board_layout_v2";
 const HIDDEN_FEED_STORAGE_KEY = "oo_board_hidden_feed_v1";
 const FEED_KEYWORD_STORAGE_KEY = "oo_board_feed_keyword_v1";
@@ -67,6 +68,7 @@ const state = {
   calendarTiles: [],
   calendarCache: {},
   notesTiles: [],
+  localKanbanTiles: [],  // local-only kanban boards (no CRM), persisted via profile like notes
   opportunityById: new Map(),
   groupTemplates: [],
   customFieldDefs: [],
@@ -363,11 +365,20 @@ function defaultTileOrder() {
     ...state.groups.map((g) => `group-${g.id}`),
     ...state.calendarTiles.map((c) => calendarTileId(c)),
     ...activeNotesTiles().map((n) => notesTileId(n)),
+    ...activeLocalKanbanTiles().map((k) => localKanbanTileId(k)),
   ];
 }
 
 function notesTileId(notes) {
   return `notes-${notes.id}`;
+}
+
+function localKanbanTileId(kanban) {
+  return `local-kanban-${kanban.id}`;
+}
+
+function activeLocalKanbanTiles() {
+  return (state.localKanbanTiles || []).filter(k => !k.archived);
 }
 
 function calendarTileId(cal) {
@@ -747,6 +758,10 @@ const TILE_ICON_CALENDAR = `<svg class="tile-layout-icon" xmlns="http://www.w3.o
 const TILE_ICON_PRINT = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/><path d="M6 10V6h12v4"/></svg>`;
 
 const TILE_ICON_NOTE = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4"/><path d="M2 6h4"/><path d="M2 10h4"/><path d="M2 14h4"/><path d="M2 18h4"/><path d="M21.378 5.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z"/></svg>`;
+
+const TILE_ICON_TRASH = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>`;
+
+const TILE_ICON_ARCHIVE = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="20" height="8" rx="2"/><path d="M2 10h20"/><path d="M2 14h20"/><path d="M2 18h20"/><path d="M6 6v4"/><path d="M18 6v4"/></svg>`;
 
 const TILE_ICON_PIN = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1z"/></svg>`;
 
@@ -1238,7 +1253,7 @@ function bindGroupTileChrome(section, group, tileId) {
   );
 
   const manageTplBtn = createTileIconActionButton(
-    TILE_ICON_NOTE,
+    TILE_ICON_TRASH,
     "Delete saved templates",
     "btn-manage-templates"
   );
@@ -1334,8 +1349,10 @@ function bindGroupTileChrome(section, group, tileId) {
     saveLayoutToStorage();
     // Flush immediately (beyond debounce) so reloads after quick remove don't resurrect the tile from server profile.
     saveUserProfileToServer({ quiet: true }).catch(() => {});
+    // Re-render the board (groups + calendars + notes + local kanbans) cleanly.
+    // Do NOT call refreshAll() here — it does a full data reload + profile re-fetch which can race
+    // with saves and clobber client-only tiles like local kanbans (and feels like an unwanted page refresh).
     renderBoardGroups();
-    refreshAll();
   });
 
   group._setFiltersCollapsed = setFiltersCollapsed;
@@ -2865,6 +2882,21 @@ function newNotesTile(overrides = {}) {
   return merged;
 }
 
+function newLocalKanbanTile(overrides = {}) {
+  const base = {
+    id: crypto.randomUUID(),
+    name: "My Kanban",
+    columns: [
+      { id: crypto.randomUUID(), title: "To Do", cards: [] },
+      { id: crypto.randomUUID(), title: "In Progress", cards: [] },
+      { id: crypto.randomUUID(), title: "Done", cards: [] },
+    ],
+    archived: false,
+    updatedAt: new Date().toISOString(),
+  };
+  return { ...base, ...overrides };
+}
+
 function activeNotesTiles() {
   return state.notesTiles.filter((n) => !n.archived);
 }
@@ -3041,6 +3073,7 @@ function buildUserProfilePayload() {
     tileLayout: state.tileLayout,
     calendarTiles: state.calendarTiles.map((c) => stripCalendarRuntimeFields(c)),
     notesTiles: state.notesTiles.map((n) => stripNotesRuntimeFields(n)),
+    localKanbanTiles: (state.localKanbanTiles || []).map((k) => stripLocalKanbanRuntimeFields(k)),
     groupTemplates: state.groupTemplates,
     hiddenFeedKeys: serializeHiddenFeedEntries(),
     feedKeywordFilter: state.feedKeywordFilter || "",
@@ -3074,7 +3107,11 @@ function applyUserProfile(profile) {
 
   state.notesTiles = Array.isArray(profile.notesTiles)
     ? profile.notesTiles.map((n) => ({ ...newNotesTile(), ...stripNotesRuntimeFields(n) }))
-    : [];
+    : loadNotesTilesFromStorage().map((n) => ({ ...newNotesTile(), ...stripNotesRuntimeFields(n) }));
+
+  state.localKanbanTiles = Array.isArray(profile.localKanbanTiles)
+    ? profile.localKanbanTiles.map((k) => ({ ...newLocalKanbanTile(), ...stripLocalKanbanRuntimeFields(k) }))
+    : loadLocalKanbanTilesFromStorage().map((k) => ({ ...newLocalKanbanTile(), ...stripLocalKanbanRuntimeFields(k) }));
 
   state.groupTemplates = Array.isArray(profile.groupTemplates) ? profile.groupTemplates : [];
 }
@@ -3085,6 +3122,7 @@ function persistProfileToLocalStorage() {
   localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(payload.tileLayout));
   localStorage.setItem(CALENDARS_STORAGE_KEY, JSON.stringify(payload.calendarTiles));
   localStorage.setItem(NOTES_TILES_STORAGE_KEY, JSON.stringify(payload.notesTiles));
+  localStorage.setItem(LOCAL_KANBAN_TILES_STORAGE_KEY, JSON.stringify(payload.localKanbanTiles || []));
   localStorage.setItem(GROUP_TEMPLATES_STORAGE_KEY, JSON.stringify(payload.groupTemplates));
   localStorage.setItem(HIDDEN_FEED_STORAGE_KEY, JSON.stringify(payload.hiddenFeedKeys));
   localStorage.setItem(FEED_KEYWORD_STORAGE_KEY, payload.feedKeywordFilter);
@@ -3106,6 +3144,7 @@ function loadLocalUserProfileBundle() {
     tileLayout: loadLayoutFromStorage(),
     calendarTiles: loadCalendarsFromStorage(),
     notesTiles: loadNotesTilesFromStorage(),
+    localKanbanTiles: loadLocalKanbanTilesFromStorage(),
     groupTemplates: loadGroupTemplates(),
     hiddenFeedKeys: hiddenFeedEntriesToPayload(loadHiddenFeedEntriesFromStorage()),
     feedKeywordFilter: localStorage.getItem(FEED_KEYWORD_STORAGE_KEY) || "",
@@ -3152,6 +3191,7 @@ async function loadUserProfileFromServer() {
       tileLayout: { order: [], widths: {}, heights: {}, collapsed: {}, pinned: {} },
       calendarTiles: [],
       notesTiles: [],
+      localKanbanTiles: [],
       groupTemplates: [],
     });
     persistProfileToLocalStorage();
@@ -3220,6 +3260,32 @@ function loadNotesTilesFromStorage() {
 function saveNotesTilesToStorage() {
   const slim = state.notesTiles.map((n) => stripNotesRuntimeFields(n));
   localStorage.setItem(NOTES_TILES_STORAGE_KEY, JSON.stringify(slim));
+  scheduleUserProfileSave();
+}
+
+function stripLocalKanbanRuntimeFields(kanban) {
+  const { _el, ...rest } = kanban || {};
+  return rest;
+}
+
+function loadLocalKanbanTilesFromStorage() {
+  try {
+    const raw = localStorage.getItem(LOCAL_KANBAN_TILES_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map((k) => stripLocalKanbanRuntimeFields(k));
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return [];
+}
+
+function saveLocalKanbanTilesToStorage() {
+  const slim = (state.localKanbanTiles || []).map((k) => stripLocalKanbanRuntimeFields(k));
+  localStorage.setItem(LOCAL_KANBAN_TILES_STORAGE_KEY, JSON.stringify(slim));
   scheduleUserProfileSave();
 }
 
@@ -3844,6 +3910,732 @@ function renderNotesTiles(dash) {
     applyTileLayoutClasses(section, tileId);
     applyTileBodyCollapsed(section, tileId);
   }
+}
+
+function renderLocalKanbanTiles(dash) {
+  if (!dash) return;
+  // Clear any previous local kanban DOM elements (they share board-group styling but are not cleared by renderBoardGroups).
+  dash.querySelectorAll(".local-kanban-tile").forEach((el) => el.remove());
+
+  for (const kanban of activeLocalKanbanTiles()) {
+    const tileId = localKanbanTileId(kanban);
+    const section = document.createElement("section");
+    section.className = "dashboard-tile board-group board-group-tile local-kanban-tile";
+    section.dataset.tileId = tileId;
+    // Set dataset.tileLabel so bindTileChrome / createTileChrome puts the editable name in the standard tile toolbar title bar (top chrome).
+    section.dataset.tileLabel = kanban.name || "Kanban";
+    section.dataset.kanbanId = kanban.id;
+
+    // Name is now in the tile's title bar (toolbar). The local header below just hosts the +status / +task controls.
+    section.innerHTML = `
+      <div class="local-kanban-body">
+        <div class="local-kanban-header">
+          <button type="button" class="local-kanban-add-col btn btn-ghost btn-small" title="Add custom status">+ status</button>
+          <button type="button" class="local-kanban-add-card btn btn-ghost btn-small" title="Add custom task">+ task</button>
+        </div>
+        <div class="board"></div>
+      </div>
+    `;
+    dash.appendChild(section);
+
+    const board = section.querySelector('.board');
+    buildLocalKanbanBoard(board, kanban, section);
+
+    bindLocalKanbanTileChrome(section, kanban, tileId);
+    applyTileLayoutClasses(section, tileId);
+    applyTileBodyCollapsed(section, tileId);
+    kanban._el = section;
+  }
+}
+
+function bindLocalKanbanTileChrome(section, kanban, tileId) {
+  bindTileChrome(section, tileId);
+
+  const tb = section.querySelector(':scope > .tile-toolbar');
+
+  // Guard: remove any duplicate archive/delete buttons from previous binds
+  if (tb) {
+    tb.querySelectorAll('.btn-archive-kanban, .btn-remove-kanban').forEach(b => b.remove());
+  }
+
+  // Archive button (file cabinet icon)
+  const archiveBtn = createTileIconActionButton(
+    TILE_ICON_ARCHIVE,
+    "Archive this local kanban board",
+    "btn-archive-kanban"
+  );
+  if (tb) tb.appendChild(archiveBtn);
+  archiveBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openLocalKanbanArchiveModal(kanban);
+  });
+
+  // Remove button (only 1)
+  const removeBtn = createTileRemoveButton("Remove this local kanban board from the dashboard", "btn-remove-kanban");
+  if (tb) tb.appendChild(removeBtn);
+  removeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    removeLocalKanbanTile(kanban, section);
+  });
+
+  // The name now lives in the standard tile toolbar title bar (created by bindTileChrome from dataset.tileLabel).
+  // Make that title editable via dblclick (contentEditable pattern), and keep it in sync with kanban.name.
+  const toolbarTitle = section.querySelector(':scope > .tile-toolbar .tile-toolbar-title');
+  if (toolbarTitle && !toolbarTitle.dataset.kanbanTitleBound) {
+    toolbarTitle.dataset.kanbanTitleBound = '1';
+    toolbarTitle.title = 'Double-click to rename board';
+    toolbarTitle.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      const orig = toolbarTitle.textContent;
+      toolbarTitle.contentEditable = 'true';
+      toolbarTitle.focus();
+      const sel = window.getSelection();
+      const r = document.createRange();
+      r.selectNodeContents(toolbarTitle);
+      sel.removeAllRanges();
+      sel.addRange(r);
+      const finish = () => {
+        toolbarTitle.contentEditable = 'false';
+        let newName = (toolbarTitle.textContent || '').trim() || 'Kanban';
+        if (newName !== orig) {
+          kanban.name = newName;
+          kanban.updatedAt = new Date().toISOString();
+          toolbarTitle.textContent = newName;
+          section.dataset.tileLabel = newName;
+          saveLocalKanbanTilesToStorage();
+          saveLayoutToStorage();
+        } else {
+          toolbarTitle.textContent = orig;
+        }
+      };
+      toolbarTitle.addEventListener('blur', finish, {once: true});
+      toolbarTitle.addEventListener('keydown', (ke) => {
+        if (ke.key === 'Enter') {
+          ke.preventDefault();
+          finish();
+        } else if (ke.key === 'Escape') {
+          toolbarTitle.textContent = orig;
+          finish();
+        }
+      }, {once: true});
+    });
+  }
+
+  // Guard to prevent multiple listeners on re-binds (which caused multi adds)
+  // + status button in title bar - opens inline dark field (no popup)
+  const addColBtn = section.querySelector('.local-kanban-add-col');
+  if (addColBtn && !addColBtn.dataset.kanbanBound) {
+    addColBtn.dataset.kanbanBound = '1';
+    addColBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // already open? 
+      if (addColBtn.nextElementSibling && addColBtn.nextElementSibling.classList.contains('kanban-inline-input')) return;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = 'Status / stage name';
+      input.className = 'kanban-inline-input';
+      input.style.cssText = 'background:var(--surface);color:var(--text);border:1px solid var(--border);padding:2px 4px;font-size:0.8rem;margin-left:4px;width:120px;';
+      addColBtn.parentNode.insertBefore(input, addColBtn.nextSibling);
+      input.focus();
+      let submitted = false;
+      const cleanup = () => {
+        // setTimeout(0) + guard to avoid NotFoundError "node no longer a child" races during blur + rebuild
+        setTimeout(() => {
+          if (input && input.parentNode) input.parentNode.removeChild(input);
+        }, 0);
+      };
+      const doAdd = () => {
+        if (submitted) return;
+        submitted = true;
+        const val = input.value.trim();
+        if (val) {
+          if (!kanban.columns) kanban.columns = [];
+          kanban.columns.push({ id: crypto.randomUUID(), title: val, cards: [] });
+          kanban.updatedAt = new Date().toISOString();
+          saveLocalKanbanTilesToStorage();
+          const board = section.querySelector('.board');
+          buildLocalKanbanBoard(board, kanban, section);
+          bindLocalKanbanTileChrome(section, kanban, localKanbanTileId(kanban));
+        }
+        cleanup();
+      };
+      input.addEventListener('keydown', (ke) => {
+        if (ke.key === 'Enter') { doAdd(); }
+        else if (ke.key === 'Escape') cleanup();
+      });
+      input.addEventListener('blur', () => { if (!submitted) doAdd(); });
+    });
+  }
+
+  // + task button in title bar ( + icon with "task" label; adds to first column; inline field no popup)
+  const addCardBtn = section.querySelector('.local-kanban-add-card');
+  if (addCardBtn && !addCardBtn.dataset.kanbanBound) {
+    addCardBtn.dataset.kanbanBound = '1';
+    addCardBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (addCardBtn.nextElementSibling && addCardBtn.nextElementSibling.classList.contains('kanban-inline-input')) return;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = 'Task name';
+      input.className = 'kanban-inline-input';
+      input.style.cssText = 'background:var(--surface);color:var(--text);border:1px solid var(--border);padding:2px 4px;font-size:0.8rem;margin-left:4px;width:120px;';
+      addCardBtn.parentNode.insertBefore(input, addCardBtn.nextSibling);
+      input.focus();
+      let submitted = false;
+      const cleanup = () => {
+        // setTimeout(0) + guard to avoid NotFoundError "node no longer a child" races during blur + rebuild
+        setTimeout(() => {
+          if (input && input.parentNode) input.parentNode.removeChild(input);
+        }, 0);
+      };
+      const doAdd = () => {
+        if (submitted) return;
+        submitted = true;
+        const val = input.value.trim();
+        if (val) {
+          const targetCol = (kanban.columns || [])[0];
+          if (targetCol) {
+            if (!targetCol.cards) targetCol.cards = [];
+            targetCol.cards.push({ id: crypto.randomUUID(), title: val, description: '', notes: [] });
+            kanban.updatedAt = new Date().toISOString();
+            saveLocalKanbanTilesToStorage();
+            const board = section.querySelector('.board');
+            buildLocalKanbanBoard(board, kanban, section);
+            bindLocalKanbanTileChrome(section, kanban, localKanbanTileId(kanban));
+          }
+        }
+        cleanup();
+      };
+      input.addEventListener('keydown', (ke) => {
+        if (ke.key === 'Enter') { doAdd(); }
+        else if (ke.key === 'Escape') cleanup();
+      });
+      input.addEventListener('blur', () => { if (!submitted) doAdd(); });
+    });
+  }
+}
+
+function setupLocalKanbanDragDrop(container, kanban, section) {
+  container.querySelectorAll('.card').forEach(cardEl => {
+    cardEl.addEventListener('dragstart', e => {
+      e.stopPropagation();
+      e.dataTransfer.setData('text/plain', cardEl.dataset.cardId);
+      e.dataTransfer.setData('kanban/from-col', cardEl.dataset.colId);
+      cardEl.classList.add('dragging');
+    });
+    cardEl.addEventListener('dragend', e => {
+      e.stopPropagation();
+      cardEl.classList.remove('dragging');
+    });
+  });
+
+  container.querySelectorAll('.column-body').forEach(body => {
+    body.addEventListener('dragover', e => {
+      e.stopPropagation();
+      e.preventDefault();
+      body.classList.add('drag-over');
+    });
+    body.addEventListener('dragleave', e => {
+      e.stopPropagation();
+      body.classList.remove('drag-over');
+    });
+    body.addEventListener('drop', e => {
+      e.stopPropagation();
+      e.preventDefault();
+      body.classList.remove('drag-over');
+      // Column reordering via drag scrapped (edit button ◀/▶ now handles sliding stages left/right).
+      const cardId = e.dataTransfer.getData('text/plain');
+      const fromColId = e.dataTransfer.getData('kanban/from-col') || '';
+      const toColId = body.dataset.colId;
+      if (!cardId || !toColId || fromColId === toColId) return;
+      moveLocalKanbanCard(kanban, fromColId, toColId, cardId);
+      saveLocalKanbanTilesToStorage();
+      buildLocalKanbanBoard(container, kanban, section);
+    });
+  });
+}
+
+function buildLocalKanbanBoard(container, kanban, section) {
+  container.innerHTML = '';
+  for (const col of (kanban.columns || [])) {
+    const column = document.createElement('section');
+    column.className = 'column' + ((col.cards || []).length === 0 ? ' column-empty' : '');
+    column.dataset.colId = col.id;
+    // Column drag/reorder scrapped per request (drag didn't work reliably; use edit buttons to slide left/right instead).
+    // No draggable, no dragstart for 'col:' on the column itself.
+
+    const header = document.createElement('div');
+    header.className = 'column-header';
+    // Include column-dot so color picker visibly affects the stage header (always shown, not just card borders or when populated).
+    header.innerHTML = `
+      <span class="column-dot" style="background:${escapeHtml(col.color || '#ccc')}"></span>
+      <span class="column-title">${escapeHtml(col.title)}</span>
+      <span class="column-count">${(col.cards || []).length}</span>
+      <button type="button" class="local-kanban-edit-col btn btn-ghost btn-tiny" title="Edit name, color, and slide position" style="padding:0 3px; margin-left:2px;">✎</button>
+      <button type="button" class="local-kanban-del-col btn btn-ghost btn-tiny" title="Delete this status" style="padding:0 3px; margin-left:4px;">×</button>
+    `;
+    // discrete delete for status, with move if cards
+    header.querySelector('.local-kanban-del-col').addEventListener('click', e => {
+      e.stopPropagation();
+      const cardsCount = (col.cards || []).length;
+      if (cardsCount > 0) {
+        if (!confirm(`Delete status “${col.title}”? Its ${cardsCount} task(s) will be moved to another status or lost.`)) return;
+        const other = kanban.columns.find(c => c.id !== col.id);
+        if (other) {
+          other.cards = (other.cards || []).concat(col.cards || []);
+        }
+      }
+      kanban.columns = kanban.columns.filter(c => c.id !== col.id);
+      kanban.updatedAt = new Date().toISOString();
+      saveLocalKanbanTilesToStorage();
+      buildLocalKanbanBoard(container, kanban, section);
+    });
+
+    // edit button for column name/color + left/right slide (edit is to the LEFT of ×)
+    const editBtn = header.querySelector('.local-kanban-edit-col');
+    editBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      const titleSpan = header.querySelector('.column-title');
+      const dotSpan = header.querySelector('.column-dot');
+      const origTitle = col.title || '';
+      const origColor = col.color || '#4f8cff';
+      titleSpan.style.display = 'none';
+      if (dotSpan) dotSpan.style.display = 'none';
+      const editWrap = document.createElement('span');
+      editWrap.style.display = 'inline-flex';
+      editWrap.style.gap = '2px';
+      editWrap.style.alignItems = 'center';
+      editWrap.innerHTML = `
+        <input type="text" value="${escapeHtml(origTitle)}" style="background:var(--surface);color:var(--text);border:1px solid var(--border);font-size:0.7rem;width:70px;padding:1px;" />
+        <input type="color" value="${origColor}" style="width:16px;height:14px;padding:0;border:0;" />
+        <button class="btn btn-ghost btn-tiny" title="Move stage left" style="padding:0 1px;font-size:0.6rem;">◀</button>
+        <button class="btn btn-ghost btn-tiny" title="Move stage right" style="padding:0 1px;font-size:0.6rem;">▶</button>
+        <button class="btn btn-ghost btn-tiny" style="padding:0 1px;font-size:0.6rem;">✓</button>
+        <button class="btn btn-ghost btn-tiny" style="padding:0 1px;font-size:0.6rem;">✕</button>
+      `;
+      header.insertBefore(editWrap, titleSpan.nextSibling);
+      const ins = editWrap.querySelectorAll('input');
+      const nameIn = ins[0];
+      const colorIn = ins[1];
+      const leftBtn = editWrap.querySelectorAll('button')[0];
+      const rightBtn = editWrap.querySelectorAll('button')[1];
+      const okBtn = editWrap.querySelectorAll('button')[2];
+      const cancelBtn = editWrap.querySelectorAll('button')[3];
+      const clean = () => {
+        titleSpan.style.display = '';
+        if (dotSpan) dotSpan.style.display = '';
+        editWrap.remove();
+      };
+      const doSaveAndRebuild = () => {
+        col.title = nameIn.value.trim() || origTitle;
+        col.color = colorIn.value;
+        kanban.updatedAt = new Date().toISOString();
+        saveLocalKanbanTilesToStorage();
+        buildLocalKanbanBoard(container, kanban, section);
+        clean();
+      };
+      okBtn.onclick = doSaveAndRebuild;
+      cancelBtn.onclick = clean;
+
+      // Slide left/right using edit buttons (no column drag)
+      leftBtn.onclick = () => {
+        const idx = kanban.columns.findIndex(c => c.id === col.id);
+        if (idx > 0) {
+          const [moved] = kanban.columns.splice(idx, 1);
+          kanban.columns.splice(idx - 1, 0, moved);
+          kanban.updatedAt = new Date().toISOString();
+          saveLocalKanbanTilesToStorage();
+          buildLocalKanbanBoard(container, kanban, section);
+          // re-open edit on the moved column after rebuild (find by id in new DOM)
+          setTimeout(() => {
+            const newHeader = container.querySelector(`.column[data-col-id="${col.id}"] .column-header`);
+            if (newHeader) {
+              const newEdit = newHeader.querySelector('.local-kanban-edit-col');
+              if (newEdit) newEdit.click();
+            }
+          }, 0);
+        }
+      };
+      rightBtn.onclick = () => {
+        const idx = kanban.columns.findIndex(c => c.id === col.id);
+        if (idx >= 0 && idx < kanban.columns.length - 1) {
+          const [moved] = kanban.columns.splice(idx, 1);
+          kanban.columns.splice(idx + 1, 0, moved);
+          kanban.updatedAt = new Date().toISOString();
+          saveLocalKanbanTilesToStorage();
+          buildLocalKanbanBoard(container, kanban, section);
+          setTimeout(() => {
+            const newHeader = container.querySelector(`.column[data-col-id="${col.id}"] .column-header`);
+            if (newHeader) {
+              const newEdit = newHeader.querySelector('.local-kanban-edit-col');
+              if (newEdit) newEdit.click();
+            }
+          }, 0);
+        }
+      };
+
+      nameIn.focus();
+      nameIn.select();
+    });
+
+    const body = document.createElement('div');
+    body.className = 'column-body';
+    body.dataset.colId = col.id;
+
+    for (const card of (col.cards || [])) {
+      const cardEl = document.createElement('article');
+      cardEl.className = 'card';
+      cardEl.dataset.cardId = card.id;
+      cardEl.dataset.colId = col.id;
+      cardEl.draggable = true;
+
+      if (card.color) {
+        cardEl.style.borderLeft = `4px solid ${card.color}`;
+      }
+
+      const title = document.createElement('h3');
+      title.className = 'card-title';
+      title.textContent = card.title || '(untitled)';
+      cardEl.appendChild(title);
+
+      const dueInfo = getCardDueInfo(card.due);
+      if (dueInfo) {
+        const dueEl = document.createElement('p');
+        dueEl.className = 'card-due' + (dueInfo.isOverdueOrSoon ? ' card-due--overdue' : '');
+        let txt = dueInfo.label;
+        if (card.due) {
+          try {
+            const dstr = new Date(card.due).toLocaleDateString();
+            txt = `${dstr} — ${dueInfo.label}`;
+          } catch {}
+        }
+        dueEl.textContent = txt;
+        cardEl.appendChild(dueEl);
+      }
+
+      if (card.description) {
+        const desc = document.createElement('p');
+        desc.className = 'card-description';
+        desc.textContent = card.description.substring(0, 60) + (card.description.length > 60 ? '…' : '');
+        cardEl.appendChild(desc);
+      }
+
+      if (card.lastUpdated) {
+        const upd = document.createElement('p');
+        upd.className = 'card-updated';
+        upd.style.fontSize = '0.65rem';
+        upd.style.color = 'var(--muted)';
+        const ago = (typeof formatTimeAgo === 'function') ? formatTimeAgo(card.lastUpdated) : '';
+        upd.textContent = 'Updated ' + ago;
+        cardEl.appendChild(upd);
+      }
+
+      cardEl.addEventListener('click', (e) => {
+        if (e.target.tagName === 'BUTTON') return;
+        openLocalKanbanCardModal(kanban, col.id, card.id, section);
+      });
+
+      body.appendChild(cardEl);
+    }
+
+    column.appendChild(header);
+    column.appendChild(body);
+    container.appendChild(column);
+  }
+
+  setupLocalKanbanDragDrop(container, kanban, section);
+}
+
+function refreshLocalKanbanColumns(section, kanban) {
+  const board = section.querySelector('.board');
+  if (board) {
+    buildLocalKanbanBoard(board, kanban, section);
+    // re-attach header controls after rebuild
+    bindLocalKanbanTileChrome(section, kanban, localKanbanTileId(kanban));
+  }
+}
+
+function moveLocalKanbanCard(kanban, fromColId, toColId, cardId) {
+  const fromCol = (kanban.columns || []).find(c => c.id === fromColId);
+  const toCol = (kanban.columns || []).find(c => c.id === toColId);
+  if (!fromCol || !toCol) return;
+  const cardIdx = (fromCol.cards || []).findIndex(c => c.id === cardId);
+  if (cardIdx < 0) return;
+  const [card] = fromCol.cards.splice(cardIdx, 1);
+  if (!toCol.cards) toCol.cards = [];
+  toCol.cards.push(card);
+  kanban.updatedAt = new Date().toISOString();
+}
+
+function addLocalKanbanCard(kanban, colId, section) {
+  const title = prompt('Task title / short desc:');
+  if (!title || !title.trim()) return;
+  const col = (kanban.columns || []).find(c => c.id === colId);
+  if (!col) return;
+  if (!col.cards) col.cards = [];
+  const card = { id: crypto.randomUUID(), title: title.trim(), description: '', notes: [] };
+  col.cards.push(card);
+  kanban.updatedAt = new Date().toISOString();
+  saveLocalKanbanTilesToStorage();
+  refreshLocalKanbanColumns(section, kanban);
+  openLocalKanbanCardModal(kanban, colId, card.id, section);
+}
+
+function addLocalKanbanColumn(kanban, section) {
+  const title = prompt('New custom status / column name:');
+  if (!title || !title.trim()) return;
+  if (!kanban.columns) kanban.columns = [];
+  kanban.columns.push({ id: crypto.randomUUID(), title: title.trim(), cards: [] });
+  kanban.updatedAt = new Date().toISOString();
+  saveLocalKanbanTilesToStorage();
+  refreshLocalKanbanColumns(section, kanban);
+  setupLocalKanbanDragDrop(section, kanban);
+}
+
+function getCardDueInfo(due) {
+  if (!due) return null;
+  try {
+    const dueDate = new Date(due);
+    const now = new Date();
+    const diffMs = dueDate - now;
+    const days = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+    return {
+      days,
+      isOverdueOrSoon: days <= 3,
+      label: days < 0 ? `Overdue by ${Math.abs(days)} day(s)` : `Due in ${days} day(s)`
+    };
+  } catch { return null; }
+}
+
+async function removeLocalKanbanTile(kanban, section) {
+  const label = kanban.name?.trim() || "this local kanban";
+  confirmDialog({
+    title: "Remove local kanban?",
+    message: `Remove “${label}” from the dashboard? This cannot be undone.`,
+    confirmLabel: "Remove",
+    danger: true,
+  }).then(ok => {
+    if (!ok) return;
+    const tid = localKanbanTileId(kanban);
+    state.localKanbanTiles = (state.localKanbanTiles || []).filter((k) => k.id !== kanban.id);
+    state.tileLayout.order = state.tileLayout.order.filter((id) => id !== tid);
+    delete state.tileLayout.widths[tid];
+    delete state.tileLayout.heights[tid];
+    delete state.tileLayout.collapsed[tid];
+    saveLocalKanbanTilesToStorage();
+    saveLayoutToStorage();
+    if (section && section.parentNode) section.parentNode.removeChild(section);
+    refreshDashboardTileLayouts();
+  });
+}
+
+function archiveLocalKanbanTile(kanban, section) {
+  const label = kanban.name?.trim() || "this local kanban";
+  confirmDialog({
+    title: "Archive local kanban?",
+    message: `Archive “${label}”? It can be restored later from the add tile menu.`,
+    confirmLabel: "Archive",
+    danger: true,
+  }).then(ok => {
+    if (!ok) return;
+    kanban.archived = true;
+    const tid = localKanbanTileId(kanban);
+    state.tileLayout.order = state.tileLayout.order.filter((id) => id !== tid);
+    delete state.tileLayout.widths[tid];
+    delete state.tileLayout.heights[tid];
+    delete state.tileLayout.collapsed[tid];
+    saveLocalKanbanTilesToStorage();
+    saveLayoutToStorage();
+    if (section && section.parentNode) section.parentNode.removeChild(section);
+    refreshDashboardTileLayouts();
+    showToast("Kanban archived. Use Add Tile > Restore archived local kanban to bring it back.");
+  });
+}
+
+function openLocalKanbanArchiveModal(currentKanban = null) {
+  let modal = document.getElementById('local-kanban-archive-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'local-kanban-archive-modal';
+    modal.className = 'modal';
+    modal.innerHTML = `
+      <div class="modal-backdrop" data-kanban-archive-dismiss></div>
+      <div class="modal-card" style="max-width:420px;">
+        <h3 class="modal-title">Archived Kanban Boards</h3>
+        <div id="local-kanban-archive-list" style="max-height:220px; overflow:auto; margin:0.5rem 0; font-size:0.9rem;"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-kanban-archive-dismiss>Close</button>
+          ${currentKanban ? '<button type="button" id="local-kanban-do-archive-current" class="btn btn-secondary">Archive current board</button>' : ''}
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    modal.querySelectorAll('[data-kanban-archive-dismiss]').forEach(el => {
+      el.addEventListener('click', () => modal.classList.add('hidden'));
+    });
+  }
+  modal.classList.remove('hidden');
+
+  const listEl = modal.querySelector('#local-kanban-archive-list');
+  const archived = (state.localKanbanTiles || []).filter(k => k.archived);
+  listEl.innerHTML = '';
+  if (!archived.length) {
+    listEl.innerHTML = '<p style="color:var(--muted);">No archived boards yet.</p>';
+  } else {
+    archived.forEach(k => {
+      const row = document.createElement('div');
+      row.style.display = 'flex';
+      row.style.justifyContent = 'space-between';
+      row.style.alignItems = 'center';
+      row.style.marginBottom = '0.25rem';
+      row.innerHTML = `<span>${escapeHtml(k.name || 'Unnamed')}</span>`;
+      const restore = document.createElement('button');
+      restore.type = 'button';
+      restore.className = 'btn btn-ghost btn-small';
+      restore.textContent = 'Restore as new tile';
+      restore.addEventListener('click', () => {
+        k.archived = false;
+        const tid = localKanbanTileId(k);
+        if (!state.tileLayout.order.includes(tid)) {
+          state.tileLayout.order.push(tid);
+        }
+        saveLocalKanbanTilesToStorage();
+        saveLayoutToStorage();
+        renderBoardGroups();
+        modal.classList.add('hidden');
+        showToast(`Restored “${k.name || 'board'}” as new tile`);
+      });
+      row.appendChild(restore);
+      listEl.appendChild(row);
+    });
+  }
+
+  const doArchiveBtn = modal.querySelector('#local-kanban-do-archive-current');
+  if (doArchiveBtn && currentKanban) {
+    doArchiveBtn.onclick = () => {
+      currentKanban.archived = true;
+      const tid = localKanbanTileId(currentKanban);
+      state.tileLayout.order = state.tileLayout.order.filter(id => id !== tid);
+      delete state.tileLayout.widths[tid];
+      delete state.tileLayout.heights[tid];
+      delete state.tileLayout.collapsed[tid];
+      saveLocalKanbanTilesToStorage();
+      saveLayoutToStorage();
+      if (currentKanban._el && currentKanban._el.parentNode) {
+        currentKanban._el.parentNode.removeChild(currentKanban._el);
+      }
+      renderBoardGroups();
+      modal.classList.add('hidden');
+      showToast('Board archived. Re-open this popup from any kanban tile to restore.');
+    };
+  }
+}
+
+function openLocalKanbanCardModal(kanban, colId, cardId, tileSection) {
+  let modal = document.getElementById('local-kanban-card-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'local-kanban-card-modal';
+    modal.className = 'modal';
+    modal.innerHTML = `
+      <div class="modal-backdrop" data-kanban-card-dismiss></div>
+      <div class="modal-card" style="max-width:520px;">
+        <div class="field">
+          <label>Task name</label>
+          <input type="text" id="local-kanban-card-title-input" />
+        </div>
+        <div class="field">
+          <label>Description / details</label>
+          <textarea id="local-kanban-card-desc" rows="3" placeholder="Description..."></textarea>
+        </div>
+        <div class="field">
+          <label>Color</label>
+          <input type="color" id="local-kanban-card-color" />
+        </div>
+        <div class="field">
+          <label>Due date</label>
+          <input type="date" id="local-kanban-card-due" />
+        </div>
+        <div class="field">
+          <label>Notes (add &amp; dated history)</label>
+          <div style="display:flex; gap:0.5rem;">
+            <input type="text" id="local-kanban-card-note-input" placeholder="Add note..." style="flex:1;" />
+            <button type="button" id="local-kanban-card-note-add" class="btn btn-primary btn-small">Add</button>
+          </div>
+          <div id="local-kanban-card-notes-list" class="local-kanban-notes-list" style="max-height:140px; overflow:auto; margin-top:0.5rem; font-size:0.85rem; border:1px solid var(--border); padding:0.25rem; background:var(--surface);"></div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-kanban-card-dismiss>Close</button>
+          <button type="button" id="local-kanban-card-save" class="btn btn-primary">Save</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    modal.querySelectorAll('[data-kanban-card-dismiss]').forEach(el => el.addEventListener('click', () => modal.classList.add('hidden')));
+  }
+  modal.classList.remove('hidden');
+
+  const col = (kanban.columns || []).find(c => c.id === colId);
+  const card = col && (col.cards || []).find(c => c.id === cardId);
+  if (!card) { modal.classList.add('hidden'); return; }
+
+  const titleInput = modal.querySelector('#local-kanban-card-title-input');
+  titleInput.value = card.title || '';
+
+  const descEl = modal.querySelector('#local-kanban-card-desc');
+  descEl.value = card.description || '';
+
+  const colorEl = modal.querySelector('#local-kanban-card-color');
+  colorEl.value = card.color || '#4f8cff';
+
+  const dueEl = modal.querySelector('#local-kanban-card-due');
+  dueEl.value = card.due || '';
+
+  const notesList = modal.querySelector('#local-kanban-card-notes-list');
+  function renderNotes() {
+    notesList.innerHTML = '';
+    const notes = (card.notes || []).slice().sort((a,b) => (b.ts||'').localeCompare(a.ts||''));
+    if (!notes.length) {
+      notesList.innerHTML = '<div style="color:var(--muted); font-size:0.8rem;">No notes yet.</div>';
+      return;
+    }
+    notes.forEach(n => {
+      const d = document.createElement('div');
+      d.style.borderBottom = '1px solid var(--border)';
+      d.style.padding = '0.2rem 0';
+      const dateStr = n.ts ? new Date(n.ts).toLocaleString() : '';
+      d.innerHTML = `<div style="font-size:0.7rem; color:var(--muted);">${escapeHtml(dateStr)}</div><div>${escapeHtml(n.text || '')}</div>`;
+      notesList.appendChild(d);
+    });
+  }
+  renderNotes();
+
+  const noteInput = modal.querySelector('#local-kanban-card-note-input');
+  const addNoteBtn = modal.querySelector('#local-kanban-card-note-add');
+  addNoteBtn.onclick = () => {
+    const txt = (noteInput.value || '').trim();
+    if (!txt) return;
+    if (!card.notes) card.notes = [];
+    card.notes.push({ ts: new Date().toISOString(), text: txt });
+    card.lastUpdated = new Date().toISOString();
+    kanban.updatedAt = new Date().toISOString();
+    noteInput.value = '';
+    renderNotes();
+    saveLocalKanbanTilesToStorage();
+    refreshLocalKanbanColumns(tileSection, kanban);
+  };
+  noteInput.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); addNoteBtn.click(); } };
+
+  modal.querySelector('#local-kanban-card-save').onclick = () => {
+    card.title = titleInput.value.trim() || card.title || 'Task';
+    card.description = descEl.value || '';
+    card.color = colorEl.value || '#4f8cff';
+    card.due = dueEl.value || '';
+    kanban.updatedAt = new Date().toISOString();
+    saveLocalKanbanTilesToStorage();
+    refreshLocalKanbanColumns(tileSection, kanban);
+    modal.classList.add('hidden');
+  };
 }
 
 function normalizeTagTitle(tag) {
@@ -5131,7 +5923,9 @@ function renderBoardGroups() {
   const dash = $("#dashboard-tiles");
   if (!dash) return;
 
-  dash.querySelectorAll(".board-group-tile").forEach((el) => el.remove());
+  // Only remove actual group tiles here. Local kanban tiles (which share the board-group-tile
+  // class for styling) are managed by their own render and would be duplicated or lost otherwise.
+  dash.querySelectorAll(".board-group-tile:not(.local-kanban-tile)").forEach((el) => el.remove());
 
   for (const group of state.groups) {
     const tileId = `group-${group.id}`;
@@ -5329,6 +6123,7 @@ function renderBoardGroups() {
 
   renderCalendarTiles(dash);
   renderNotesTiles(dash);
+  renderLocalKanbanTiles(dash);
 
   ensureTileLayout();
   mountDashboardTiles();
@@ -8337,6 +9132,7 @@ function bindAddTileModal() {
   });
   $("#add-tile-calendar")?.addEventListener("click", showAddTileCalendarForm);
   $("#add-tile-notes")?.addEventListener("click", showAddTileNotesForm);
+  $("#add-tile-local-kanban")?.addEventListener("click", addLocalKanbanTile);
   $("#add-tile-calendar-back")?.addEventListener("click", showAddTileChooser);
   $("#add-tile-notes-back")?.addEventListener("click", showAddTileChooser);
   $("#add-tile-calendar-create")?.addEventListener("click", () => {
@@ -8347,6 +9143,23 @@ function bindAddTileModal() {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !modal.classList.contains("hidden")) closeAddTileModal();
   });
+}
+
+function addLocalKanbanTile() {
+  // New function for local-only kanban (per user request): no CRM, custom statuses via columns, drag-drop cards, per-card desc + notes history.
+  closeAddTileModal();
+  const kanban = newLocalKanbanTile({ name: "Local Kanban" });
+  if (!state.localKanbanTiles) state.localKanbanTiles = [];
+  state.localKanbanTiles.push(kanban);
+  saveLocalKanbanTilesToStorage();
+  // ensure layout
+  if (!state.tileLayout.order.includes(localKanbanTileId(kanban))) {
+    state.tileLayout.order.push(localKanbanTileId(kanban));
+  }
+  saveLayoutToStorage();
+  // Full re-render of board tiles to pick up the new kanban cleanly (clears board-group-tiles then re-renders groups + calendars + notes + kanbans)
+  renderBoardGroups();
+  showToast("Added local kanban tile (viewer / local only)");
 }
 
 // ---------------- Presence / Team feature (status, list, DMs, pinned top tile, idle, admin) ----------------
@@ -8430,8 +9243,74 @@ async function fetchPresenceSnapshot() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Failed to fetch presence");
     state.presenceData = data || null;
-    return data;
+    updateClientPresenceCache(state.presenceData);
+    if (state.presenceData) {
+      if (!Array.isArray(state.presenceData.myRecentDms)) state.presenceData.myRecentDms = [];
+      // Strip any prior demo/test messages (so we control the demo example cleanly)
+      state.presenceData.myRecentDms = state.presenceData.myRecentDms.filter(m => !(m && ((m.id || '').startsWith('demo-') || (m.id || '').startsWith('test-blue-') || (m.from === 'demo-colleague'))));
+      // Always ensure a demo example message is present in myRecentDms.
+      // This makes it visible in the Messages tab of the popup (as an example of a "new message").
+      // The unread count for the header blue bubble will only include it until the user clicks it (which calls markPresenceDMRead).
+      const demoFrom = 'demo-colleague';
+      const lastReadForDemo = (typeof presenceLastRead !== 'undefined' ? (presenceLastRead[demoFrom] || 0) : 0);
+      let demoTs;
+      if (lastReadForDemo <= 0) {
+        // Not yet read in this session: give it a recent ts so it looks like a fresh "new message" and counts as unread.
+        demoTs = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+      } else {
+        // Already read (user clicked the demo convo): give this re-injected instance a ts just before the read time.
+        // This way ts < lastRead so computeUnread will exclude it, but it still appears in the inbox list as a (read) example.
+        demoTs = new Date( new Date(lastReadForDemo).getTime() - 60 * 1000 ).toISOString();
+      }
+      const demoMsg = {
+        from: demoFrom,
+        to: String(state.currentUserId || 'me'),
+        text: "This is a test message for this session — to demonstrate the blue unread counter bubble (top right of the Team button).",
+        ts: demoTs,
+        id: 'test-blue-bubble-' + Date.now()
+      };
+      state.presenceData.myRecentDms.unshift(demoMsg);
+      if (!presenceTestMessageInjected) {
+        // Only the first time we inject the demo in this session: force it as unread so the blue indicator shows initially.
+        // After the user clicks the demo row/thread (markPresenceDMRead), lastRead will be updated to now and it will stop counting.
+        if (typeof presenceLastRead !== 'undefined') {
+          presenceLastRead[demoFrom] = new Date(0).toISOString();
+          try { savePresenceLastRead(); } catch {}
+        }
+        presenceTestMessageInjected = true;
+        demoMessageReadThisSession = false;
+      }
+    }
+    return state.presenceData;
   } catch {
+    // Fallback: synthesize with the demo message (for inbox visibility + initial indicator).
+    const demoFrom = 'demo-colleague';
+    const lastReadForDemo = (typeof presenceLastRead !== 'undefined' ? (presenceLastRead[demoFrom] || 0) : 0);
+    let demoTs;
+    if (lastReadForDemo <= 0) {
+      demoTs = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    } else {
+      demoTs = new Date( new Date(lastReadForDemo).getTime() - 60 * 1000 ).toISOString();
+    }
+    state.presenceData = {
+      users: [],
+      myRecentDms: [{
+        from: demoFrom,
+        to: String(state.currentUserId || 'me'),
+        text: "This is a test message for this session — to demonstrate the blue unread counter bubble (top right of the Team button).",
+        ts: demoTs,
+        id: 'test-blue-bubble-' + Date.now()
+      }]
+    };
+    updateClientPresenceCache(state.presenceData);
+    if (!presenceTestMessageInjected) {
+      if (typeof presenceLastRead !== 'undefined') {
+        presenceLastRead[demoFrom] = new Date(0).toISOString();
+        try { savePresenceLastRead(); } catch {}
+      }
+      presenceTestMessageInjected = true;
+      demoMessageReadThisSession = false;
+    }
     return state.presenceData;
   }
 }
@@ -8539,27 +9418,71 @@ function setupPresenceIdleAndAutoLogout() {
 }
 
 function updatePresenceHeaderBadge(snapshot = null) {
-  const badge = $("#presence-online-badge");
-  if (!badge) return;
+  // Now split: online count uses presence-online-badge (green), unread uses separate presence-unread-badge (blue top right)
   const data = snapshot || state.presenceData;
-  if (!data || !Array.isArray(data.users)) {
-    badge.classList.add("hidden");
-    badge.textContent = "";
-    return;
+  const recent = (data && data.myRecentDms) || [];
+  const users = (data && data.users) || [];
+  const onlineCount = users.filter(u => u.online).length;
+  const onlineBadge = $("#presence-online-badge");
+  if (onlineBadge) {
+    if (onlineCount > 0) {
+      onlineBadge.textContent = onlineCount > 1 ? String(onlineCount) : "";
+      onlineBadge.classList.remove("hidden");
+      onlineBadge.title = `${onlineCount} user${onlineCount > 1 ? "s" : ""} online`;
+    } else {
+      onlineBadge.classList.add("hidden");
+      onlineBadge.textContent = "";
+    }
   }
-  const online = data.users.filter(u => u.online).length;
-  if (online > 0) {
-    badge.textContent = String(online);
-    badge.classList.remove("hidden");
-    badge.title = `${online} user${online === 1 ? "" : "s"} online`;
-  } else {
-    badge.classList.add("hidden");
-    badge.textContent = "";
+  const unreadBadge = $("#presence-unread-badge");
+  let unread = computeUnreadMessagesCount(recent);
+  // For the session demo test message: keep the blue indicator showing (at least 1)
+  // as long as the demo hasn't been explicitly "read" this session.
+  // We use a dedicated flag (set false on injection, set true on markPresenceDMRead for the demo).
+  // This is independent of server snapshots / lastRead / ts to avoid the flashing on/off.
+  // Once you click the demo in the inbox (or open its thread), it marks as read for this session
+  // and the force stops; the indicator will then reflect only real unreads (or 0).
+  if (presenceTestMessageInjected && !demoMessageReadThisSession) {
+    unread = Math.max(unread || 0, 1);
+  }
+  if (unreadBadge) {
+    if (unread > 0) {
+      unreadBadge.textContent = String(unread);
+      unreadBadge.classList.remove("hidden");
+      unreadBadge.title = `${unread} unread message${unread === 1 ? "" : "s"}`;
+    } else {
+      unreadBadge.classList.add("hidden");
+      unreadBadge.textContent = "";
+    }
+  }
+  // Extra safety for the demo indicator: if the session demo is still "unread",
+  // always assert the visual state of the blue bubble. This ensures it shows and stays on
+  // fresh reloads and across updates/polls, until the user actually clicks the demo message
+  // in the inbox (which sets demoMessageReadThisSession = true).
+  if (presenceTestMessageInjected && !demoMessageReadThisSession) {
+    if (unreadBadge) {
+      unreadBadge.textContent = "1";
+      unreadBadge.classList.remove("hidden");
+      unreadBadge.title = "1 unread message (demo for this session)";
+    }
   }
 }
 
 // --- Waiting messages (flashing indicator separate from online count) ---
 let presenceLastRead = {};
+let clientPresenceCache = {}; // id -> last known presence info; used to stabilize roster across partial snapshots
+
+function updateClientPresenceCache(snap) {
+  if (!snap || !Array.isArray(snap.users)) return;
+  (snap.users || []).forEach(u => {
+    const id = getPresenceUserId(u) || u.id || u.ID || u.userId;
+    if (id) {
+      const sid = String(id);
+      clientPresenceCache[sid] = { ...(clientPresenceCache[sid] || {}), ...u };
+    }
+  });
+}
+
 function loadPresenceLastRead() {
   try {
     const raw = localStorage.getItem("oo_board_presence_last_read_v1");
@@ -8584,6 +9507,21 @@ function computeHasWaitingMessages(recentDms) {
     }
   }
   return false;
+}
+
+function computeUnreadMessagesCount(recentDms) {
+  if (!recentDms || !recentDms.length) return 0;
+  const me = String(state.currentUserId || "");
+  let count = 0;
+  for (const m of recentDms) {
+    const from = m.from ? String(m.from) : "";
+    if (from && from !== me) {
+      const last = presenceLastRead[from] || 0;
+      const ts = m.ts ? new Date(m.ts).getTime() : 0;
+      if (ts > last) count++;
+    }
+  }
+  return count;
 }
 
 function updatePresenceHeaderIndicators(snapshot = null) {
@@ -8622,6 +9560,13 @@ function updatePresenceHeaderIndicators(snapshot = null) {
     } else {
       btn.classList.remove("is-online");
     }
+
+    // Ensure bottom-right green visual is the online users counter (the .presence-online-badge span as small green circle with number if >1).
+    // Suppress the ::before pseudo dot to avoid overlapping "big" green or double visuals at bottom.
+    const onlineBadgeEl = $("#presence-online-badge");
+    if (onlineBadgeEl && !onlineBadgeEl.classList.contains("hidden")) {
+      btn.classList.remove("is-online");
+    }
   }
 }
 
@@ -8630,6 +9575,9 @@ function markPresenceDMRead(otherUserId) {
   if (!otherUserId) return;
   presenceLastRead[String(otherUserId)] = Date.now();
   savePresenceLastRead();
+  if (String(otherUserId) === 'demo-colleague') {
+    demoMessageReadThisSession = true;
+  }
 }
 
 function formatTimeAgo(iso) {
@@ -8801,9 +9749,18 @@ function renderPresenceUserList(container, snapshot, usersCache, onUserClick) {
 
   const data = snapshot || state.presenceData || { users: [] };
   const presenceById = new Map();
-  (data.users || []).forEach(p => {
-    const id = getPresenceUserId(p) || p.id;
+  // Seed from client cache first (makes roster stable across polls that return partial user lists
+  // from the backend; prevents "everyone offline" flashes then "just me").
+  Object.entries(clientPresenceCache || {}).forEach(([id, p]) => {
     if (id) presenceById.set(String(id), p);
+  });
+  // Overlay fresh data from this snapshot (current info wins for online/idle/lastSeen).
+  (data.users || []).forEach(p => {
+    const id = getPresenceUserId(p) || p.id || p.ID;
+    if (id) {
+      const sid = String(id);
+      presenceById.set(sid, { ...(presenceById.get(sid) || {}), ...p });
+    }
   });
 
   const onlineRows = [];
@@ -8927,6 +9884,23 @@ function renderPresenceInbox(container, recentDms, cache, snap) {
     const row = document.createElement('div');
     row.className = 'presence-recent-row';
 
+    // Compute if this thread has unread messages (latest msg ts > last read for this other)
+    const otherLastRead = presenceLastRead[otherId] || 0;
+    const msgTsNum = m.ts ? new Date(m.ts).getTime() : 0;
+    let isUnread = msgTsNum > otherLastRead;
+    // For the demo message, base the unread shading strictly on the session "read" state
+    // (!demoMessageReadThisSession = still unread for demo purposes). This makes the shading clearly
+    // distinguish the demo as unread until you click it, independent of the internal ts/lastRead we use
+    // for the count logic.
+    if (otherId === 'demo-colleague' || (m.id || '').startsWith('test-blue-')) {
+      isUnread = !demoMessageReadThisSession;
+    }
+    if (isUnread) {
+      row.classList.add('unread');
+    } else {
+      row.classList.add('read');
+    }
+
     let disp = otherId;
     const hit = cache.find(u => getPresenceUserId(u) === otherId) ||
                 (snap.users || []).find(u => String(u.id || u.ID) === otherId);
@@ -8944,7 +9918,11 @@ function renderPresenceInbox(container, recentDms, cache, snap) {
 
     const tm = document.createElement('span');
     tm.className = 'presence-recent-time';
-    tm.textContent = m.ts ? formatTimeAgo(m.ts) : '';
+    if (m && (m.id || '').startsWith('test-blue-')) {
+      tm.textContent = 'just now (demo)';
+    } else {
+      tm.textContent = m.ts ? formatTimeAgo(m.ts) : '';
+    }
 
     const clr = document.createElement('button');
     clr.type = 'button';
@@ -8986,7 +9964,7 @@ function renderDMLog(logEl, msgs) {
 
   msgs.forEach(m => {
     const div = document.createElement("div");
-    const isMe = m.from === state.currentUserId;
+    const isMe = state.currentUserId != null && String(m.from) === String(state.currentUserId);
     div.className = "presence-msg " + (isMe ? "me" : "");
 
     // Reply context (quoted message) in smaller font
@@ -9012,12 +9990,23 @@ function renderDMLog(logEl, msgs) {
     textEl.textContent = m.text || "";
     div.appendChild(textEl);
 
-    // Read receipt for my sent messages
-    if (isMe && m.read) {
-      const receipt = document.createElement("span");
-      receipt.className = "presence-read-receipt";
-      receipt.textContent = "read";
-      div.appendChild(receipt);
+    // Status under sent messages (me): "sent" (discreet, gray) if not yet read by recipient;
+    // "read" (+ time if available) once read. Appears underneath the bubble text.
+    if (isMe) {
+      const status = document.createElement("div");
+      status.className = "presence-msg-status";
+      if (m.read) {
+        let txt = "read";
+        if (m.read_at) {
+          txt += ` ${formatTimeAgo(m.read_at)}`;
+        }
+        status.textContent = txt;
+        status.style.color = "#22c55e";
+      } else {
+        status.textContent = "sent";
+        status.style.color = "#888";
+      }
+      div.appendChild(status);
     }
 
     // Click anywhere on the bubble to reply to this message
@@ -9150,6 +10139,8 @@ function renderPresenceAdminTab(container, snapshot) {
 let presenceModalBound = false;
 let presenceCurrentReplyTo = null;  // for quoting/replying to a specific previous message
 let presenceHeaderPollTimer = null;
+let presenceTestMessageInjected = false;  // one-time per page load so we can show a test unread DM for the blue bubble counter in this session
+let demoMessageReadThisSession = false;  // tracks if the user has clicked the demo message in the inbox this session (to stop forcing the blue indicator and to shade it as read)
 
 async function openPresenceModal() {
   const modal = $("#presence-modal");
@@ -9227,6 +10218,12 @@ function closePresenceModal() {
   // Reset admin area to hidden by default on close
   const adminEl = $("#presence-admin");
   if (adminEl) adminEl.classList.add("hidden");
+
+  // Refresh the header unread indicator (blue bubble) now that the user may have clicked
+  // messages inside the popup. Clicks on inbox rows or DM threads call markPresenceDMRead,
+  // which updates presenceLastRead, so the next computeUnreadMessagesCount will reflect
+  // only the still-unread ones. We do this on close as requested.
+  updatePresenceHeaderIndicators(state.presenceData);
 }
 
 async function sendPresenceDM() {
@@ -9286,6 +10283,9 @@ async function clearPresenceConversation(otherUserId, onDone) {
     }
     // clear local read marker too
     try { delete presenceLastRead[String(otherUserId)]; savePresenceLastRead(); } catch {}
+    if (String(otherUserId) === 'demo-colleague') {
+      demoMessageReadThisSession = false;  // allow re-showing as unread demo if cleared
+    }
     if (typeof onDone === "function") onDone();
     else {
       // default: refresh current modal view
@@ -9422,6 +10422,7 @@ function renderPresenceModal(snapshot = null, usersCache = null) {
   }
 
   // Admin area (kenc only): hidden by default, toggleable via button that says "Admin" when hidden.
+  // Strictly gated to kenc@vanguardadj.com email (both client and server-side in snapshot).
   if (adminEl && adminToggle) {
     const isKenc = (state.currentUserEmail || "").toLowerCase() === "kenc@vanguardadj.com";
     const hasAdminData = snap && snap.users && snap.users.some(u => u.admin);
@@ -9635,7 +10636,43 @@ function ensurePresenceOnLogin() {
   }
   // Wire the header button
   bindPresenceButton();
-  // Immediate badge + self-online + waiting indicators update
+
+  // Force the demo blue unread counter indicator immediately and synchronously for this session.
+  // This guarantees the top-right blue bubble ("1") is visible right away to demonstrate the
+  // new message indicator, even if async fetch timing, currentUserId not yet populated, or
+  // /api/presence returns empty/no data on first calls.
+  const _unreadBadge = $("#presence-unread-badge");
+  if (_unreadBadge) {
+    _unreadBadge.textContent = "1";
+    _unreadBadge.classList.remove("hidden");
+    _unreadBadge.title = "1 unread message (demo/test for this session)";
+  }
+  // Seed a demo message in presenceData immediately (for the Messages inbox if opened right away).
+  // We ensure the demo example is present, but only force it as unread (for the initial blue count)
+  // the first time in the session. After user clicks/reads the demo (markPresenceDMRead), it will
+  // stop contributing to the unread count.
+  state.presenceData = state.presenceData || { users: [] };
+  if (!Array.isArray(state.presenceData.myRecentDms)) state.presenceData.myRecentDms = [];
+  // strip old demos
+  state.presenceData.myRecentDms = state.presenceData.myRecentDms.filter(m => !(m && ((m.id || '').startsWith('demo-') || (m.id || '').startsWith('test-blue-') || (m.from === 'demo-colleague'))));
+  // add fresh demo example
+  state.presenceData.myRecentDms.unshift({
+    from: 'demo-colleague',
+    to: String(state.currentUserId || 'me'),
+    text: "This is a test message for this session — to demonstrate the blue unread counter bubble (top right of the Team button).",
+    ts: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+    id: 'test-blue-bubble-' + Date.now()
+  });
+  if (!presenceTestMessageInjected) {
+    if (typeof presenceLastRead !== 'undefined') {
+      presenceLastRead['demo-colleague'] = new Date(0).toISOString();
+      try { savePresenceLastRead(); } catch {}
+    }
+    presenceTestMessageInjected = true;
+    demoMessageReadThisSession = false;
+  }
+
+  // Immediate badge + self-online + waiting indicators update (async will keep the test msg alive)
   fetchPresenceSnapshot().then(s => updatePresenceHeaderIndicators(s)).catch(() => {});
   // Light periodic poll for header indicators (badge, self-online dot, waiting flash) so they are live
   // even without opening the modal. (Full poll only when modal open.)
@@ -9645,10 +10682,704 @@ function ensurePresenceOnLogin() {
   }, 30000);
   // Idle / auto-logout safety net
   setupPresenceIdleAndAutoLogout();
+  // Mail unread badge on header icon
+  loadMailDashboardReadIds();
+  updateMailUnreadBadge().catch(() => {});
 }
 
 // Expose a tiny helper so other code (e.g. after a successful login) can kick the feature
 window.__ensurePresenceOnLogin = ensurePresenceOnLogin;
+
+/* ==================== CRM Mail Inbox (large popup with list, pagination, actions, quick link) ==================== */
+let mailState = {
+  accounts: [],
+  currentAccountId: '',
+  messages: [],
+  page: 1,
+  pageSize: 50,
+  search: '',
+  selected: new Set(),
+};
+
+// Dashboard-side read/unread overrides for the mail inbox list.
+// Used because the CRM /mail/messages/markread endpoint currently returns HTML error pages
+// (instead of JSON) for this tenant/setup, so we cannot reliably push marks server-side yet.
+// Per user: even if it can't sync to native mail module, the dashboard list + indicator must
+// remember marks persistently (across modal close/reopen and page reloads) until user bulk-marks
+// in the native CRM mail UI later.
+// Stored in localStorage (portal-keyed) so it survives reloads; also lives in-memory for the session.
+let mailDashboardReadIds = new Set();
+let lastMailUnreadBadge = 0;
+
+function loadMailDashboardReadIds() {
+  try {
+    const portal = (state && state.portalUrl) || localStorage.getItem('oo_portal_url') || 'default';
+    const key = `oo_mail_read_ids_${portal}`;
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) arr.forEach(id => mailDashboardReadIds.add(String(id)));
+    }
+  } catch (e) { /* non-fatal */ }
+}
+
+function saveMailDashboardReadIds() {
+  try {
+    const portal = (state && state.portalUrl) || localStorage.getItem('oo_portal_url') || 'default';
+    const key = `oo_mail_read_ids_${portal}`;
+    localStorage.setItem(key, JSON.stringify(Array.from(mailDashboardReadIds)));
+  } catch (e) { /* non-fatal */ }
+}
+
+function decrementMailUnreadBadge(count) {
+  if (!count || count <= 0) return;
+  lastMailUnreadBadge = Math.max(0, lastMailUnreadBadge - count);
+  const badge = $("#mail-unread-badge");
+  if (!badge) return;
+  if (lastMailUnreadBadge <= 0) {
+    badge.textContent = '';
+    badge.classList.add('hidden');
+  } else {
+    badge.textContent = lastMailUnreadBadge > 99 ? '99+' : String(lastMailUnreadBadge);
+    badge.classList.remove('hidden');
+  }
+}
+
+// Tolerant read/unread detector for mail message objects (list summaries or full detail).
+// OnlyOffice/Community Server mail responses use wildly inconsistent casing and structures
+// (see normalizeMailMessage for the precedent we follow here). The /mail/messages list
+// summary often omits a usable flag (or puts it under different keys), which is why the
+// inbox was showing everything as unread until we had local overrides. This helper tries
+// the common variants + simple inversions + a couple of nested flag bags so that when the
+// server *does* provide the status we respect it (and promote it into our dashboard Set
+// for persistence across re-fetches / close-reopen).
+function getMailMessageIsRead(m) {
+  if (!m || typeof m !== 'object') return false;
+
+  // Direct top-level booleans / 0|1 under many casings
+  const direct = m.read ?? m.isRead ?? m.Read ?? m.IsRead ?? m.seen ?? m.Seen ?? m.IsSeen;
+  if (typeof direct === 'boolean') return direct;
+  if (typeof direct === 'number') return direct !== 0;
+
+  // Common inverted flags
+  if (typeof m.unread === 'boolean') return !m.unread;
+  if (typeof m.Unread === 'boolean') return !m.Unread;
+  if (typeof m.new === 'boolean') return !m.new;
+  if (typeof m.New === 'boolean') return !m.New;
+  if (typeof m.IsNew === 'boolean') return !m.IsNew;
+
+  // Light nesting (flags bag or properties/status)
+  const bag = m.flags || m.Flags || m.flag || m.Flag || m.properties || m.Properties || m.status || m.Status;
+  if (bag && typeof bag === 'object') {
+    const f = bag.read ?? bag.isRead ?? bag.seen ?? bag.Seen ?? bag.readAt ?? bag.ReadAt;
+    if (typeof f === 'boolean') return f;
+    if (typeof f === 'number') return f !== 0;
+    if (typeof bag.unread === 'boolean') return !bag.unread;
+    if (typeof bag.Unread === 'boolean') return !bag.Unread;
+  }
+
+  return false;
+}
+
+function bindMailInboxButton() {
+  const btn = $("#mail-inbox-btn");
+  if (!btn || btn.dataset.bound) return;
+  btn.dataset.bound = "1";
+  btn.addEventListener("click", () => {
+    openMailInboxModal().catch(err => showToast(err.message || 'Could not open mail inbox', true));
+  });
+}
+
+async function updateMailUnreadBadge() {
+  const badge = $("#mail-unread-badge");
+  // Viewer-only: if badge is hidden (current mode), skip entirely to avoid any /mail/accounts or
+  // /folders status calls to the server. The indicator is disabled for now.
+  if (!badge || badge.style.display === 'none' || getComputedStyle(badge).display === 'none') return;
+  loadMailDashboardReadIds(); // ensure overrides are ready even for early badge kicks
+  if (!badge) return;
+  try {
+    let total = 0;
+    const adata = await api("/api/2.0/mail/accounts");
+    const accts = unwrap(adata) || [];
+    for (const a of accts) {
+      const aid = a.id || a.accountId || a.email;
+      if (!aid) continue;
+      // Some account records carry aggregate unread directly
+      total += (a.unreadCount || a.unread || a.unreadMessages || a.newMessages || 0) | 0;
+      try {
+        const fdata = await api(`/api/2.0/mail/folders?accountId=${encodeURIComponent(aid)}`);
+        const flds = unwrap(fdata) || [];
+        flds.forEach(f => {
+          const n = String(f.name || f.Name || '').toLowerCase().trim();
+          if (n === 'inbox' || n === 'inbox (current)' || n.includes('inbox')) {
+            total += (f.unreadCount || f.unread || f.unreadMessages || f.unseenCount || f.unseen || f.newMessages || 0) | 0;
+          }
+        });
+      } catch (e) {}
+    }
+    // Fallback / aggregate: try folders without an accountId (some mail setups return global or default inboxes here)
+    if (total === 0) {
+      try {
+        const fdata = await api(`/api/2.0/mail/folders`);
+        const flds = unwrap(fdata) || [];
+        flds.forEach(f => {
+          const n = String(f.name || f.Name || '').toLowerCase().trim();
+          if (n === 'inbox' || n === 'inbox (current)' || n.includes('inbox')) {
+            total += (f.unreadCount || f.unread || f.unreadMessages || f.unseenCount || f.unseen || f.newMessages || 0) | 0;
+          }
+        });
+      } catch (e) {}
+    }
+    lastMailUnreadBadge = total;
+    // Debug sample to help diagnose why the header indicator may stay at 0/hidden.
+    // If folders or unread* fields have different names or the responses are HTML error pages,
+    // total will be 0 and we fall into the preserve-or-hide path.
+    console.debug('[mail-inbox] unread badge total from mail folders:', total, 'lastKnown:', lastMailUnreadBadge);
+    if (total > 0) {
+      badge.textContent = total > 99 ? "99+" : String(total);
+      badge.classList.remove("hidden");
+    } else {
+      badge.textContent = "";
+      badge.classList.add("hidden");
+    }
+  } catch {
+    // Preserve last known count on transient errors (e.g. HTML error pages from mail endpoints)
+    // so the indicator doesn't disappear after it has successfully loaded once.
+    if (lastMailUnreadBadge > 0) {
+      badge.textContent = lastMailUnreadBadge > 99 ? "99+" : String(lastMailUnreadBadge);
+      badge.classList.remove("hidden");
+    } else {
+      badge.classList.add("hidden");
+    }
+  }
+}
+
+async function openMailInboxModal() {
+  const modal = $("#mail-inbox-modal");
+  if (!modal) return;
+  modal.classList.remove("hidden");
+  // Load any persisted dashboard read overrides (from localStorage) so marks survive close/reopen.
+  // Do NOT clear mailDashboardReadIds here — that is the persistence mechanism.
+  loadMailDashboardReadIds();
+  // reset only volatile per-open state (keep dashboard read overrides)
+  mailState = { accounts: [], currentAccountId: '', messages: [], page: 1, pageSize: 50, search: '', selected: new Set() };
+  $("#mail-search-input").value = "";
+  // Guarded clears for old deal/link elements (sidebar is now viewer warning; elements removed)
+  const _ds = $("#mail-deal-search"); if (_ds) _ds.value = "";
+  const _dr = $("#mail-deal-results"); if (_dr) _dr.innerHTML = "";
+  const _lb = $("#mail-link-btn"); if (_lb) _lb.disabled = true;
+  const _si = $("#mail-selected-info"); if (_si) _si.textContent = "";
+  // loadMailAccountsForModal() skipped: pulldown selector disabled/hidden; always use unified inbox (no account/folder targeting)
+  await loadMailMessagesForModal(1, "");
+  // No badge/status updates (indicator hidden; viewer-only, no server status polling from mail paths)
+  attachMailModalListeners();
+}
+
+function attachMailModalListeners() {
+  const modal = $("#mail-inbox-modal");
+  if (!modal || modal.dataset.listenersBound) return;
+  modal.dataset.listenersBound = "1";
+
+  // close
+  modal.querySelectorAll("[data-mail-inbox-dismiss]").forEach(el => {
+    el.addEventListener("click", () => modal.classList.add("hidden"));
+  });
+
+  // account/inbox selector change listener removed (pulldown disabled + hidden; default unified inbox, see loadMailMessagesForModal)
+
+  // search
+  const searchIn = $("#mail-search-input");
+  let searchT = null;
+  if (searchIn) {
+    searchIn.addEventListener("input", () => {
+      clearTimeout(searchT);
+      searchT = setTimeout(() => {
+        loadMailMessagesForModal(1, searchIn.value || "");
+      }, 350);
+    });
+  }
+
+  // select all
+  const selAll = $("#mail-select-all");
+  if (selAll) {
+    selAll.addEventListener("click", () => {
+      const cbs = modal.querySelectorAll(".mail-cb");
+      const allChecked = Array.from(cbs).every(cb => cb.checked);
+      cbs.forEach(cb => {
+        cb.checked = !allChecked;
+        const id = cb.dataset.id;
+        if (cb.checked) mailState.selected.add(id);
+        else mailState.selected.delete(id);
+      });
+      updateMailSelectedInfo();
+    });
+  }
+
+  // mark read (viewer-only local visual; no server push at all per current instructions)
+  const markBtn = $("#mail-mark-read");
+  if (markBtn) {
+    markBtn.addEventListener("click", async () => {
+      if (!mailState.selected.size) return;
+      const ids = Array.from(mailState.selected).map(Number);
+      const idsStr = ids.map(String);
+      try {
+        // Local only for viewer: immediate darker styling + persistence in this session
+        idsStr.forEach(sid => mailDashboardReadIds.add(sid));
+        saveMailDashboardReadIds();
+        mailState.messages.forEach(m => {
+          const mid = String(m.id || m.ID);
+          if (idsStr.includes(mid)) m.read = true;
+        });
+        renderMailList(mailState.messages);
+        mailState.selected.clear();
+        updateMailSelectedInfo();
+
+        showToast("Marked as read (viewer)");
+        await loadMailMessagesForModal(mailState.page, $("#mail-search-input").value || "");
+        updateMailSelectedInfo();
+      } catch (e) {
+        showToast("Failed to mark read (viewer): " + String(e.message || e).slice(0, 120), true);
+      }
+    });
+  }
+
+  // mark unread (viewer-only local visual; no server push at all per current instructions)
+  const markUnreadBtn = $("#mail-mark-unread");
+  if (markUnreadBtn) {
+    markUnreadBtn.addEventListener("click", async () => {
+      if (!mailState.selected.size) return;
+      const ids = Array.from(mailState.selected).map(Number);
+      const idsStr = ids.map(String);
+      try {
+        idsStr.forEach(sid => mailDashboardReadIds.delete(sid));
+        saveMailDashboardReadIds();
+        mailState.messages.forEach(m => {
+          const mid = String(m.id || m.ID);
+          if (idsStr.includes(mid)) m.read = false;
+        });
+        renderMailList(mailState.messages);
+        mailState.selected.clear();
+        updateMailSelectedInfo();
+
+        showToast("Marked as unread (viewer)");
+        await loadMailMessagesForModal(mailState.page, $("#mail-search-input").value || "");
+        updateMailSelectedInfo();
+      } catch (e) {
+        showToast("Failed to mark unread (viewer): " + String(e.message || e).slice(0, 120), true);
+      }
+    });
+  }
+
+  // delete
+  const delBtn = $("#mail-delete");
+  if (delBtn) {
+    delBtn.addEventListener("click", async () => {
+      if (!mailState.selected.size) return;
+      if (!confirm(`Delete ${mailState.selected.size} message(s)?`)) return;
+      try {
+        const ids = Array.from(mailState.selected);
+        // (Delete button is hidden in viewer-only mode; no server calls performed.
+        // If re-enabled later, real DELETEs would go here.)
+        // for (const id of ids) { try { await api... } catch {} }
+        showToast("Delete is disabled (viewer only)");
+        mailState.selected.clear();
+        await loadMailMessagesForModal(mailState.page, $("#mail-search-input").value || "");
+      } catch (e) {
+        showToast("Delete failed for some: " + (e.message || e), true);
+      }
+    });
+  }
+
+  // refresh
+  const refBtn = $("#mail-refresh");
+  if (refBtn) {
+    refBtn.addEventListener("click", () => loadMailMessagesForModal(mailState.page, $("#mail-search-input").value || ""));
+  }
+
+  // pagination
+  const prev = $("#mail-prev-page");
+  if (prev) prev.addEventListener("click", () => {
+    if (mailState.page > 1) loadMailMessagesForModal(mailState.page - 1, $("#mail-search-input").value || "");
+  });
+  const next = $("#mail-next-page");
+  if (next) next.addEventListener("click", () => {
+    loadMailMessagesForModal(mailState.page + 1, $("#mail-search-input").value || "");
+  });
+
+  // quick link search
+  const dealSearch = $("#mail-deal-search");
+  let dealT = null;
+  if (dealSearch) {
+    dealSearch.addEventListener("input", () => {
+      clearTimeout(dealT);
+      dealT = setTimeout(() => searchDealsForMailLink(dealSearch.value.trim()), 300);
+    });
+  }
+
+  const linkBtn = $("#mail-link-btn");
+  if (linkBtn) {
+    linkBtn.addEventListener("click", async () => {
+      const results = $("#mail-deal-results");
+      const dealId = results && results.dataset.selectedDealId;
+      if (!dealId || !mailState.selected.size) return;
+      const ids = Array.from(mailState.selected);
+      let ok = 0;
+      for (const mid of ids) {
+        try {
+          await api('/api/2.0/mail/crm/link', {
+            method: "POST",
+            body: JSON.stringify({
+              messageIds: [Number(mid)],
+              crmEntityId: Number(dealId),
+              crmEntityType: 2  // opportunity (mirrors mail module link to CRM, scoped to deals only)
+            })
+          });
+          ok++;
+        } catch (e) {
+          // fallback: create history event on the deal so it appears as linked email in preview (like existing linked mails)
+          // this mirrors how linked emails show in deal history/preview
+          try {
+            if (!state.historyCategories || !state.historyCategories.length) {
+              await loadHistoryCategories().catch(() => {});
+            }
+            const cat = (state.historyCategories || []).find(c => /note|email|mail/i.test(String(c.title || c.Title || ""))) || (state.historyCategories || [])[0];
+            const categoryId = cat ? Number(cat.id ?? cat.ID ?? 1) : 1;
+            const m = mailState.messages.find(mm => String(mm.id || mm.ID) === mid) || {};
+            const subj = m.subject || "email";
+            const fromAddr = (typeof m.from === "string" ? m.from : (m.from && (m.from.email || m.from.name)) || m.fromEmail || "") || "";
+            await api("/api/2.0/crm/history", {
+              method: "POST",
+              body: JSON.stringify({
+                entityType: "opportunity",
+                entityId: dealId,
+                contactId: 0,
+                content: `The email "${subj}" has been received`,
+                categoryId: categoryId,
+                additionalData: JSON.stringify({
+                  mailMessageId: Number(mid),
+                  from: fromAddr,
+                  subject: subj
+                })
+              })
+            });
+            ok++;
+          } catch {}
+        }
+      }
+      showToast(ok ? `Linked ${ok} email(s) to deal` : "Link failed");
+      // also mark linked as read
+      const idsToMark = Array.from(mailState.selected);
+      for (const mid of idsToMark) {
+        await markMailMessageRead(mid).catch(() => {});
+      }
+      mailState.selected.clear();
+      $("#mail-deal-results").innerHTML = "";
+      $("#mail-deal-results").dataset.selectedDealId = "";
+      linkBtn.disabled = true;
+      $("#mail-selected-info").textContent = "";
+      await loadMailMessagesForModal(mailState.page, $("#mail-search-input").value || "");
+      // (old link handler - inert now; no badge/status server calls)
+    });
+  }
+}
+
+async function loadMailAccountsForModal() {
+  const sel = $("#mail-account-select");
+  if (!sel) return;
+  sel.innerHTML = '<option value="">Default / All accounts</option>';
+  try {
+    const data = await api("/api/2.0/mail/accounts");
+    const accts = unwrap(data) || [];
+    mailState.accounts = accts;
+    const seen = new Set();
+    accts.forEach(a => {
+      const accId = a.id || a.accountId;
+      const emailAddr = a.email || a.name || a.title || accId;
+      if (!emailAddr || seen.has(emailAddr)) return;
+      seen.add(emailAddr);
+      const opt = document.createElement("option");
+      opt.value = accId || emailAddr;  // prefer numeric id for accountId param in messages query
+      opt.textContent = emailAddr;  // full address
+      sel.appendChild(opt);
+    });
+  } catch (e) {
+    // non-fatal
+  }
+}
+
+async function loadMailMessagesForModal(page = 1, search = "") {
+  const list = $("#mail-list");
+  if (!list) return;
+  list.innerHTML = '<div class="mail-loading">Loading emails…</div>';
+  mailState.page = page;
+  mailState.search = search || "";
+  // NOTE: account/folder targeting removed entirely. Pulldown disabled (hidden), always load unified inbox (no &accountId / &folderId). See ISSUES.md ISSUE-002.
+  // const acctSel = $("#mail-account-select");
+  // let accountId = ... (disabled)
+
+  let q = `page=${page}&page_size=${mailState.pageSize}&sortorder=descending`;
+  if (search) q += `&search=${encodeURIComponent(search)}`;
+
+  let rows = [];
+  try {
+    rows = unwrap(await api(`/api/2.0/mail/messages?${q}`)) || [];
+  } catch (e) {
+    list.innerHTML = `<div class="mail-empty">Could not load mail: ${escapeHtml(e.message || e)}</div>`;
+    return;
+  }
+
+  // Lightweight debug output (console.debug) so you can inspect the *actual* shape of items
+  // returned by the mail module list API. This directly answers "are we able to pull read/unread
+  // status from the mail module?" — look at these objects for read / isRead / seen / IsNew / flags etc.
+  console.debug('[mail-inbox] raw /mail/messages list sample (first 3):', rows.slice(0, 3));
+
+  // Apply server-provided read status (via tolerant getter) and promote those ids into the
+  // dashboard read Set so they survive re-fetches / close+reopen (the list summary often omits
+  // Apply any server-provided read flag (via tolerant getter, if the list summary includes it)
+  // and/or our local viewer marks (from toolbar or expand). Local marks power the darker
+  // row styling inside the viewer only (no server push).
+  rows.forEach(m => {
+    const mid = String(m.id || m.ID);
+    if (getMailMessageIsRead(m)) {
+      mailDashboardReadIds.add(mid);
+    }
+    if (mailDashboardReadIds.has(mid)) m.read = true;
+  });
+
+  mailState.messages = rows;
+  renderMailList(rows);
+
+  // (No badge/status refresh here — indicator hidden; viewer-only mode avoids extra server status calls)
+
+  // pagination
+  const prev = $("#mail-prev-page");
+  const next = $("#mail-next-page");
+  const info = $("#mail-page-info");
+  if (prev) prev.disabled = page <= 1;
+  if (next) next.disabled = rows.length < mailState.pageSize;
+  if (info) {
+    const start = (page - 1) * mailState.pageSize + 1;
+    const end = start + rows.length - 1;
+    info.textContent = `Page ${page} (${start}-${end})`;
+  }
+  updateMailSelectedInfo();
+}
+
+function renderMailList(msgs) {
+  const list = $("#mail-list");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!msgs || !msgs.length) {
+    list.innerHTML = '<div class="mail-empty">No emails in this inbox/page.</div>';
+    return;
+  }
+
+  // header
+  const header = document.createElement("div");
+  header.className = "mail-row mail-header";
+  header.innerHTML = `
+    <input type="checkbox" id="mail-cb-all" />
+    <div class="mail-from"><strong>From</strong></div>
+    <div class="mail-subject"><strong>Subject</strong></div>
+    <div class="mail-date"><strong>Date</strong></div>
+  `;
+  list.appendChild(header);
+
+  const cbAll = header.querySelector("#mail-cb-all");
+  if (cbAll) {
+    cbAll.checked = msgs.length > 0 && msgs.every(m => mailState.selected.has(String(m.id || m.ID)));
+    cbAll.addEventListener("change", () => {
+      msgs.forEach(m => {
+        const id = String(m.id || m.ID);
+        if (cbAll.checked) mailState.selected.add(id);
+        else mailState.selected.delete(id);
+      });
+      renderMailList(msgs); // re-render to sync cbs
+      updateMailSelectedInfo();
+    });
+  }
+
+  msgs.forEach(m => {
+    const id = String(m.id || m.ID);
+    const from = (typeof m.from === "string" ? m.from : (m.from && (m.from.email || m.from.name)) || m.fromEmail || "").toString();
+    const subj = (m.subject || m.Subject || "(no subject)").toString();
+    const date = m.date || m.receivedDate || m.Date || "";
+    const dateStr = date ? new Date(date).toLocaleDateString() + " " + new Date(date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : "";
+
+    const item = document.createElement("div");
+    item.className = "mail-item";
+    item.dataset.id = id;
+
+    const row = document.createElement("div");
+    row.className = "mail-row";
+    if (mailState.selected.has(id)) row.classList.add("selected");
+    // Use tolerant server read detection (list summary may use read/isRead/seen/IsNew etc or nestings)
+    // OR our local dashboard overrides (for marks we performed here + any server-read we promoted).
+    // This makes the darker .mail-row-read rows reflect native CRM mail status when the API provides it,
+    // while our local Set ensures persistence across modal close/reopen even if a list response drops the flag.
+    const isRead = getMailMessageIsRead(m) || mailDashboardReadIds.has(id);
+    if (isRead) row.classList.add('mail-row-read');
+
+    row.innerHTML = `
+      <input type="checkbox" class="mail-cb" data-id="${escapeHtml(id)}" ${mailState.selected.has(id) ? "checked" : ""} />
+      <div class="mail-from" title="${escapeHtml(from)}">${escapeHtml(from).slice(0,28)}</div>
+      <div class="mail-subject" title="${escapeHtml(subj)}">${escapeHtml(subj).slice(0,80)}</div>
+      <div class="mail-date">${escapeHtml(dateStr)}</div>
+    `;
+
+    // Expand button for viewing full email (lazy load, copy from deal preview modal)
+    const expBtn = document.createElement("button");
+    expBtn.type = "button";
+    expBtn.className = "mail-expand-btn";
+    expBtn.textContent = "View";
+    expBtn.title = "Expand to view full email";
+    row.appendChild(expBtn);
+
+    const cb = row.querySelector(".mail-cb");
+    cb.addEventListener("click", (e) => {
+      e.stopImmediatePropagation();
+      if (cb.checked) mailState.selected.add(id);
+      else mailState.selected.delete(id);
+      if (cb.checked) row.classList.add("selected");
+      else row.classList.remove("selected");
+      updateMailSelectedInfo();
+    });
+
+    row.addEventListener("click", (e) => {
+      if (e.target.tagName === "INPUT" || e.target === expBtn) return;
+      // toggle selection on row click
+      if (mailState.selected.has(id)) {
+        mailState.selected.delete(id);
+        row.classList.remove("selected");
+        cb.checked = false;
+      } else {
+        mailState.selected.add(id);
+        row.classList.add("selected");
+        cb.checked = true;
+      }
+      updateMailSelectedInfo();
+    });
+
+    // Expand logic: lazy fetch only on press, render like opp preview mail
+    const detail = document.createElement("div");
+    detail.className = "mail-detail hidden";
+    item.appendChild(row);
+    item.appendChild(detail);
+
+    expBtn.addEventListener("click", async (e) => {
+      e.stopImmediatePropagation();
+      const isHidden = detail.classList.contains("hidden");
+      detail.classList.toggle("hidden");
+      if (!isHidden) return; // was shown, now hiding
+      if (item._mailLoaded) return;
+      item._mailLoaded = true;
+      detail.innerHTML = '<div class="mail-loading">Loading full email…</div>';
+      try {
+        const fullMail = await fetchMailMessage(id);
+        detail.innerHTML = "";
+        // Reuse the embed panel renderer from deal preview (copies the functionality: headers, body, open link)
+        const embed = document.createElement("div");
+        embed.className = "mail-expanded-embed";
+        detail.appendChild(embed);
+        renderMailEmbedPanel(embed, fullMail, id, {
+          openUrl: portalMailMessageUrl(id)
+        });
+        // Learn server read status from the *full* mail detail (the list summary often lacks or hides
+        // the flag under different keys). Promote into our dashboard Set so the read state survives
+        // any later list re-render or modal close/reopen. (markMailMessageRead also adds for the auto-mark.)
+        if (getMailMessageIsRead(fullMail)) {
+          mailDashboardReadIds.add(id);
+          saveMailDashboardReadIds();
+        }
+        // auto "mark" locally in viewer for visual (darker row) + persistence in session
+        markMailMessageRead(id).catch(() => {});
+        row.classList.add('mail-row-read');
+        // no badge/status server call (indicator hidden for now)
+      } catch (e) {
+        detail.innerHTML = `<div class="mail-empty">Failed to load full email: ${escapeHtml(e.message || e)}</div>`;
+      }
+    });
+
+    list.appendChild(item);
+  });
+}
+
+function updateMailSelectedInfo() {
+  const n = mailState.selected.size;
+  // Enable toolbar action buttons (mark read/unread) for the viewer when items selected.
+  // (delete is hidden in viewer-only mode)
+  const hasSel = n > 0;
+  const markReadBtn = $("#mail-mark-read");
+  const markUnreadBtn = $("#mail-mark-unread");
+  const delBtn = $("#mail-delete");
+  if (markReadBtn) markReadBtn.disabled = !hasSel;
+  if (markUnreadBtn) markUnreadBtn.disabled = !hasSel;
+  if (delBtn) delBtn.disabled = !hasSel;
+
+  // Old link/info elements may be absent (sidebar is now viewer warning)
+  const info = $("#mail-selected-info");
+  const linkBtn = $("#mail-link-btn");
+  if (!info) return;
+  info.textContent = n ? `${n} selected` : "";
+  if (linkBtn) linkBtn.disabled = n === 0 || !$("#mail-deal-results")?.dataset?.selectedDealId;
+}
+
+async function markMailMessageRead(messageId) {
+  const id = String(messageId);
+  // Pure local for viewer: marks "read" only inside this dashboard session for visual styling
+  // (darker rows). No attempt to push to server (viewer-only mode per current instructions).
+  mailDashboardReadIds.add(id);
+  saveMailDashboardReadIds();
+  if (mailState && mailState.messages) {
+    mailState.messages.forEach(m => {
+      if (String(m.id || m.ID) === id) m.read = true;
+    });
+  }
+}
+
+async function searchDealsForMailLink(query) {
+  const resEl = $("#mail-deal-results");
+  const linkBtn = $("#mail-link-btn");
+  if (!resEl) return;
+  resEl.innerHTML = "";
+  resEl.dataset.selectedDealId = "";
+  resEl.dataset.selectedDealTitle = "";
+  if (linkBtn) linkBtn.disabled = true;
+  const q = (query || "").trim();
+  if (q.length < 1) {
+    resEl.classList.add("hidden");
+    return;
+  }
+  try {
+    const opps = await searchOpportunitiesByTitle(q, { limit: 8 });
+    resEl.classList.remove("hidden");
+    if (!opps.length) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.disabled = true;
+      b.textContent = "No matches";
+      resEl.appendChild(b);
+      return;
+    }
+    opps.forEach(opp => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = opp.title;
+      b.addEventListener("click", () => {
+        resEl.querySelectorAll("button").forEach(x => x.classList.remove("selected"));
+        b.classList.add("selected");
+        resEl.dataset.selectedDealId = String(opp.id);
+        resEl.dataset.selectedDealTitle = opp.title;
+        if (linkBtn) linkBtn.disabled = mailState.selected.size === 0;
+        updateMailSelectedInfo();
+      });
+      resEl.appendChild(b);
+    });
+  } catch (err) {
+    showToast("Deal search failed: " + (err.message || err), true);
+    resEl.classList.add("hidden");
+  }
+}
 
 function bindCreateOpportunityModal() {
   const modal = $("#create-opportunity-modal");
@@ -10054,7 +11785,8 @@ function portalMailMessageUrl(messageId) {
   const id = String(messageId || "").trim();
   if (!id) return "";
   const base = state.portalUrl.replace(/\/$/, "");
-  return `${base}/Products/Mail/#message/${id}`;
+  // Use conversation view and addons path for compatibility (avoids runtime errors on some portals)
+  return `${base}/addons/mail/Default.aspx#conversation/${id}`;
 }
 
 function sanitizeHistoryHtml(html) {
@@ -10074,6 +11806,20 @@ function sanitizeHistoryHtml(html) {
         el.setAttribute("rel", "noopener noreferrer");
       }
     }
+    // sanitize white/light backgrounds from email HTML so it sits on dark mode
+    if (el.hasAttribute("style")) {
+      let style = el.getAttribute("style");
+      // remove any background or bg-color, including white/light variants and !important
+      style = style.replace(/background(-color)?\s*:\s*[^;]*(white|#fff|#ffffff|rgb\(255\s*,\s*255\s*,\s*255\)|rgba\(255\s*,\s*255\s*,\s*255[^)]*\))[^;]*;?/gi, "");
+      style = style.replace(/background\s*:\s*[^;]*(white|#fff|#ffffff)[^;]*;?/gi, "");
+      if (style.trim()) {
+        el.setAttribute("style", style);
+      } else {
+        el.removeAttribute("style");
+      }
+    }
+    el.removeAttribute('bgcolor');
+    el.removeAttribute('background');
   });
   return wrap.innerHTML;
 }
@@ -10579,11 +12325,22 @@ function pickMailBodyForDisplay(norm, { allowIntroFallback = false, crmPayload =
 
 function mailBodyIframeSrcdoc(htmlContent) {
   const body = sanitizeHistoryHtml(htmlContent);
+  // sanitize out white/light backgrounds from email HTML so content uses the dark theme bg
+  const temp = document.createElement('div');
+  temp.innerHTML = body;
+  temp.querySelectorAll('*').forEach(el => {
+    if (el.hasAttribute('style')) {
+      let s = el.getAttribute('style');
+      s = s.replace(/background(-color)?\s*:\s*[^;]*(white|#fff|#ffffff|rgb\(255,?\s*255,?\s*255\)|rgba\(255,?\s*255,?\s*255[^)]*\))[^;]*;?/gi, '');
+      if (s.trim()) el.setAttribute('style', s); else el.removeAttribute('style');
+    }
+  });
+  const cleaned = temp.innerHTML;
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><base target="_blank"><style>
-body{margin:0.65rem;font:13px/1.45 system-ui,-apple-system,sans-serif;background:#181b24;color:#e8ecf4;line-height:1.45;word-break:break-word;}
+body{margin:0.65rem;font:13px/1.45 system-ui,-apple-system,sans-serif;background:#181b24 !important;color:#ccc !important;line-height:1.45;word-break:break-word;}
 a{color:#7eb8ff;}img{max-width:100%;height:auto;}table{max-width:100%;}
 p{margin:0 0 0.5rem;}blockquote{margin:0.5rem 0;padding-left:0.75rem;border-left:2px solid #3d4659;color:#b8c0d4;}
-</style></head><body>${body}</body></html>`;
+</style></head><body>${cleaned}</body></html>`;
 }
 
 function historyEventDateIso(ev) {
@@ -12390,6 +14147,10 @@ function showApp() {
   $("#portal-label").textContent = state.portalUrl;
   noteDashboardActivity();
   startPanelTileAutoRefresh();
+  // Kick mail unread badge (in addition to ensurePresenceOnLogin which also does it post-login).
+  // Helps ensure the header indicator is present immediately on app show / session restore.
+  loadMailDashboardReadIds();
+  updateMailUnreadBadge().catch(() => {});
   // No periodic global unreachable poller (removed per request to avoid spurious "unreachable" indicators during normal use).
   // The marquee / status only appears for actual queued/stale push failures.
 }
@@ -12445,6 +14206,7 @@ async function init() {
 
   bindAddTileModal();
   bindCalendarEventModal();
+  bindMailInboxButton();
 
   $("#refresh-btn").addEventListener("click", refreshAll);
   $("#logout-btn").addEventListener("click", async () => {

@@ -2,7 +2,7 @@ THIS WAS MADE BY A CLANKER. LOOK ON IT YE MIGHTY AND DESPAIR.
 
 # Vanguard CRM Dashboard (Standalone)
 
-**Current version:** 1.3.0 — see [CHANGELOG.md](./CHANGELOG.md), [docs/RELEASE_v1.3.md](./docs/RELEASE_v1.3.md), and server deploy [docs/UPDATE_AND_DEPLOY.txt](./docs/UPDATE_AND_DEPLOY.txt).
+**Current version:** 1.4.0 — see [CHANGELOG.md](./CHANGELOG.md), [docs/RELEASE_v1.4.md](./docs/RELEASE_v1.4.md), and server deploy [docs/UPDATE_AND_DEPLOY.txt](./docs/UPDATE_AND_DEPLOY.txt).
 
 **This is a completely standalone web dashboard** for viewing and organizing OnlyOffice CRM opportunities, tasks, notifications, and notes.
 

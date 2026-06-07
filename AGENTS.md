@@ -1,6 +1,6 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
-**Current version:** 1.3.0 (see CHANGELOG.md, docs/RELEASE_v1.3.md)  
+**Current version:** 1.4.0 (see CHANGELOG.md, docs/RELEASE_v1.4.md)  
 **Production:** https://dashboard.vanguardadj.com  
 **Repo:** https://github.com/kachapman/onlyoffice-crm-kanban (or local)
 

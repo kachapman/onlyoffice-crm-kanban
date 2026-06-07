@@ -110,8 +110,7 @@
           <button type="button" id="new-opportunity-btn" class="btn btn-primary btn-icon-only" title="New opportunity" aria-label="New opportunity">
             <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 14h6"/><path d="M12 17v-6"/></svg>
           </button>
-          <!-- Team / Presence button: secondary (like Add tile), left of the new tile button.
-               Shows online count badge. Opens the rich modal; can be "moved" to/from a pinned top tile. -->
+          <!-- Team / Presence button: secondary (like Add tile). -->
           <button type="button" id="presence-btn" class="btn btn-secondary btn-icon-only" title="Team presence &amp; messages" aria-label="Team presence &amp; messages">
             <!-- Default icon: classic "users" (two people). User can choose another from the plan options. -->
             <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -120,8 +119,18 @@
               <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
               <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
             </svg>
-            <!-- Small live online count badge (populated by JS) -->
-            <span id="presence-online-badge" class="presence-badge hidden" aria-hidden="true"></span>
+            <!-- top right blue bubble: counter for unread messages (new message indicator) -->
+            <span id="presence-unread-badge" class="presence-badge presence-blue-count hidden" aria-hidden="true" style="background:#3b82f6; top:-2px; right:-2px;"></span>
+            <!-- bottom right small green circle/counter: number of online users (dot/circle for 1, number if >1) -->
+            <span id="presence-online-badge" class="presence-badge presence-green-count hidden" aria-hidden="true" style="background:#22c55e; top:auto; bottom:-2px; right:-2px; font-size:8px; min-width:10px; height:10px; line-height:9px; padding:0 1px;"></span>
+          </button>
+          <!-- CRM Mail Inbox button: now secondary style like Team/Add tile, placed to the right of Team button. Viewer only. -->
+          <button type="button" id="mail-inbox-btn" class="btn btn-secondary btn-icon-only" title="CRM Mail Inbox (viewer only)" aria-label="CRM Mail Inbox">
+            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+              <polyline points="22,6 12,13 2,6"></polyline>
+            </svg>
+            <span id="mail-unread-badge" class="mail-badge hidden" style="display:none;" aria-hidden="true"></span>
           </button>
           <button type="button" id="add-tile-btn" class="btn btn-secondary btn-icon-only" title="Add tile" aria-label="Add tile">
             <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
@@ -170,6 +179,11 @@
           <span class="add-tile-option-title">Notes / To-do</span>
           <span class="add-tile-option-desc">Markdown notes, checklists, CRM quick note, and more.</span>
         </button>
+        <button type="button" id="add-tile-local-kanban" class="add-tile-option">
+          <span class="add-tile-option-title">Local Kanban Board</span>
+          <span class="add-tile-option-desc">Custom drag-and-drop tasks with statuses (local only, no CRM link).</span>
+        </button>
+
       </div>
       <div id="add-tile-notes-form" class="add-tile-notes-form hidden">
         <div class="field">
@@ -265,6 +279,71 @@
       <div class="modal-actions">
         <button type="button" id="presence-admin-toggle" class="btn btn-secondary hidden">Admin</button>
         <button type="button" class="btn btn-secondary" data-presence-dismiss>Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CRM Mail Inbox large popup modal -->
+  <div id="mail-inbox-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="mail-inbox-title">
+    <div class="modal-backdrop" data-mail-inbox-dismiss></div>
+    <div class="modal-card mail-inbox-card">
+      <div class="mail-inbox-header">
+        <h2 id="mail-inbox-title" class="modal-title">CRM Mail Inbox</h2>
+        <!-- Account / inbox selector disabled and hidden per user request (pulldown showed duplicates and did not switch inboxes; defaulting to unified inbox across accounts). See ISSUES.md ISSUE-002. -->
+        <div class="mail-account-bar" style="display: none;">
+          <label for="mail-account-select">Inbox / Folder:</label>
+          <select id="mail-account-select" class="mail-account-select"></select>
+        </div>
+        <div class="mail-header-actions">
+          <!-- Close moved to bottom right per request -->
+        </div>
+      </div>
+
+      <div class="mail-toolbar">
+        <input type="search" id="mail-search-input" class="mail-search" placeholder="Search subject or from..." autocomplete="off" />
+        <button type="button" id="mail-select-all" class="btn btn-secondary btn-small">Select all</button>
+        <button type="button" id="mail-mark-read" class="btn btn-secondary btn-small" disabled>Mark read</button>
+        <button type="button" id="mail-mark-unread" class="btn btn-secondary btn-small" disabled>Mark unread</button>
+        <button type="button" id="mail-delete" class="btn btn-secondary btn-small" disabled style="display:none;" title="Delete hidden (viewer only)">Delete</button>
+        <button type="button" id="mail-refresh" class="btn btn-secondary btn-small">Refresh</button>
+      </div>
+
+      <div class="mail-main-area">
+        <div id="mail-list-container" class="mail-list-container">
+          <!-- rows populated by JS -->
+          <div id="mail-list" class="mail-list"></div>
+        </div>
+
+        <div class="mail-right-sidebar mail-viewer-warning" style="width:210px; min-width:210px; max-width:230px;">
+          <!-- Viewer-only warning sidebar (added per request). Old linking UI removed/hidden.
+               This email feature is kept strictly as a viewer for now. No server pushes for status or links.
+               See ISSUES.md ISSUE-002 for full tracker. -->
+          <div class="mail-viewer-warning-content">
+            <h4>⚠️ Email Viewer (read-only)</h4>
+            <p>This is a <strong>viewer only</strong>. It cannot push read/unread statuses, deletions, links, or other changes to the CRM Mail module or history.</p>
+            <p><strong>Known limitations (documented in ISSUES.md ISSUE-002):</strong></p>
+            <ul>
+              <li>Read/unread marks — local viewer only (no sync to native CRM mail)</li>
+              <li>Unread count indicator on button (hidden for now)</li>
+              <li>Delete email action (button hidden)</li>
+              <li>Linking emails to deals/CRM (sidebar repurposed; old quick-link removed)</li>
+              <li>Per-account inbox selector (disabled; always unified view)</li>
+              <li>Reliable server read status from list summaries (viewer uses local marks for visual)</li>
+            </ul>
+            <p class="small">Full details &amp; progress: ISSUES.md (ISSUE-002)</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="mail-pagination">
+        <button type="button" id="mail-prev-page" class="btn btn-secondary btn-small" disabled>← Prev</button>
+        <span id="mail-page-info">Page 1</span>
+        <button type="button" id="mail-next-page" class="btn btn-secondary btn-small" disabled>Next →</button>
+        <span id="mail-page-size">50 per page</span>
+      </div>
+      <!-- Close button at bottom right of popup (viewer) -->
+      <div class="mail-footer-actions" style="display:flex; justify-content:flex-end; padding: 0.25rem 0.5rem 0.5rem;">
+        <button type="button" class="btn btn-secondary btn-small" data-mail-inbox-dismiss>Close</button>
       </div>
     </div>
   </div>
