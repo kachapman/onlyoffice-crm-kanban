@@ -71,6 +71,23 @@ body {
   background:
     radial-gradient(ellipse 80% 60% at 50% -10%, rgba(79, 140, 255, 0.25), transparent),
     var(--bg);
+  position: relative;
+  overflow: hidden;
+}
+
+.login-watermark {
+  position: absolute;
+  left: 50%;
+  top: 45%;
+  transform: translate(-50%, -50%);
+  width: 1040px;
+  max-width: 85vw;
+  height: auto;
+  opacity: 0.07;
+  z-index: 0;
+  pointer-events: none;
+  user-select: none;
+  filter: grayscale(0.2);
 }
 
 .login-card {
@@ -117,6 +134,21 @@ body {
 .login-card input:focus {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+.login-card input[readonly] {
+  background: var(--surface);
+  color: var(--muted);
+  border-style: dashed;
+  cursor: default;
+  opacity: 0.85;
+}
+
+.login-loading {
+  margin-top: 0.5rem;
+  color: var(--accent);
+  font-size: 0.85rem;
+  text-align: center;
 }
 
 .error-text {
@@ -194,9 +226,9 @@ body {
 }
 
 .hero-inner {
-  max-width: 1400px;
+  max-width: 1820px;
   margin: 0 auto;
-  padding: 2.5rem 1.5rem 2rem;
+  padding: 2rem 1rem 1.6rem;
   display: flex;
   flex-wrap: nowrap;
   align-items: flex-end;
@@ -441,9 +473,9 @@ body {
 
 /* Toolbar */
 .toolbar {
-  max-width: 1400px;
+  max-width: 1820px;
   margin: 0 auto;
-  padding: 1rem 1.5rem;
+  padding: 1rem 1rem;
 }
 
 .toolbar-presets {
@@ -567,9 +599,9 @@ body {
 
 /* Kanban board */
 .board {
-  max-width: 1400px;
+  max-width: 1820px;
   margin: 0 auto;
-  padding: 0 1.5rem 2rem;
+  padding: 0 1rem 2rem;
   display: flex;
   gap: 1rem;
   overflow-x: auto;
@@ -813,6 +845,57 @@ body {
   color: var(--danger);
 }
 
+.toast.warning {
+  border-color: #f59e0b;
+  color: #1f2937;
+  background: #fef3c7;
+}
+
+/* Bottom-right CRM sync / action status (for connecting, sent, queued feedback) */
+.crm-sync-status {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  padding: 0.5rem 0.85rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.82rem;
+  z-index: 99;
+  box-shadow: var(--shadow);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 320px;
+}
+
+.crm-sync-status.warning {
+  background: #fef3c7;
+  border-color: #f59e0b;
+  color: #1f2937;
+}
+
+.crm-sync-status .progress {
+  width: 50px;
+  height: 2px;
+  background: #e5e7eb;
+  border-radius: 2px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.crm-sync-status .progress-bar {
+  height: 100%;
+  background: #3b82f6;
+  animation: crm-progress 3s infinite ease-in-out;
+}
+
+@keyframes crm-progress {
+  0% { transform: translateX(-100%); }
+  50% { transform: translateX(20%); }
+  100% { transform: translateX(300%); }
+}
+
 @keyframes slide-in {
   from {
     opacity: 0;
@@ -824,45 +907,62 @@ body {
   }
 }
 
-/* CRM crash / backend error banner (top, persistent guidance per user request) */
-.crm-crash-banner {
-  position: sticky;
-  top: 0;
-  z-index: 200;
-  background: #3a2a1f;
-  color: #ffcc99;
-  border-bottom: 2px solid #d97706;
-  padding: 0.6rem 1rem;
-  font-size: 0.9rem;
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-}
-.crm-crash-banner button {
-  background: #d97706;
-  color: #1f2937;
-  border: 0;
-  padding: 0.25rem 0.6rem;
-  border-radius: 6px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.crm-crash-banner button:hover {
-  filter: brightness(1.1);
-}
+/* (removed all .crm-*-banner rules: no header warning banners per spec.
+   Unreachability is indicated only via bottom progress bar on timeout + compact header marquee after 8s) */
 
 /* Multi-group layout */
 .global-meta {
-  max-width: 1400px;
+  max-width: 1820px;
   margin: 0 auto;
-  padding: 0 1.5rem 0.75rem;
+  padding: 0 1rem 0.75rem;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.75rem 1.5rem;
   font-size: 0.8rem;
   color: var(--muted);
+}
+
+#mutation-sync-status {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #f59e0b;
+}
+
+/* Compact scrolling marquee indicator pinned to the underside of the header (inside .global-meta), on the right side.
+   Width stays compact/narrow (like previous small version). Height larger via bigger font + padding (user: "font needed to be larger" for height).
+   Matches the font-size/style of the left-side meta text ("open opportunities · 2 open tasks ...") which is 0.8rem.
+   More amber colors, starts with emoji (set in JS). */
+.crm-header-marquee {
+  margin-left: auto; /* push to the right side of the global-meta flex row */
+  font-size: 0.9rem; /* larger than the old 9.5px tiny version, to give more height/visibility while matching surrounding meta text size */
+  line-height: 1.25;
+  color: #713f12;
+  background: #fef08c;
+  border: 1px solid #b45309;
+  border-radius: 3px;
+  padding: 2px 6px;
+  max-width: 480px; /* doubled width, nothing else changed */
+  overflow: hidden;
+  white-space: nowrap;
+  box-shadow: 0 1px 2px rgba(180, 83, 9, 0.2);
+  flex-shrink: 0;
+}
+.crm-header-marquee span {
+  display: inline-block;
+  min-width: 100%;
+  animation: crm-marquee 8s linear infinite;
+  padding-left: 0;
+}
+@keyframes crm-marquee {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.crm-header-marquee.hidden {
+  display: none !important;
 }
 
 .btn-collapse-tile {
@@ -890,9 +990,9 @@ body {
 }
 
 .dashboard-panel-row {
-  max-width: 1400px;
+  max-width: 1820px;
   margin: 0 auto 1.25rem;
-  padding: 0 1.5rem;
+  padding: 0 1rem;
   display: flex;
   flex-wrap: wrap;
   gap: 1.25rem;
@@ -905,6 +1005,12 @@ body {
 
 .dashboard-panel-row .panel-slot-right {
   order: 2;
+}
+
+.dashboard-panel-row .dashboard-tile.panel-width-quarter {
+  flex: 0 0 calc(25% - 0.625rem);
+  min-width: 0;
+  max-width: calc(25% - 0.625rem);
 }
 
 .dashboard-panel-row .dashboard-tile.panel-width-half {
@@ -928,11 +1034,16 @@ body {
   max-width: calc(50% - 0.625rem);
 }
 
+.dashboard-panel-row.panel-row-has-full .dashboard-tile.panel-width-quarter {
+  flex: 1 1 calc(50% - 0.625rem);
+  max-width: calc(50% - 0.625rem);
+}
+
 /* Pinned row: collapsed panels — minimal height, same left/right slots */
 .dashboard-tiles-pinned {
-  max-width: 1400px;
+  max-width: 1820px;
   margin: 0 auto;
-  padding: 0 1.5rem;
+  padding: 0 1rem;
   display: flex;
   flex-wrap: wrap;
   gap: 1.25rem;
@@ -955,6 +1066,11 @@ body {
 
 .dashboard-tiles-pinned .panel-slot-right {
   order: 2;
+}
+
+.dashboard-tiles-pinned .dashboard-tile.panel-width-quarter {
+  flex: 0 0 calc(25% - 0.625rem);
+  max-width: calc(25% - 0.625rem);
 }
 
 .dashboard-tiles-pinned .dashboard-tile.panel-width-half {
@@ -980,9 +1096,9 @@ body {
 /* Dashboard tile grid — 2 columns; double height spans 2 rows */
 .dashboard-tiles {
   --tile-row-height: 400px;
-  max-width: 1400px;
+  max-width: 1820px;
   margin: 0 auto;
-  padding: 0 1.5rem 2rem;
+  padding: 0 1rem 2rem;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   grid-auto-rows: auto;
@@ -1078,10 +1194,17 @@ body {
 }
 
 .tile-drag-hint {
-  font-size: 0.7rem;
+  font-size: 0.85rem;
   color: var(--muted);
   letter-spacing: 0.12em;
+  padding: 0.15rem 0.4rem 0.15rem 0.1rem;
   flex-shrink: 0;
+  cursor: grab;
+  border-radius: 2px;
+}
+.tile-drag-hint:hover {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.035);
 }
 
 .tile-drag-hint.hidden {
@@ -1199,6 +1322,43 @@ body {
   margin-left: auto;
 }
 
+/* In quarter (narrow) view for tiles (esp. tasks tile in top panel row), make the
+   toolbar button groupings tighter so they stay in a single row without bunching
+   or adding extra height/row to the title bar. Reduced gaps + paddings + force
+   nowrap on layout sub-group. */
+.dashboard-tile.tile-quarter .tile-toolbar,
+.dashboard-tile.panel-width-quarter .tile-toolbar,
+.dashboard-tiles-pinned .dashboard-tile.panel-width-quarter .tile-toolbar {
+  gap: 0.15rem;
+  padding: 0.25rem 0.4rem;
+}
+.dashboard-tile.tile-quarter .tile-layout-btns,
+.dashboard-tile.panel-width-quarter .tile-layout-btns,
+.dashboard-tiles-pinned .dashboard-tile.panel-width-quarter .tile-layout-btns {
+  gap: 0.1rem;
+  flex-wrap: nowrap;
+  margin-left: 0.15rem;
+}
+.dashboard-tile.tile-quarter .tile-btn-icon,
+.dashboard-tile.panel-width-quarter .tile-btn-icon,
+.dashboard-tiles-pinned .dashboard-tile.panel-width-quarter .tile-btn-icon {
+  padding: 0.1rem 0.2rem;
+}
+.dashboard-tile.panel-width-quarter .btn-tasks-list,
+.dashboard-tile.tile-quarter .btn-tasks-list {
+  padding: 0.1rem 0.2rem;
+}
+.dashboard-tile.panel-width-quarter .tile-toolbar .btn-new-task,
+.dashboard-tile.tile-quarter .tile-toolbar .btn-new-task {
+  padding: 0.15rem 0.3rem;
+  font-size: 0.65rem;
+}
+.dashboard-tile.panel-width-quarter .tile-btn,
+.dashboard-tile.tile-quarter .tile-btn {
+  font-size: 0.65rem;
+  padding: 0.15rem 0.3rem;
+}
+
 .tile-btn {
   font: inherit;
   font-size: 0.72rem;
@@ -1230,6 +1390,9 @@ body {
   min-height: 0;
   height: auto;
   align-self: start;
+  /* Cap height so pinned/expanded notifications or tasks tiles never grow taller than a normal
+     dashboard tile (e.g. a CRM deals/group tile which uses --tile-row-height min-height). */
+  max-height: var(--tile-row-height);
 }
 
 .dashboard-tile.feed-panel .panel-header,
@@ -1296,6 +1459,7 @@ body {
 
 .tasks-column .task-row:first-of-type {
   border-top: none;
+  border-bottom: 1px solid var(--border);
 }
 
 .dashboard-tiles-pinned .dashboard-tile.tile-body-collapsed {
@@ -1329,9 +1493,9 @@ body {
 
 /* Top panels */
 .panel {
-  max-width: 1400px;
+  max-width: 1820px;
   margin: 0 auto 1.25rem;
-  padding: 0 1.5rem;
+  padding: 0 1rem;
 }
 
 .panel-header {
@@ -1576,19 +1740,18 @@ body {
   padding: 0.65rem 0.85rem;
 }
 
-.tasks-user-block h3 {
-  margin: 0 0 0.5rem;
-  font-size: 0.9rem;
-  color: var(--accent);
-}
+/* (h3 name header removed from tasks-by-user render; dropdown indicates selected user.
+   Rule left commented to avoid accidental re-introduction of duplicate label) */
+/* .tasks-user-block h3 { margin: 0 0 0.5rem; font-size: 0.9rem; color: var(--accent); } */
 
 .task-row {
   display: flex;
   align-items: flex-start;
   gap: 0.5rem;
-  padding: 0.4rem 0;
-  border-top: 1px solid var(--border);
+  padding: 0.65rem 0.85rem;
+  border-bottom: 1px solid var(--border);
   font-size: 0.85rem;
+  background: var(--surface);
 }
 
 .task-row:first-of-type {
@@ -1622,6 +1785,17 @@ body {
   color: var(--text);
 }
 
+.task-row label a,
+.tasks-list-row label a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+.task-row label a:hover,
+.tasks-list-row label a:hover {
+  text-decoration: underline;
+}
+
 .group-filter-summary {
   font-size: 0.8rem;
   color: var(--muted);
@@ -1630,14 +1804,25 @@ body {
 
 .btn-tasks-list {
   font-size: 0.9rem;
-  padding: 0.1rem 0.35rem;
+  padding: 0.28rem 0.35rem;
   min-width: auto;
-  margin-right: 0.25rem;
+  margin-right: 2px;
   opacity: 0.7;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
 }
 .btn-tasks-list:hover {
   opacity: 1;
 }
+.btn-tasks-list svg {
+  width: 16px;
+  height: 16px;
+  display: inline-block;
+  vertical-align: middle;
+}
+/* Note: tasks archive button now lives in toolbar (moved left of New task); header only has user filter label */
 
 .tasks-list-head {
   display: flex;
@@ -1657,31 +1842,34 @@ body {
 .tasks-list-body {
   max-height: 60vh;
   overflow: auto;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 0.25rem;
-  background: #ffffff; /* light background for readability */
-  color: #212529;
-  box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
+  background: var(--surface);
+  color: inherit;
 }
 
 .tasks-list-row {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.4rem 0.5rem;
+  padding: 0.65rem 0.85rem;
   border-radius: 4px;
-  background: #f8f9fa;
+  background: var(--surface);
   margin-bottom: 2px;
   transition: background 0.1s;
+  border-bottom: 1px solid var(--border);
+}
+.tasks-list-row:last-child {
+  border-bottom: none;
 }
 .tasks-list-row:hover {
-  background: #e9ecef;
+  background: var(--surface-2, #e9ecef);
 }
 .tasks-list-row.done {
   opacity: 0.75;
   text-decoration: line-through;
-  background: #f1f3f5;
+  background: var(--surface);
 }
 .tasks-list-row label {
   flex: 1;
@@ -1689,15 +1877,15 @@ body {
   align-items: center;
   gap: 0.5rem;
   cursor: pointer;
-  color: #212529;
-  font-size: 0.9rem;
+  color: inherit;
+  font-size: 0.85rem;
 }
 .tasks-list-row input[type="checkbox"] {
-  accent-color: #0d6efd;
+  accent-color: var(--accent, #0d6efd);
 }
 .tasks-list-row .feed-meta {
   font-size: 0.72rem;
-  color: #6c757d;
+  color: var(--muted);
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -2013,8 +2201,10 @@ body {
     grid-column: 1 / -1;
   }
 
+  .dashboard-panel-row .dashboard-tile.panel-width-quarter,
   .dashboard-panel-row .dashboard-tile.panel-width-half,
   .dashboard-panel-row .dashboard-tile.panel-width-full,
+  .dashboard-tiles-pinned .dashboard-tile.panel-width-quarter,
   .dashboard-tiles-pinned .dashboard-tile.panel-width-half,
   .dashboard-tiles-pinned .dashboard-tile.panel-width-full {
     flex: 1 1 100%;
@@ -2047,6 +2237,17 @@ body {
   border-radius: var(--radius);
   padding: 1.25rem 1.5rem;
   box-shadow: var(--shadow);
+}
+
+/* Make the Team/Presence popup resizable (user can drag bottom-right corner to see more messages) */
+#presence-modal .modal-card {
+  width: min(520px, 96vw);
+  resize: both;
+  overflow: auto;
+  min-width: 340px;
+  min-height: 420px;
+  max-width: 90vw;
+  max-height: 85vh;
 }
 
 .modal-title {
@@ -2159,6 +2360,491 @@ body {
 
 .create-opp-custom-fields .checkbox-filter {
   margin: 0;
+}
+
+/* ===================== Presence / Team (header button, modal, pinned tile) ===================== */
+
+#presence-btn {
+  position: relative;
+}
+
+#presence-btn.has-waiting-messages::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: -1px;
+  width: 8px;
+  height: 8px;
+  background: #ef4444;
+  border: 1px solid #fff;
+  border-radius: 50%;
+  animation: presence-wait-flash 1s infinite;
+  pointer-events: none;
+}
+
+/* Self-online indicator on the presence icon (green dot). Visible even when alone (count badge may be 0 or 1).
+   Separate from the red waiting-messages flash (bottom-left) and the count badge (top-right). */
+#presence-btn.is-online::before {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 7px;
+  height: 7px;
+  background: #22c55e;
+  border: 1px solid var(--bg, #111);
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+@keyframes presence-wait-flash {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+.presence-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  border: 1px solid var(--surface);
+  pointer-events: none;
+}
+
+.presence-badge.hidden {
+  display: none;
+}
+
+.presence-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.presence-tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.presence-tab {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  padding: 0.3rem 0.8rem;
+  font-size: 0.82rem;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  border-radius: 0;
+}
+.presence-tab:hover {
+  color: var(--text);
+}
+.presence-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+.presence-my-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+.presence-my-status .btn {
+  font-size: 0.72rem;
+  padding: 0.15rem 0.45rem;
+}
+
+.presence-my-status textarea {
+  width: 100%;
+  max-width: 320px;
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  resize: vertical;
+}
+
+.presence-status-select {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 0.15rem 0.35rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.presence-section-header {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent);
+  padding: 0.25rem 0.5rem 0.1rem;
+  margin-top: 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.presence-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0.3rem 0.5rem;
+}
+
+/* Recent messages (inbox) section in the Team modal — gives visibility to past/new DMs + clear */
+#presence-recent {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  margin-bottom: 0.5rem;
+  max-height: 140px;
+  overflow: auto;
+}
+.presence-recent-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 1rem; /* larger for inbox on Messages tab (twice as prominent) */
+}
+.presence-recent-row:last-child {
+  border-bottom: none;
+}
+.presence-recent-row:hover {
+  background: var(--surface-2);
+}
+.presence-recent-who {
+  font-weight: 600;
+  color: var(--text);
+  flex-shrink: 0;
+  max-width: 38%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.presence-recent-snip {
+  color: var(--muted);
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9rem;
+}
+.presence-recent-time {
+  color: var(--muted);
+  font-size: 0.8rem;
+  flex-shrink: 0;
+  margin-right: 0.1rem;
+}
+.presence-clear-btn {
+  font-size: 0.85rem !important;
+  padding: 0 0.25rem !important;
+  line-height: 1 !important;
+  opacity: 0.7;
+}
+.presence-clear-btn:hover {
+  opacity: 1;
+  background: rgba(239,68,68,0.15);
+}
+
+.presence-list {
+  max-height: 480px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  margin-bottom: 0.5rem;
+}
+
+.presence-user {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.presence-user:last-child {
+  border-bottom: none;
+}
+.presence-user:hover {
+  background: var(--surface-2);
+}
+
+.presence-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1px solid rgba(0,0,0,0.15);
+}
+.presence-dot.online { background: #22c55e; } /* green */
+.presence-dot.offline { background: #475569; } /* dark slate */
+.presence-dot.idle { background: #eab308; }   /* amber for idle >2h */
+
+.presence-name {
+  font-weight: 600;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.presence-status {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-left: auto;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.presence-dm {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  margin-bottom: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  max-height: 480px;
+}
+
+.presence-dm-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+
+.presence-dm-log {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.95rem; /* larger for viewing more messages at once */
+  min-height: 260px;   /* ensure the chat history area is tall even if parent constrained */
+}
+
+.presence-msg {
+  max-width: 80%;
+  padding: 0.25rem 0.5rem;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.presence-msg.me {
+  align-self: flex-end;
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.presence-dm-input {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+.presence-dm-input textarea {
+  flex: 1;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  resize: vertical;
+  min-height: 2.2em;
+}
+
+.presence-admin {
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 0.8rem;
+}
+.presence-admin-header {
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 0.35rem;
+}
+.presence-admin-list .presence-admin-row {
+  padding: 0.2rem 0;
+  border-top: 1px solid var(--border);
+}
+.presence-admin-list .presence-admin-row:first-child {
+  border-top: none;
+}
+
+.presence-admin-list .presence-admin-row .admin-label {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+/* DM rich features: replies, read receipts, emoji picker, colors */
+.presence-reply-context {
+  font-size: 0.7em;
+  line-height: 1.2;
+  color: var(--muted);
+  border-left: 2px solid var(--border);
+  padding-left: 0.35rem;
+  margin-bottom: 0.2rem;
+  opacity: 0.85;
+  font-style: italic;
+}
+.presence-reply-context .presence-reply-label {
+  font-weight: 600;
+  font-style: normal;
+}
+.presence-reply-preview {
+  font-size: 0.72rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.15rem 0.4rem;
+  margin-bottom: 0.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--muted);
+}
+.presence-reply-preview span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.presence-reply-preview button {
+  font-size: 0.7rem;
+  padding: 0 0.2rem;
+}
+.presence-read-receipt {
+  font-size: 0.6em;
+  color: #22c55e;
+  margin-top: 0.1rem;
+  align-self: flex-end;
+}
+.presence-emoji-picker {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.25rem;
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  max-width: 240px;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+.presence-emoji-btn {
+  font-size: 1.1rem;
+  padding: 0.15rem;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.presence-emoji-btn:hover {
+  background: var(--surface-2);
+}
+
+/* Color code: received (others) always green bubble; sent (me) uses the current accent */
+.presence-msg {
+  background: #22c55e; /* received = green */
+  color: #111;
+}
+.presence-msg.me {
+  background: var(--accent-soft); /* sent = current accent */
+  color: var(--text);
+}
+.presence-msg-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Small button variant used inside the modal */
+.btn-small {
+  font-size: 0.72rem;
+  padding: 0.2rem 0.5rem;
+}
+
+/* The pinned presence tile uses normal tile styles + a compact list inside the body */
+#presence-tile-body {
+  padding: 0.25rem 0.5rem 0.5rem;
+  font-size: 0.78rem;
+}
+#presence-tile-body .presence-user {
+  padding: 0.15rem 0.25rem;
+  font-size: 0.78rem;
+}
+#presence-tile-body .presence-status {
+  max-width: 40%;
+  font-size: 0.72rem;
+}
+
+/* Notes tile narrow (quarter/half) toolbar restructure:
+   resizing buttons (layouts + remove) on top row,
+   file/copy/date/lists/edit etc on bottom "toolbar" row.
+*/
+.dashboard-tile.notes-tile.tile-quarter .notes-tile-bar,
+.dashboard-tile.notes-tile.tile-half .notes-tile-bar {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.dashboard-tile.notes-tile.tile-quarter .notes-tile-bar .notes-layout-top-row,
+.dashboard-tile.notes-tile.tile-half .notes-tile-bar .notes-layout-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.2rem;
+  width: 100%;
+  padding-bottom: 0.15rem;
+  margin-bottom: 0.15rem;
+  border-bottom: 1px solid var(--border);
+}
+/* When the note name lives in the narrow top row (with layout buttons), keep it on the left */
+.dashboard-tile.notes-tile .notes-layout-top-row .notes-tile-name {
+  margin-right: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.dashboard-tile.notes-tile.tile-quarter .notes-tile-bar .tile-layout-btns,
+.dashboard-tile.notes-tile.tile-half .notes-tile-bar .tile-layout-btns {
+  /* the group is moved into the top-row by JS */
 }
 
 .deal-edit-modal-head {
@@ -2281,6 +2967,32 @@ body {
   margin-bottom: 1.15rem;
 }
 
+.opp-preview-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.opp-preview-tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0.25rem 0.75rem;
+  margin-bottom: -1px;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+}
+.opp-preview-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.opp-preview-tab:hover:not(.active) {
+  color: var(--text);
+}
+
 .opp-preview-section:last-child {
   margin-bottom: 0;
 }
@@ -2367,7 +3079,7 @@ body {
 .opp-preview-attachment-link {
   font-size: 0.68rem;
   line-height: 1.25;
-  color: var(--muted);
+  color: inherit;
   text-decoration: none;
   word-break: break-all;
   max-width: 11rem;
@@ -2375,7 +3087,7 @@ body {
 
 .opp-preview-attachment-link:hover,
 .opp-preview-attachment-link:focus {
-  color: var(--accent);
+  color: inherit;
   text-decoration: underline;
   outline: none;
 }
@@ -2513,7 +3225,12 @@ body {
 }
 
 .opp-preview-history-body--html a {
-  color: var(--accent);
+  color: inherit;
+}
+.opp-preview-body a,
+.opp-preview-body a:visited,
+.preview-link {
+  color: inherit;
 }
 
 .opp-preview-history-body--html ul,
@@ -2538,7 +3255,7 @@ body {
 .opp-preview-mail-toggle:hover,
 .opp-preview-mail-toggle:focus {
   border-color: var(--accent);
-  color: var(--accent);
+  color: inherit;
   outline: none;
 }
 
@@ -2605,7 +3322,7 @@ body {
 
 .opp-preview-mail-foot a,
 .opp-preview-mail-fallback {
-  color: var(--accent);
+  color: inherit;
 }
 
 .opp-preview-mail-loading,
@@ -2623,6 +3340,25 @@ body {
   margin: 0;
   font-size: 0.84rem;
   color: var(--muted);
+}
+
+.opp-preview-documents {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.opp-preview-documents li {
+  margin: 0.25rem 0;
+  display: flex;
+  align-items: center;
+  gap: 0.25em;
+}
+.opp-preview-documents a {
+  text-decoration: none;
+  color: inherit;
+}
+.opp-preview-documents a:hover {
+  text-decoration: underline;
 }
 
 .deal-edit-tags {
@@ -3048,6 +3784,8 @@ body {
   border-color: var(--accent);
 }
 
+
+
 .notes-preview {
   flex: 1;
   min-height: 12rem;
@@ -3139,8 +3877,49 @@ body {
   font-size: 0.68rem;
 }
 
+/* Tight group for the bullet + numbered list buttons: right next to each other,
+   with a subtle box + shadow to make them obviously clickable buttons.
+   Reduced side padding as requested. */
+.notes-list-btns {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem; /* a little more padding between the bullet and numbered icons */
+  padding: 1px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  background: var(--surface-2);
+  margin: 0 0.05rem; /* minimal external side space, shrunk */
+}
+.notes-list-btns .btn-notes-bullet,
+.notes-list-btns .btn-notes-numbered {
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 0.2rem 0.3rem; /* more side padding + height to match neighboring icons */
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  min-width: 1.1em;
+  text-align: center;
+}
+.notes-list-btns .btn-notes-bullet:hover,
+.notes-list-btns .btn-notes-numbered:hover {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.04);
+}
+.notes-list-btns .btn-notes-bullet + .btn-notes-numbered {
+  border-left: 1px solid var(--border);
+}
+
 .notes-tile-bar .btn-remove-notes {
   flex-shrink: 0;
+}
+
+/* Hide the printer button (does not appear to work) */
+.notes-tile-utils .btn-notes-print,
+.btn-notes-print {
+  display: none !important;
 }
 
 .modal-card-notes-archive {
@@ -3393,6 +4172,11 @@ body {
   padding: 0.2rem 0.35rem;
   line-height: 0;
   flex-shrink: 0;
+}
+
+/* Hide the pin button for now (completely broken on the top tiles) */
+.tile-pin-btn {
+  display: none !important;
 }
 
 .btn-tile-refresh {

@@ -1,10 +1,44 @@
 THIS WAS MADE BY A CLANKER. LOOK ON IT YE MIGHTY AND DESPAIR. 
 
-# CRM Kanban (Workspace dashboard)
+# Vanguard CRM Dashboard (Standalone)
 
-**Current version:** 1.2.0 — see [CHANGELOG.md](./CHANGELOG.md), [docs/RELEASE_v1.2.md](./docs/RELEASE_v1.2.md), and server deploy [docs/UPDATE_AND_DEPLOY.txt](./docs/UPDATE_AND_DEPLOY.txt).
+**Current version:** 1.3.0 — see [CHANGELOG.md](./CHANGELOG.md), [docs/RELEASE_v1.3.md](./docs/RELEASE_v1.3.md), and server deploy [docs/UPDATE_AND_DEPLOY.txt](./docs/UPDATE_AND_DEPLOY.txt).
 
-Local test portal for Vanguard CRM opportunities, tasks, and notifications. Serves static UI from `public/` and proxies OnlyOffice CRM API calls via `server.py`.
+**This is a completely standalone web dashboard** for viewing and organizing OnlyOffice CRM opportunities, tasks, notifications, and notes.
+
+It is deliberately kept separate from OnlyOffice so there is no possibility of it affecting or breaking the OnlyOffice Community Server installation. The dashboard runs on its own server (DigitalOcean droplet) and talks to the CRM exclusively through the public API via its own proxy layer.
+
+`server.py` (and `test-server.py`) are **local development and testing tools only**. They are never used in production. All real usage happens after code is pushed to GitHub and pulled on the production dashboard droplet.
+
+## Architecture (high level)
+- Standalone dashboard (vanilla JS UI + Python proxy) hosted on its own droplet.
+- OnlyOffice CRM runs on a separate droplet.
+- Local test servers on the developer's machine are used exclusively for verifying changes before `git push`.
+
+## Run (local development / testing only)
+```bash
+cd ~/crm-kanban
+cp -n config.example.env .env   # edit .env with your test portal if desired
+./start.sh
+```
+
+Default URL: http://127.0.0.1:8765
+
+The client-side mutation queue / offline resilience (for transient CRM/proxy failures) is fully implemented and complete. For testing the queue features, use the special chaos test server instead:
+```bash
+python test-server.py
+```
+(See the top of `test-server.py` for console commands to toggle simulated 5xx failures, delays, etc.)
+
+## Deploy (production)
+See **[docs/UPDATE_AND_DEPLOY.txt](./docs/UPDATE_AND_DEPLOY.txt)** and **[docs/DEPLOY_v1.1_VERIFY_STEPS.md](./docs/DEPLOY_v1.1_VERIFY_STEPS.md)**.
+
+Workflow: Edit + test locally on this machine → `git push` → on the production dashboard droplet: `git pull`, rebuild, restart. Local test servers are stopped before pushing.
+
+## Important
+- This project is **not** an OnlyOffice module and is never installed into the OnlyOffice Community Server.
+- The `onlyoffice-module/` directory (if present) is legacy/separate and not part of the running dashboard.
+- Local servers exist solely for safe testing of the standalone dashboard code.
 
 ## Run (local development)
 

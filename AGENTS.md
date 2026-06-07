@@ -1,6 +1,6 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
-**Current version:** 1.2.0 (see CHANGELOG.md, docs/RELEASE_v1.2.md)  
+**Current version:** 1.3.0 (see CHANGELOG.md, docs/RELEASE_v1.3.md)  
 **Production:** https://dashboard.vanguardadj.com  
 **Repo:** https://github.com/kachapman/onlyoffice-crm-kanban (or local)
 
@@ -58,13 +58,25 @@ For the previous post-v1.1 list and implementation notes, consult the git histor
 
 Legacy open items (lower priority unless asked): complete custom fields (verify + enable), FEAT-003 attachments, new toasters (stale deals, closing this week, etc.), FEAT-022 docs tile.
 
+## Architecture & Deployment Context
+- The **dashboard** (this entire project) runs on its own DigitalOcean Ubuntu droplet (production: https://dashboard.vanguardadj.com, currently 159.89.229.126). It serves the vanilla JS UI from `public/` and acts as an API proxy (`server.py`) that forwards CRM calls to the OnlyOffice server while handling user profiles, notes, calendars, and auth.
+- The **OnlyOffice CRM** (Community Server / Workspace) runs on a **completely separate** DigitalOcean droplet. The two servers communicate over public HTTPS.
+- **Local testing workflow (mandatory before any push):**
+  - All development and verification happens on the developer's machine (this laptop).
+  - Use `./start.sh` (normal dev server) or `python test-server.py` (special chaos/failure simulation server) for local testing.
+  - The local servers are **only for testing features and fixes**. They are never used in production.
+  - After local verification (browser + DevTools, including simulated failures for the mutation queue), commit and `git push`.
+  - On the production dashboard droplet: `git pull`, `docker compose build`, `docker compose up -d` (see docs/UPDATE_AND_DEPLOY.txt and docs/DEPLOY_v1.1_VERIFY_STEPS.md for the exact safe checklist).
+- **Critical separation rule:** This project is a **standalone dashboard**. It is deliberately kept completely separate from OnlyOffice so there is zero risk of it affecting or breaking the OnlyOffice Community Server installation. The `onlyoffice-module/` directory (if present) is legacy/separate and not used for the main dashboard. Local test servers exist solely to allow safe iteration on the JS + proxy code before deploying the standalone dashboard.
+
 ## How to Run / Test / Deploy
-- **Dev:** `./start.sh` (or python3 server.py after sourcing .env with ONLYOFFICE_PORTAL_URL). Opens http://127.0.0.1:8765. Login flow sets oo_token cookie for proxy.
-- **Test changes:** Browser + DevTools (Network for proxy/crm calls, reload for persist). Have test groups, tasks (with desc), history (incl. mail links), calendars, templates. Verify per-item in approved plan (persist by quick reload, crash via network override, etc.).
-- **No tests:** No automated suite; manual + visual.
-- **Deploy:** See docs/UPDATE_AND_DEPLOY.txt (git push, server pull/build, verify steps in docs/DEPLOY_v1.1_VERIFY_STEPS.md). Use scheduleUserProfileSave for user data safety.
-- **Debug:** server.py logs (some suppressed for GET /api), browser console, `grep` for the thing, read the exact function.
-- **Profile data:** data/user-profiles/... (gitignored); survives restarts.
+- **Dev (normal):** `cd ~/crm-kanban && cp -n config.example.env .env && ./start.sh` (or `python3 server.py`). Opens http://127.0.0.1:8765. Login with your OnlyOffice CRM credentials (sets the `oo_token` cookie used by the proxy).
+- **Special test server (for mutation queue / offline resilience testing):** `python test-server.py`. This version supports controllable chaos mode (via `/api/test/chaos`) so you can simulate 5xx errors, delays, and network problems. (The client-side mutation queue / offline resilience is a completed implementation.)
+- **Test changes:** Browser + DevTools (Network tab for proxy/crm calls, Application → Local Storage for queue/profile, offline mode or the test server's chaos toggle). Always test both happy path and failure/retry scenarios for any new resilience code. Have test groups, tasks (with descriptions), history events, etc.
+- **No tests:** No automated suite; manual + visual + simulated failure testing.
+- **Deploy:** See docs/UPDATE_AND_DEPLOY.txt (stop local server, edit, test locally, git commit + push). Then on the production droplet follow the safe pull + rebuild steps in docs/DEPLOY_v1.1_VERIFY_STEPS.md. Never skip the VERIFY blocks.
+- **Debug:** server.py (or test-server.py) logs, browser console, `grep` in the codebase, read the exact function. The mutation queue processor runs in the browser (localStorage + background timer + online/visibility listeners).
+- **Profile data:** `data/user-profiles/...` (gitignored); survives restarts on both local and production.
 
 ## Coding Conventions (follow existing)
 - Vanilla JS + CSS; no new libs.

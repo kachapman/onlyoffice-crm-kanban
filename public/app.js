@@ -27,6 +27,21 @@ const DASHBOARD_IDLE_STOP_MS = 3 * 60 * 60 * 1000;
 /** Set true when create-opportunity custom user field save is fixed (see ISSUES.md). */
 const CREATE_OPP_USER_FIELDS_ENABLED = false;
 
+/** Mutation queue for offline / transient CRM write resilience (client-side only). Completed. */
+const MUTATION_QUEUE_KEY = "oo_board_mutation_queue_v1";
+const TASK_CATEGORIES_KEY = "oo_board_task_categories_v1";
+const MAX_QUEUE_SIZE = 50;
+const RETRY_INTERVAL_MS = 5000;
+
+/** Presence / Team feature (user status, online list, basic DMs, pinned top tile) */
+const PRESENCE_USERS_CACHE_KEY = "oo_board_presence_users_v1";
+const PRESENCE_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // refresh on next login or after ~7 days
+const PRESENCE_POLL_MS = 30000; // when modal or visible tile is active
+const PRESENCE_HEARTBEAT_MS = 60000; // when tab visible
+const PRESENCE_IDLE_2H_MS = 2 * 60 * 60 * 1000;
+const PRESENCE_AUTO_LOGOUT_4H_MS = 4 * 60 * 60 * 1000;
+const PRESENCE_CUSTOM_MAX = 120; // modest char limit for custom status (emojis allowed)
+
 let userProfileReady = false;
 let profileSaveTimer = null;
 
@@ -62,6 +77,15 @@ const state = {
   quickNote: null,
   historyCategories: [],
   newOpportunityDraft: null,
+  // Presence / Team feature runtime
+  presenceUsersCache: null, // {fetchedAt: number, users: [...] } from server
+  presenceData: null,       // last /api/presence snapshot
+  presencePollTimer: null,
+  presenceHeartbeatTimer: null,
+  presenceIdleTimer: null,
+  presenceModalOpen: false,
+  presenceSelectedUserId: null,
+  hasPresenceTile: false,   // persisted via tileLayout or a small flag; controls whether the tile is in the top panel
 };
 
 function crmOpportunityUrl(id) {
@@ -127,47 +151,22 @@ function updateGroupFilterSummary(group) {
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
-function showToast(message, isError = false) {
+function showToast(message, type = null) {
   const el = $("#toast");
   el.textContent = message;
-  el.classList.toggle("error", isError);
+  el.classList.remove("error", "warning");
+  if (type === 'error' || type === true) {
+    el.classList.add("error");
+  } else if (type === 'warning') {
+    el.classList.add("warning");
+  }
   el.classList.remove("hidden");
   clearTimeout(showToast._t);
   showToast._t = setTimeout(() => el.classList.add("hidden"), 5000);
 }
 
-let _crmCrashBannerEl = null;
-let _crmCrashLastShown = 0;
-function showCrmCrashNotification() {
-  const now = Date.now();
-  if (now - _crmCrashLastShown < 15000) return; // throttle
-  _crmCrashLastShown = now;
-  if (_crmCrashBannerEl && document.body.contains(_crmCrashBannerEl)) return;
-
-  const bar = document.createElement("div");
-  bar.id = "crm-crash-banner";
-  bar.className = "crm-crash-banner";
-  bar.setAttribute("role", "alert");
-  bar.innerHTML =
-    'OnlyOffice CRM backend error (e.g. 502 on history). Dashboard may be out of date. <button type="button" id="crm-crash-refresh">Refresh page now</button> — recommended in ~30 seconds.';
-  // Insert near top (after header if present)
-  const header = document.querySelector("header");
-  if (header && header.parentNode) {
-    header.parentNode.insertBefore(bar, header.nextSibling);
-  } else {
-    document.body.prepend(bar);
-  }
-  _crmCrashBannerEl = bar;
-  const btn = document.getElementById("crm-crash-refresh");
-  if (btn) btn.addEventListener("click", () => { try { location.reload(); } catch {} });
-}
-
-function clearCrmCrashNotification() {
-  if (_crmCrashBannerEl && _crmCrashBannerEl.parentNode) {
-    _crmCrashBannerEl.parentNode.removeChild(_crmCrashBannerEl);
-  }
-  _crmCrashBannerEl = null;
-}
+// (removed all crash/queue banner code per request: no header banners for CRM unreachability.
+// Progress bar + optional small header marquee (8s delayed, post-close) handle user notification.)
 
 function unwrap(data) {
   if (data == null) return [];
@@ -207,13 +206,14 @@ function loadLayoutFromStorage() {
           widths: parsed.widths && typeof parsed.widths === "object" ? parsed.widths : {},
           heights: parsed.heights && typeof parsed.heights === "object" ? parsed.heights : {},
           collapsed: parsed.collapsed && typeof parsed.collapsed === "object" ? parsed.collapsed : {},
+          pinned: parsed.pinned && typeof parsed.pinned === "object" ? parsed.pinned : {},
         };
       }
     }
   } catch {
     /* ignore */
   }
-  return { order: [], widths: {}, heights: {}, collapsed: {} };
+  return { order: [], widths: {}, heights: {}, collapsed: {}, pinned: {} };
 }
 
 function hiddenFeedCutoffTime() {
@@ -394,7 +394,14 @@ function ensureTileLayout() {
   for (const id of PANEL_TILE_IDS) {
     if (state.tileLayout.heights?.[id]) delete state.tileLayout.heights[id];
     if (!state.tileLayout.widths[id]) state.tileLayout.widths[id] = "half";
+    if (!state.tileLayout.pinned) state.tileLayout.pinned = {};
+    if (state.tileLayout.pinned[id] === undefined) state.tileLayout.pinned[id] = true;
   }
+  // Note: intentionally do NOT call normalizeOrderForPinned() here (only after explicit user drag reorders in the drop handler).
+  // Calling it from ensure (which mount+pin-toggle go through) was causing the array to be re-sorted on unpin,
+  // which automatically "lowered" the just-unpinned tile (pushed to end of otherPart).
+  // Now, unpin just flips the render layer for that tile using its *existing stable position* in the order array.
+  // It only gets displaced in the grid if other tiles are later reordered (via drag, which does normalize to keep pinned logically first).
   saveLayoutToStorage();
 }
 
@@ -537,6 +544,38 @@ async function loadExpandedDashboardTiles({ quiet = false } = {}) {
 const PINNED_TILE_IDS = ["tile-feed", "tile-tasks"];
 const PANEL_TILE_IDS = new Set(PINNED_TILE_IDS);
 
+function isTilePinnedToTop(tileId) {
+  if (!PANEL_TILE_IDS.has(tileId)) return false;
+  if (!state.tileLayout.pinned) state.tileLayout.pinned = {};
+  if (state.tileLayout.pinned[tileId] === undefined) {
+    state.tileLayout.pinned[tileId] = true; // default to pinned at top for feed + tasks
+  }
+  return !!state.tileLayout.pinned[tileId];
+}
+
+function setTilePinnedToTop(tileId, pinned) {
+  if (!PANEL_TILE_IDS.has(tileId)) return;
+  if (!state.tileLayout.pinned) state.tileLayout.pinned = {};
+  state.tileLayout.pinned[tileId] = !!pinned;
+  saveLayoutToStorage();
+}
+
+/** Ensure currently-pinned tiles (feed/tasks) appear first in the order array (in their relative user order).
+ * This keeps them "at the top" logically, prevents other tiles from being ordered before them,
+ * and makes L/R reordering within the pinned pair (when both pinned) and among mains clean and reliable.
+ */
+function normalizeOrderForPinned() {
+  const ord = state.tileLayout.order;
+  if (!ord || !ord.length) return;
+  const pinnedNow = PINNED_TILE_IDS.filter((id) => isTilePinnedToTop(id));
+  const pinnedPart = ord.filter((id) => pinnedNow.includes(id));
+  const otherPart = ord.filter((id) => !pinnedNow.includes(id));
+  // Preserve relative order within each group as user last arranged via drags
+  if (pinnedPart.length !== pinnedNow.length || pinnedPart.join() !== pinnedNow.join() || otherPart.length + pinnedPart.length !== ord.length) {
+    state.tileLayout.order = [...pinnedPart, ...otherPart];
+  }
+}
+
 function saveFeedKeywordToStorage() {
   localStorage.setItem(FEED_KEYWORD_STORAGE_KEY, state.feedKeywordFilter || "");
   scheduleUserProfileSave();
@@ -572,21 +611,24 @@ function applyTileBodyCollapsed(tileEl, tileId) {
 
 function applyTileLayoutClasses(tileEl, tileId) {
   if (!tileEl || !tileId) return;
-  if (PANEL_TILE_IDS.has(tileId)) {
+  const isCurrentlyPinnedPanel = PANEL_TILE_IDS.has(tileId) && isTilePinnedToTop(tileId);
+  if (isCurrentlyPinnedPanel) {
     if (state.tileLayout.heights?.[tileId]) {
       delete state.tileLayout.heights[tileId];
       saveLayoutToStorage();
     }
     tileEl.classList.add("panel-tile");
-    tileEl.classList.remove("tile-double", "tile-half", "tile-quarter", "tasks-tile-full");
+    tileEl.classList.remove("tile-double", "tile-half", "tile-quarter", "tasks-tile-full", "panel-width-quarter", "panel-width-half", "panel-width-full");
     const w = tileWidth(tileId);
-    const panelHalf = w === "half" || w === "quarter";
-    tileEl.classList.toggle("panel-width-half", panelHalf);
+    tileEl.classList.toggle("panel-width-quarter", w === "quarter");
+    tileEl.classList.toggle("panel-width-half", w === "half");
     tileEl.classList.toggle("panel-width-full", w === "full");
     tileEl.classList.toggle("tasks-tile-full", tileId === "tile-tasks" && w === "full");
     syncPanelRowLayout();
     return;
   }
+  // Non-pinned or regular tile: use normal grid classes (quarter/half/full + double height)
+  tileEl.classList.remove("panel-tile", "panel-width-quarter", "panel-width-half", "panel-width-full");
   const w = tileWidth(tileId);
   const h = tileHeight(tileId);
   tileEl.classList.remove("tile-half", "tile-quarter");
@@ -597,6 +639,11 @@ function applyTileLayoutClasses(tileEl, tileId) {
     return;
   }
   tileEl.classList.toggle("tile-double", h === "double");
+
+  // Notes narrow toolbar: put resizing (layouts + remove) on top row when quarter/half
+  if (tileEl && tileEl.classList.contains('notes-tile')) {
+    ensureNotesToolbarRows(tileEl);
+  }
 }
 
 function createCollapseTileButton(tileEl, tileId) {
@@ -857,6 +904,35 @@ function bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn, quarte
   return syncTileLayout;
 }
 
+function bindTilePinButton(tileEl, tileId, pinBtn) {
+  if (!pinBtn || !PANEL_TILE_IDS.has(tileId)) return;
+  const sync = () => {
+    const pinned = isTilePinnedToTop(tileId);
+    setTileLayoutIconButton(pinBtn, TILE_ICON_PIN, pinned ? "Unpin from top of dashboard" : "Pin to top of dashboard");
+    pinBtn.classList.toggle("tile-btn-active", pinned);
+  };
+  pinBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const next = !isTilePinnedToTop(tileId);
+    setTilePinnedToTop(tileId, next);
+    sync();
+    mountDashboardTiles();
+    // For the special feed/tasks tiles we always keep drag affordance enabled (even when pinned)
+    // so the user can drag them left/right within the top area when both are pinned.
+    // We do NOT touch the order array here (no normalize), so unpinning does not auto-reposition
+    // the tile in the array / grid. It simply switches rendering layer (top containers vs main grid)
+    // at its existing stable position in order; other tiles can only displace it via later drags.
+    const tb = tileEl.querySelector(":scope > .tile-toolbar");
+    if (tb) {
+      tb.draggable = true;
+      const h = tb.querySelector(".tile-drag-hint");
+      if (h) h.classList.remove("hidden");
+      bindTileDragDrop(tileEl, tileId, tb);
+    }
+  });
+  sync();
+}
+
 function createTileChrome(tileId, label) {
   const toolbar = document.createElement("div");
   toolbar.className = "tile-toolbar";
@@ -867,12 +943,12 @@ function createTileChrome(tileId, label) {
   hint.className = "tile-drag-hint";
   hint.textContent = "⋮⋮";
   hint.setAttribute("aria-hidden", "true");
+  hint.title = "Drag to reorder (left/right or up/down)";
 
-  const isPanel = PANEL_TILE_IDS.has(tileId);
-  if (isPanel) {
-    hint.classList.add("hidden");
-    toolbar.draggable = false;
-  }
+  const isPanel = PANEL_TILE_IDS.has(tileId) && isTilePinnedToTop(tileId);
+  // Note: we intentionally do *not* hide the drag hint or force draggable=false for isPanel (the feed+tasks tiles).
+  // This allows them to be moved left/right while pinned at the top (and behave like other tiles when unpinned).
+  // The isPanel flag is still used below to choose quarter vs tall layout buttons.
 
   const name = document.createElement("span");
   name.className = "tile-toolbar-title";
@@ -886,8 +962,9 @@ function createTileChrome(tileId, label) {
   const spacer = document.createElement("span");
   spacer.className = "tile-toolbar-spacer";
 
-  const { wrap, halfBtn, fullBtn, tallBtn } = createLayoutButtons({
+  const { wrap, quarterBtn, halfBtn, fullBtn, tallBtn } = createLayoutButtons({
     showDoubleHeight: !isPanel,
+    showQuarterWidth: isPanel,
   });
 
   toolbar.appendChild(hint);
@@ -896,14 +973,22 @@ function createTileChrome(tileId, label) {
   toolbar.appendChild(spacer);
   toolbar.appendChild(wrap);
 
-  return { toolbar, halfBtn, fullBtn, tallBtn };
+  let pinBtn = null;
+  if (PINNED_TILE_IDS.includes(tileId)) {
+    pinBtn = document.createElement("button");
+    pinBtn.type = "button";
+    pinBtn.className = "btn btn-ghost tile-btn tile-btn-icon tile-pin-btn";
+    toolbar.appendChild(pinBtn);
+  }
+
+  return { toolbar, quarterBtn, halfBtn, fullBtn, tallBtn, pinBtn };
 }
 
 function syncPanelRowLayout() {
   const row = $("#dashboard-panel-row");
   const pinned = $("#dashboard-tiles-pinned");
   if (!row) return;
-  const anyFull = PINNED_TILE_IDS.some((id) => tileWidth(id) === "full" && !tileBodyCollapsed(id));
+  const anyFull = PINNED_TILE_IDS.some((id) => isTilePinnedToTop(id) && tileWidth(id) === "full" && !tileBodyCollapsed(id));
   row.classList.toggle("panel-row-has-full", anyFull);
   if (pinned) pinned.classList.toggle("panel-row-has-full", anyFull);
 }
@@ -918,9 +1003,11 @@ function ensurePanelToolbarCount(tileEl, tileId) {
   if (!PANEL_TILE_IDS.has(tileId)) return;
   const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
   if (!toolbar) return;
-  toolbar.draggable = false;
+  // Always enable drag + hint for the two special tiles (feed/notifications + tasks).
+  // This makes them movable left/right at the top when pinned (and normal when unpinned), matching other tiles' reordering.
+  toolbar.draggable = true;
   const hint = toolbar.querySelector(".tile-drag-hint");
-  if (hint) hint.classList.add("hidden");
+  if (hint) hint.classList.remove("hidden");
   if (!toolbar.querySelector(`[data-tile-count-for="${tileId}"]`)) {
     const countBadge = document.createElement("span");
     countBadge.className = "tile-toolbar-count";
@@ -936,20 +1023,33 @@ function ensurePanelLayoutButtons(tileEl, tileId) {
   if (!PANEL_TILE_IDS.has(tileId)) return;
   const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
   if (!toolbar || toolbar.querySelector(".tile-layout-btns")) return;
-  const { wrap, halfBtn, fullBtn, tallBtn } = createLayoutButtons({ showDoubleHeight: false });
+  const { wrap, quarterBtn, halfBtn, fullBtn, tallBtn } = createLayoutButtons({ showDoubleHeight: false, showQuarterWidth: true });
   toolbar.appendChild(wrap);
-  bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn);
+  bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn, quarterBtn);
+}
+
+function ensurePanelPinButton(tileEl, tileId) {
+  if (!PANEL_TILE_IDS.has(tileId)) return;
+  const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
+  if (!toolbar || toolbar.querySelector(".tile-pin-btn")) return;
+  const pb = document.createElement("button");
+  pb.type = "button";
+  pb.className = "btn btn-ghost tile-btn tile-btn-icon tile-pin-btn";
+  toolbar.appendChild(pb);
+  bindTilePinButton(tileEl, tileId, pb);
 }
 
 function bindTileChrome(tileEl, tileId) {
   if (!tileEl.querySelector(":scope > .tile-toolbar")) {
-    const { toolbar, halfBtn, fullBtn, tallBtn } = createTileChrome(tileId, tileEl.dataset.tileLabel || "Section");
-    bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn);
+    const { toolbar, quarterBtn, halfBtn, fullBtn, tallBtn, pinBtn } = createTileChrome(tileId, tileEl.dataset.tileLabel || "Section");
+    bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn, quarterBtn);
     tileEl.prepend(toolbar);
     bindTileDragDrop(tileEl, tileId, toolbar);
+    bindTilePinButton(tileEl, tileId, pinBtn);
   } else {
     ensurePanelToolbarCount(tileEl, tileId);
     ensurePanelLayoutButtons(tileEl, tileId);
+    ensurePanelPinButton(tileEl, tileId);
   }
   attachTileCollapseButton(tileEl, tileId);
   applyTileBodyCollapsed(tileEl, tileId);
@@ -959,7 +1059,10 @@ function bindTileChrome(tileEl, tileId) {
 }
 
 function bindTileDragDrop(tileEl, tileId, toolbar) {
-  if (PANEL_TILE_IDS.has(tileId)) return;
+  // Allow drag for feed/tasks tiles even when pinned: this enables left/right reordering within the top panel row (like other tiles support reordering).
+  // The pinned ones still render visually at top (in their top containers), and other tiles cannot appear above them.
+  if (tileEl.dataset.dragBound === "1") return;
+  tileEl.dataset.dragBound = "1";
 
   toolbar.addEventListener("dragstart", (e) => {
     e.dataTransfer.setData("text/plain", tileId);
@@ -989,6 +1092,7 @@ function bindTileDragDrop(tileEl, tileId, toolbar) {
     order.splice(fromIdx, 1);
     order.splice(toIdx, 0, fromId);
     state.tileLayout.order = order;
+    normalizeOrderForPinned();
     saveLayoutToStorage();
     mountDashboardTiles();
   });
@@ -1091,6 +1195,7 @@ function bindGroupTileChrome(section, group, tileId) {
   hint.className = "tile-drag-hint";
   hint.textContent = "⋮⋮";
   hint.setAttribute("aria-hidden", "true");
+  hint.title = "Drag to reorder (left/right or up/down)";
 
   const nameInput = document.createElement("input");
   nameInput.type = "text";
@@ -1239,9 +1344,11 @@ function bindGroupTileChrome(section, group, tileId) {
 function mountPanelTile(node, tileId, parent) {
   if (!node || !parent) return;
   parent.appendChild(node);
-  node.classList.remove("tile-half", "tile-double", "tasks-tile-full");
-  node.classList.toggle("panel-slot-left", tileId === "tile-feed");
-  node.classList.toggle("panel-slot-right", tileId === "tile-tasks");
+  node.classList.remove("tile-half", "tile-double", "tile-quarter", "tasks-tile-full");
+  node.classList.add("panel-tile");
+  // Slot classes for left/right are set by the caller (mountDashboardTiles) based on position
+  // in the current pinned list. This allows the two tiles to be swapped L<->R by the user
+  // while both are pinned at the top (they remain visually above the main grid).
   applyTileBodyCollapsed(node, tileId);
   if (!tileBodyCollapsed(tileId)) applyTileLayoutClasses(node, tileId);
 }
@@ -1259,25 +1366,43 @@ function mountDashboardTiles() {
   root.innerHTML = "";
 
   let hasPinned = false;
-  for (const tileId of PINNED_TILE_IDS) {
+  // Build the list of pinned tiles in the sequence they appear in the user's tileLayout.order.
+  // This makes the two tiles (notifications + tasks) reorderable left<->right while pinned at the top,
+  // just like other tiles can be reordered. The top containers always place them above the main grid,
+  // so other tiles cannot be put above pinned ones visually.
+  const currentOrder = state.tileLayout.order || [];
+  let pinnedToRender = currentOrder.filter((id) => PANEL_TILE_IDS.has(id) && isTilePinnedToTop(id));
+  // Defensive: include any pinned tiles missing from order
+  for (const id of PINNED_TILE_IDS) {
+    if (isTilePinnedToTop(id) && !pinnedToRender.includes(id)) pinnedToRender.push(id);
+  }
+  let pinnedIdx = 0;
+  for (const tileId of pinnedToRender) {
     const node = nodes.get(tileId);
     if (!node) continue;
+    // Assign slot classes by current position among pinned (supports swap)
+    const isLeft = pinnedIdx === 0;
+    const isRight = pinnedIdx === 1;
+    node.classList.toggle("panel-slot-left", isLeft);
+    node.classList.toggle("panel-slot-right", isRight);
     if (tileBodyCollapsed(tileId)) {
       mountPanelTile(node, tileId, pinnedRoot);
-      hasPinned = true;
     } else {
       mountPanelTile(node, tileId, panelRow);
     }
+    hasPinned = true;
+    pinnedIdx++;
   }
 
   if (pinnedRoot) pinnedRoot.classList.toggle("hidden", !hasPinned);
   syncPanelRowLayout();
 
   for (const tileId of state.tileLayout.order) {
-    if (PANEL_TILE_IDS.has(tileId)) continue;
+    if (PANEL_TILE_IDS.has(tileId) && isTilePinnedToTop(tileId)) continue;
     const node = nodes.get(tileId);
     if (!node) continue;
     root.appendChild(node);
+    node.classList.remove("panel-slot-left", "panel-slot-right");
     applyTileLayoutClasses(node, tileId);
     applyTileBodyCollapsed(node, tileId);
   }
@@ -1315,6 +1440,7 @@ function renderFeedTile() {
   applyTileLayoutClasses(tile, tileId);
   ensurePanelToolbarCount(tile, tileId);
   ensurePanelLayoutButtons(tile, tileId);
+  ensurePanelPinButton(tile, tileId);
   ensureTileAutoRefreshButton(tile, tileId);
   ensureFeedHiddenToolbarButton(tile);
   syncFeedFilterPlaceholder();
@@ -1344,7 +1470,6 @@ function renderTasksTile() {
     tile.dataset.tileLabel = "Tasks";
     tile.innerHTML = `
       <div class="panel-header panel-header-tasks">
-        <button type="button" id="tasks-list-btn" class="btn btn-ghost btn-tasks-list" title="View all tasks (open + completed)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/></svg></button>
         <label class="tasks-filter-label panel-sub">
           User
           <select id="tasks-user-filter"></select>
@@ -1358,18 +1483,13 @@ function renderTasksTile() {
   applyTileLayoutClasses(tile, tileId);
   ensurePanelToolbarCount(tile, tileId);
   ensurePanelLayoutButtons(tile, tileId);
+  ensurePanelPinButton(tile, tileId);
   ensureTileAutoRefreshButton(tile, tileId);
   ensureTasksNewTaskButton(tile);
   if (tile && !tile.dataset.tasksFilterBound) {
     tile.dataset.tasksFilterBound = "1";
     $("#tasks-user-filter", tile)?.addEventListener("change", () => {
       loadTasks().catch((err) => showToast(err.message, true));
-    });
-  }
-  if (tile && !tile.dataset.tasksListBound) {
-    tile.dataset.tasksListBound = "1";
-    $("#tasks-list-btn", tile)?.addEventListener("click", () => {
-      openTasksListModal().catch((err) => showToast(err.message, true));
     });
   }
   return tile;
@@ -1423,22 +1543,340 @@ async function api(path, options = {}) {
   try {
     body = text ? JSON.parse(text) : {};
   } catch {
-    if (!res.ok && res.status >= 500 && /\/crm\//i.test(path)) {
-      showCrmCrashNotification();
-    }
     throw new Error(res.ok ? "Invalid JSON from server" : text.slice(0, 300) || res.statusText);
   }
   if (!res.ok) {
-    if (res.status >= 500 && /\/crm\//i.test(path)) {
-      showCrmCrashNotification();
-    }
     throw new Error(parseApiError(body, res.status));
   }
-  // Successful CRM-ish call: clear any prior crash banner
+  // Successful CRM-ish call
   if (/\/crm\//i.test(path)) {
-    clearCrmCrashNotification();
+    onCRMSuccess();
+    // If we have queued mutations, a successful CRM response is a good signal that the backend
+    // may be back — kick the processor to drain the queue promptly on recovery.
+    if (mutationQueue.length > 0) {
+      setTimeout(() => { processMutationQueue().catch(() => {}); }, 10);
+    }
   }
   return body;
+}
+
+// --- Mutation Queue (client-side offline / transient CRM write resilience) ---
+// All CRM writes that hit transient errors are queued (localStorage) and retried in bg.
+// On timeout after CONNECTING_GRACE, progress bar notifies "server unreachable, adding to queue".
+// Header marquee (scrolling, tiny) only appears >8s after queue item + after any modal closed.
+// No header warning/crash/queue banners are ever created (removed per spec).
+
+let mutationQueue = [];
+
+let connectionState = 'connected'; // 'connected' | 'connecting' | 'disconnected'
+let connectingTimer = null;
+const CONNECTING_GRACE_MS = 10000; // grace before marking a push as queued (progress bar shows unreachable + queue msg)
+const QUEUE_MARQUEE_DELAY_MS = 8000; // for pending count / stale in marquee (only when there are actual queued push failures)
+let lastCRMSuccessTime = Date.now();
+
+let _syncStatusEl = null;
+
+function loadMutationQueue() {
+  try {
+    const raw = localStorage.getItem(MUTATION_QUEUE_KEY);
+    mutationQueue = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(mutationQueue)) mutationQueue = [];
+  } catch {
+    mutationQueue = [];
+  }
+}
+
+function persistMutationQueue() {
+  try {
+    localStorage.setItem(MUTATION_QUEUE_KEY, JSON.stringify(mutationQueue));
+  } catch {
+    // localStorage full or unavailable — best effort
+  }
+}
+
+function getMutationQueue() {
+  return [...mutationQueue];
+}
+
+function isTransientError(err) {
+  if (!err) return false;
+  const msg = String(err.message || err || "").toLowerCase();
+  // Very broad match for anything that looks like a temporary server/network/proxy/CRM-backend problem.
+  // Covers real CRM being down (portal returns 502/503 with various bodies, URLError from proxy, etc.).
+  if (/typeerror|network|fetch failed|failed to fetch|timeout|econn|enotfound|resolve host|could not resolve|connection refused|unavailable|offline|bad gateway|gateway|upstream|service unavailable|backend|proxy/.test(msg)) {
+    return true;
+  }
+  if (/502|503|504|500|5\d{2}/.test(msg) || /http 5\d\d/.test(msg) || /\b5[0-9]{2}\b/.test(msg)) {
+    return true;
+  }
+  // Known OnlyOffice/CRM proxy error strings when its backend CRM services are unreachable
+  if (/could not resolve crm|crm user|resolve crm/.test(msg)) {
+    return true;
+  }
+  return false;
+}
+
+function enqueueCrmMutation(descriptor) {
+  if (!descriptor || !descriptor.path) return;
+  if (mutationQueue.length >= MAX_QUEUE_SIZE) {
+    mutationQueue.shift(); // drop oldest on cap
+  }
+  const item = {
+    id: (Date.now() + Math.random()).toString(36),
+    ts: Date.now(),
+    ...descriptor,
+  };
+  mutationQueue.push(item);
+  persistMutationQueue();
+  updateMutationSyncStatus();
+  // Kick the processor shortly after enqueue
+  setTimeout(() => { processMutationQueue().catch(() => {}); }, 50);
+}
+
+let _mqInFlight = false;
+
+async function processMutationQueue() {
+  if (_mqInFlight) return;
+  if (!navigator.onLine) return;
+  _mqInFlight = true;
+  try {
+    while (mutationQueue.length > 0) {
+      if (!navigator.onLine) break;
+      const item = mutationQueue[0];
+      try {
+        await api(item.path, {
+          method: item.method || "POST",
+          headers: item.headers || { "Content-Type": "application/json" },
+          body: item.body || undefined,
+          showCrashBanner: false,
+        });
+        // Success — remove, persist, notify, and reconcile
+        mutationQueue.shift();
+        persistMutationQueue();
+        updateMutationSyncStatus();
+        onCRMSuccess();
+        try {
+          showToast(`Synced: ${item.description || 'CRM action'}`);
+        } catch {}
+        // Light reconciliation. loadTasks covers task creates/closes.
+        // For opportunity mutations the optimistic state + next natural group load/refresh is usually sufficient;
+        // we can expand this later with targeted refreshGroup if needed.
+        loadTasks().catch(() => {});
+        if (item.opType === 'task') {
+          // Also refresh the full tasks list modal if it's currently open, so newly synced
+          // tasks (created while offline) appear without the user having to close/re-open.
+          const listModal = $("#tasks-list-modal");
+          if (listModal && !listModal.classList.contains("hidden")) {
+            // Re-fetch by hiding and re-opening the modal (listeners are re-bound but acceptable for this flow).
+            listModal.classList.add("hidden");
+            setTimeout(() => {
+              try { openTasksListModal(); } catch {}
+            }, 80);
+          }
+        }
+        // Gentle full refresh for opp changes (quiet)
+        if (item.opType === 'stage' || item.opType === 'due' || item.opType === 'tag' || item.opType === 'history') {
+          // Do not block the queue loop
+          refreshAll().catch(() => {});
+        }
+      } catch (err) {
+        // Only drop queued actions on clear *permanent client errors* (bad data that will never succeed
+        // even when CRM is healthy). Anything network/5xx/unknown/server-down related must stay in the
+        // queue and keep retrying. This prevents the scary "action dropped non-retryable" toast during
+        // normal "CRM server is down" testing or transient outages.
+        const m = String(err && err.message || err || "").toLowerCase();
+        const status = parseInt((m.match(/\b([45]\d{2})\b/) || [0, 0])[1], 10);
+        const isPermanentClientError =
+          (status >= 400 && status < 500 && status !== 429 && status !== 408) ||
+          /bad request|validation|invalid (request|data|field|value|id)|malformed|missing required|cannot (create|update)|not allowed|forbidden|unauthorized/.test(m);
+
+        if (isPermanentClientError && !isTransientError(err)) {
+          mutationQueue.shift();
+          persistMutationQueue();
+          try {
+            showToast(`Sync failed for "${item.description || item.path}". Action dropped (non-retryable client error).`, true);
+          } catch {}
+          continue;
+        }
+        // Transient (including all CRM-down, proxy, 5xx, network cases) — keep in queue for retry
+        break;
+      }
+    }
+  } finally {
+    _mqInFlight = false;
+  }
+  updateMutationSyncStatus();
+}
+
+function updateMutationSyncStatus() {
+  const el = $("#mutation-sync-status");
+  if (!el) return;
+  const count = mutationQueue.length;
+  const now = Date.now();
+  const hasStaleQueued = mutationQueue.some(item => now - (item.ts || 0) > QUEUE_MARQUEE_DELAY_MS);
+  const showPill = hasStaleQueued && count > 0 && (now - lastCRMSuccessTime > QUEUE_MARQUEE_DELAY_MS);
+
+  if (count > 0 && showPill) {
+    el.textContent = `${count} pending`;
+    el.classList.remove("hidden");
+    el.title = `${count} CRM action(s) queued for sync`;
+  } else {
+    el.textContent = "";
+    el.classList.add("hidden");
+  }
+
+  // Header marquee indicator (scrolling, minimal): only shows for actual stale queued items from push failures.
+  // (Global time-based + periodic poller removed to stop frequent false positives.)
+  updateCrmHeaderMarquee(count, hasStaleQueued);
+}
+
+function updateCrmHeaderMarquee(count, hasStale) {
+  const marquee = $("#crm-header-marquee");
+  if (!marquee) return;
+
+  const openModal = document.querySelector(".modal:not(.hidden)");
+  // Only show for actual stale queued actions from failed pushes (original behavior).
+  // Removed global "time since last success" check + periodic poller that was causing frequent false "unreachable" indicators.
+  const shouldShow = !openModal && (count > 0 && hasStale);
+
+  if (shouldShow) {
+    let text = `❗ CRM unreachable — actions queued locally until restored`;
+    if (count > 0) text += ` (${count} pending)`;
+    // Use duplicated content for seamless scroll
+    marquee.innerHTML = `<span>${text} • ${text}</span>`;
+    marquee.classList.remove("hidden");
+    marquee.style.display = "";
+
+    // Once the header marquee (the connectivity indicator) is visible and carrying the pending count,
+    // the bottom progress bar is redundant — hide it. The marquee is now the persistent signal.
+    try { hideCRMSyncStatus(); } catch {}
+    const pill = $("#mutation-sync-status");
+    if (pill) {
+      pill.classList.add("hidden");
+      pill.textContent = "";
+    }
+  } else {
+    marquee.classList.add("hidden");
+    marquee.style.display = "none";
+    marquee.innerHTML = "";
+  }
+}
+
+function getSyncStatusEl() {
+  if (!_syncStatusEl || !_syncStatusEl.parentNode) {
+    _syncStatusEl = document.createElement("div");
+    _syncStatusEl.id = "crm-sync-status";
+    _syncStatusEl.className = "crm-sync-status";
+    document.body.appendChild(_syncStatusEl);
+  }
+  return _syncStatusEl;
+}
+
+function showCRMSyncStatus(text, isWarning = false) {
+  const marquee = $("#crm-header-marquee");
+  const marqueeActive = marquee && !marquee.classList.contains("hidden") && marquee.style.display !== "none";
+
+  // When the header marquee is the active persistent "unreachable + N pending" indicator,
+  // suppress the bottom progress bar (it carries overlapping info).
+  if (marqueeActive && isWarning) {
+    // For the persistent warning state, let the marquee own it.
+    return;
+  }
+
+  const el = getSyncStatusEl();
+  el.innerHTML = `<span>${text}</span><div class="progress"><div class="progress-bar"></div></div>`;
+  if (isWarning) {
+    el.classList.add("warning");
+  } else {
+    el.classList.remove("warning");
+  }
+  el.style.display = "";
+}
+
+function hideCRMSyncStatus() {
+  if (_syncStatusEl) {
+    _syncStatusEl.style.display = "none";
+    _syncStatusEl.classList.remove("warning");
+  }
+  // Also ensure marquee (if any stale but we are hiding status) is re-evaluated by caller via update
+}
+
+function clearConnectingTimer() {
+  if (connectingTimer) {
+    clearTimeout(connectingTimer);
+    connectingTimer = null;
+  }
+}
+
+function setConnectionState(newState) {
+  if (connectionState === newState) return;
+  connectionState = newState;
+  updateMutationSyncStatus();
+}
+
+function startConnectingGrace(descriptor) {
+  setConnectionState('connecting');
+  showCRMSyncStatus('Connecting...');
+
+  clearConnectingTimer();
+  connectingTimer = setTimeout(() => {
+    // Only confirm failed if we are STILL in connecting after full 10s.
+    // This means the push is stuck and we switch to queue. Success would have cleared the timer.
+    if (connectionState === 'connecting') {
+      setConnectionState('disconnected');
+      // The persistent signal is the header marquee (after its 8s delay + post-close check).
+      // Hide any bottom bar message here so we don't leave stale "unreachable" text when the
+      // marquee takes over.
+      hideCRMSyncStatus();
+    }
+  }, CONNECTING_GRACE_MS);
+}
+
+function onCRMSuccess() {
+  clearConnectingTimer();
+  lastCRMSuccessTime = Date.now();
+  setConnectionState('connected');
+  // Do NOT auto-hide here. The "sent successfully" messages in form handlers control
+  // a deliberate linger (so the progress bar is visible for a readable moment even on fast success).
+  // General CRM successes will rely on the per-action "sent" calls or other hides.
+}
+
+function showSubmittingNote(button, message = 'Submitting — do not press the button again') {
+  if (!button || !button.parentNode) return null;
+  // Remove any previous note
+  const prev = button.parentNode.querySelector('.submitting-note');
+  if (prev) prev.remove();
+  const note = document.createElement('div');
+  note.className = 'submitting-note';
+  note.textContent = message;
+  note.style.cssText = 'color: #f59e0b; font-size: 0.75em; margin-top: 4px;';
+  button.parentNode.insertBefore(note, button.nextSibling);
+  return note;
+}
+
+/**
+ * Thin wrapper used to make specific CRM mutators queue on transient failure.
+ * Returns {queued: true} on transient (caller can early-return), otherwise the result of mutateFn.
+ * Hard errors are re-thrown unchanged (preserves all existing modal/global error UX).
+ */
+async function withCrmQueueOnTransient(mutateFn, descriptor) {
+  const desc = descriptor.description || 'action';
+  try {
+    const result = await mutateFn();
+    onCRMSuccess();
+    // Form submit handlers fully control the progress bar sequence (Connecting -> Connected & Syncing -> success).
+    // Non-form/inline actions rely on showToast for feedback instead of the bar.
+    // (Removed auto "sent successfully" here to prevent overlapping/reappearing messages on the bar after forms take over.)
+    return result;
+  } catch (err) {
+    if (isTransientError(err)) {
+      enqueueCrmMutation(descriptor);
+      startConnectingGrace(descriptor);
+      return { queued: true };
+    }
+    hideCRMSyncStatus();
+    throw err;
+  }
 }
 
 function newGroup(overrides = {}) {
@@ -2176,6 +2614,7 @@ function bindCalendarTileChrome(section, cal, tileId) {
   hint.className = "tile-drag-hint";
   hint.textContent = "⋮⋮";
   hint.setAttribute("aria-hidden", "true");
+  hint.title = "Drag to reorder (left/right or up/down)";
 
   const nameInput = document.createElement("input");
   nameInput.type = "text";
@@ -2623,6 +3062,7 @@ function applyUserProfile(profile) {
       widths: layout.widths && typeof layout.widths === "object" ? layout.widths : {},
       heights: layout.heights && typeof layout.heights === "object" ? layout.heights : {},
       collapsed: layout.collapsed && typeof layout.collapsed === "object" ? layout.collapsed : {},
+      pinned: layout.pinned && typeof layout.pinned === "object" ? layout.pinned : {},
     };
   } else {
     state.tileLayout = loadLayoutFromStorage();
@@ -2709,7 +3149,7 @@ async function loadUserProfileFromServer() {
         newGroup({ name: "Open pipeline", dealStatus: "open", groupBy: "stage" }),
         newGroup({ name: "Tagged deals", dealStatus: "all", groupBy: "tag", tagTitles: [] }),
       ],
-      tileLayout: { order: [], widths: {}, heights: {}, collapsed: {} },
+      tileLayout: { order: [], widths: {}, heights: {}, collapsed: {}, pinned: {} },
       calendarTiles: [],
       notesTiles: [],
       groupTemplates: [],
@@ -3068,6 +3508,7 @@ function bindNotesTileChrome(section, notes, tileId) {
   hint.className = "tile-drag-hint";
   hint.textContent = "⋮⋮";
   hint.setAttribute("aria-hidden", "true");
+  hint.title = "Drag to reorder (left/right or up/down)";
 
   const nameInput = document.createElement("input");
   nameInput.type = "text";
@@ -3134,6 +3575,15 @@ function bindNotesTileChrome(section, notes, tileId) {
     "btn-notes-quick-note"
   );
 
+  // List buttons for bullet and numbered lists (standard markdown editor behavior)
+  const bulletBtn = mkTextBtn("•", "btn-notes-bullet", "Bullet list — inserts '- ' (auto-continues on Enter)");
+  const numberedBtn = mkTextBtn("1.", "btn-notes-numbered", "Numbered list — inserts '1. ' (auto-continues + increments on Enter)");
+  // Wrap the two list buttons tightly together with a visible box/shadow so they read as grouped action buttons.
+  const listBtnsWrap = document.createElement("span");
+  listBtnsWrap.className = "notes-list-btns";
+  listBtnsWrap.appendChild(bulletBtn);
+  listBtnsWrap.appendChild(numberedBtn);
+
   const editBtn = mkTextBtn("Edit", "btn-notes-mode", "Edit mode");
   editBtn.dataset.mode = "edit";
   const previewBtn = mkTextBtn("Preview", "btn-notes-mode", "Preview mode");
@@ -3166,6 +3616,7 @@ function bindNotesTileChrome(section, notes, tileId) {
     fileMenu,
     copyBtn,
     dateBtn,
+    listBtnsWrap,
     printBtn,
     crmBtn,
     accentSel,
@@ -3225,6 +3676,26 @@ function bindNotesTileChrome(section, notes, tileId) {
       notes.content = `${notes.content || ""}${notes.content ? "\n" : ""}${stamp}\n`;
       scheduleNotesTileSave(notes);
       syncNotesTileBody(section, notes);
+    }
+  });
+
+  bulletBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const editor = $(".notes-editor", section);
+    if (editor && notes.viewMode !== "preview") {
+      insertNotesEditorText(editor, "- ");
+      notes.content = editor.value;
+      scheduleNotesTileSave(notes);
+    }
+  });
+
+  numberedBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const editor = $(".notes-editor", section);
+    if (editor && notes.viewMode !== "preview") {
+      insertNotesEditorText(editor, "1. ");
+      notes.content = editor.value;
+      scheduleNotesTileSave(notes);
     }
   });
 
@@ -3302,8 +3773,45 @@ function bindNotesTileChrome(section, notes, tileId) {
     scheduleNotesTileSave(notes);
   });
 
+  // Auto-continue bullet (- * +) and numbered (1. 2. ...) lists on Enter (common markdown editor behavior).
+  // Shift+Enter inserts a plain newline without continuing the list.
+  if (editor && !editor.dataset.listEnterBound) {
+    editor.dataset.listEnterBound = "1";
+    editor.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || e.shiftKey || notes.viewMode === "preview") return;
+      const val = editor.value;
+      const pos = editor.selectionStart || 0;
+      const ls = val.lastIndexOf("\n", pos - 1) + 1;
+      const lineEnd = val.indexOf("\n", pos);
+      const fullLine = val.slice(ls, lineEnd > -1 ? lineEnd : undefined);
+      // bullet list (supports indent)
+      const bMatch = fullLine.match(/^(\s*)([-*+])(\s+)/);
+      if (bMatch) {
+        e.preventDefault();
+        const prefix = bMatch[1] + bMatch[2] + bMatch[3];
+        insertNotesEditorText(editor, "\n" + prefix);
+        notes.content = editor.value;
+        scheduleNotesTileSave(notes);
+        return;
+      }
+      // numbered list: increment
+      const nMatch = fullLine.match(/^(\s*)(\d+)(\.\s+)/);
+      if (nMatch) {
+        e.preventDefault();
+        const num = parseInt(nMatch[2], 10) + 1;
+        const prefix = nMatch[1] + num + nMatch[3];
+        insertNotesEditorText(editor, "\n" + prefix);
+        notes.content = editor.value;
+        scheduleNotesTileSave(notes);
+      }
+    });
+  }
+
   applyNotesTileAccent(section, notes);
   syncModeButtons();
+
+  // Initial restructure for narrow notes (resizing on top row)
+  ensureNotesToolbarRows(section);
 }
 
 function renderNotesTiles(dash) {
@@ -3327,6 +3835,7 @@ function renderNotesTiles(dash) {
     `;
     dash.appendChild(section);
     bindNotesTileChrome(section, notes, tileId);
+    ensureNotesToolbarRows(section);
     notes._el = section;
     const editor = $(".notes-editor", section);
     if (editor) editor.value = notes.content || "";
@@ -3577,11 +4086,23 @@ async function updateOpportunityDueDate(oppId, dateInputValue) {
   const body = buildOpportunityPutBody(opp, {
     expectedCloseDate: dateInputValue ? serializeCrmTimestamp(dateInputValue) : null,
   });
-  await api(`/api/2.0/crm/opportunity/${oppId}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const res = await withCrmQueueOnTransient(
+    () => api(`/api/2.0/crm/opportunity/${oppId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      showCrashBanner: false,
+    }),
+    {
+      method: "PUT",
+      path: `/api/2.0/crm/opportunity/${oppId}`,
+      body: JSON.stringify(body),
+      description: `Update due date for opportunity ${oppId}`,
+      opType: "due",
+      targetId: String(oppId),
+    }
+  );
+  if (res && res.queued) return;
 }
 
 async function updateOpportunityStage(oppId, stageId) {
@@ -3597,31 +4118,69 @@ async function updateOpportunityStage(oppId, stageId) {
   }
 
   const body = buildOpportunityPutBody(opp, overrides);
-  await api(`/api/2.0/crm/opportunity/${oppId}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const res = await withCrmQueueOnTransient(
+    () => api(`/api/2.0/crm/opportunity/${oppId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      showCrashBanner: false,
+    }),
+    {
+      method: "PUT",
+      path: `/api/2.0/crm/opportunity/${oppId}`,
+      body: JSON.stringify(body),
+      description: `Change stage for opportunity ${oppId}`,
+      opType: "stage",
+      targetId: String(oppId),
+    }
+  );
+  if (res && res.queued) return;
 }
 
 async function addOpportunityTag(oppId, tagTitle) {
   const tagName = normalizeTagTitle(tagTitle);
   if (!tagName) return;
-  await api(`/api/2.0/crm/opportunity/${oppId}/tag`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tagName }),
-  });
+  const body = JSON.stringify({ tagName });
+  const res = await withCrmQueueOnTransient(
+    () => api(`/api/2.0/crm/opportunity/${oppId}/tag`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      showCrashBanner: false,
+    }),
+    {
+      method: "POST",
+      path: `/api/2.0/crm/opportunity/${oppId}/tag`,
+      body,
+      description: `Add tag to opportunity ${oppId}`,
+      opType: "tag",
+      targetId: String(oppId),
+    }
+  );
+  if (res && res.queued) return;
 }
 
 async function removeOpportunityTag(oppId, tagTitle) {
   const tagName = normalizeTagTitle(tagTitle);
   if (!tagName) return;
-  await api(`/api/2.0/crm/opportunity/${oppId}/tag`, {
-    method: "DELETE",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tagName }),
-  });
+  const body = JSON.stringify({ tagName });
+  const res = await withCrmQueueOnTransient(
+    () => api(`/api/2.0/crm/opportunity/${oppId}/tag`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body,
+      showCrashBanner: false,
+    }),
+    {
+      method: "DELETE",
+      path: `/api/2.0/crm/opportunity/${oppId}/tag`,
+      body,
+      description: `Remove tag from opportunity ${oppId}`,
+      opType: "tag",
+      targetId: String(oppId),
+    }
+  );
+  if (res && res.queued) return;
 }
 
 async function loadHistoryCategories() {
@@ -5837,6 +6396,17 @@ function renderFeedNotificationItem(it) {
   });
 
   row.appendChild(body);
+  const previewBtn = document.createElement("button");
+  previewBtn.type = "button";
+  previewBtn.className = "card-preview-btn";
+  previewBtn.title = "Preview deal";
+  previewBtn.setAttribute("aria-label", "Preview deal");
+  previewBtn.innerHTML = CARD_ICON_PREVIEW_SCREEN;
+  previewBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openOpportunityPreviewModal(it.id, it.title);
+  });
+  row.appendChild(previewBtn);
   row.appendChild(hideBtn);
   li.appendChild(row);
   return li;
@@ -6121,7 +6691,33 @@ function ensureTileAutoRefreshButton(tileEl, tileId) {
 function ensureTasksNewTaskButton(tileEl) {
   if (!tileEl || tileEl.dataset.tileId !== "tile-tasks") return;
   const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
-  if (!toolbar || toolbar.querySelector(".btn-new-task")) return;
+  if (!toolbar) return;
+
+  // Ensure archive/list button (file cabinet icon) to the left of new task
+  let archiveBtn = toolbar.querySelector("#tasks-list-btn");
+  if (!archiveBtn) {
+    archiveBtn = document.createElement("button");
+    archiveBtn.type = "button";
+    archiveBtn.id = "tasks-list-btn";
+    archiveBtn.className = "btn btn-ghost btn-tasks-list";
+    archiveBtn.title = "View all tasks (open + completed)";
+    // minimalistic file cabinet (one of the examples)
+    // Minimalistic file cabinet icon (chosen; see 3 examples below in comments)
+    archiveBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="1"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><rect x="6" y="5" width="3" height="2" rx="0.5"/><rect x="15" y="5" width="3" height="2" rx="0.5"/><rect x="6" y="11" width="3" height="2" rx="0.5"/><rect x="15" y="11" width="3" height="2" rx="0.5"/></svg>`;
+    // 3 example minimalistic file cabinet icons (stroke-based):
+    // 1. (chosen) Rect with 3 horizontal dividers + small drawer handles: above svg
+    // 2. Simple 2-drawer: <svg ...><rect x="2" y="2" width="20" height="20" rx="2"/><line x1="2" y1="8" x2="22" y2="8"/><line x1="2" y1="16" x2="22" y2="16"/><rect x="4" y="3" width="4" height="2"/><rect x="16" y="3" width="4" height="2"/></svg>
+    // 3. With verticals: <svg ...><rect x="4" y="2" width="16" height="20" rx="1"/><line x1="4" y1="8" x2="20" y2="8"/><line x1="4" y1="14" x2="20" y2="14"/><line x1="12" y1="2" x2="12" y2="22"/><circle cx="7" cy="5" r="0.8"/><circle cx="17" cy="5" r="0.8"/></svg>
+    const layoutBtns = toolbar.querySelector(".tile-layout-btns");
+    if (layoutBtns) toolbar.insertBefore(archiveBtn, layoutBtns);
+    else toolbar.appendChild(archiveBtn);
+    archiveBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openTasksListModal().catch((err) => showToast(err.message, true));
+    });
+  }
+
+  if (toolbar.querySelector(".btn-new-task")) return;
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "btn btn-primary btn-new-task";
@@ -6324,11 +6920,23 @@ async function createOpportunityHistoryEvent(oppId, { content, categoryId, notif
 
   if (notifyUserList?.length) body.notifyUserList = notifyUserList;
 
-  await api("/api/2.0/crm/history", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const res = await withCrmQueueOnTransient(
+    () => api("/api/2.0/crm/history", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      showCrashBanner: false,
+    }),
+    {
+      method: "POST",
+      path: "/api/2.0/crm/history",
+      body: JSON.stringify(body),
+      description: `Add note to opportunity ${oppId}`,
+      opType: "history",
+      targetId: String(oppId),
+    }
+  );
+  if (res && res.queued) return;
 }
 
 function plainTextToNoteHtml(text) {
@@ -6373,6 +6981,19 @@ async function submitDealEditForm(e) {
 
   const submitBtn = $("#deal-edit-submit");
   if (submitBtn) submitBtn.disabled = true;
+
+  // Small tooltip-like note below the button on press.
+  const submittingNote = showSubmittingNote(submitBtn);
+
+  // Show progress immediately on button press
+  setConnectionState('connected');
+  showCRMSyncStatus('Connecting...');
+
+  const connectStart = Date.now();
+
+  const closeTimer = setTimeout(() => {
+    closeDealEditModal();
+  }, 2500);
 
   try {
     const oppId = ctx.oppId;
@@ -6424,7 +7045,16 @@ async function submitDealEditForm(e) {
     }
 
     const group = ctx.group;
+    clearTimeout(closeTimer);
+    hideCRMSyncStatus();  // clear any "Connecting..." immediately on successful response
     closeDealEditModal();
+    // Once the CRM server has successfully received the push, go straight to success.
+    // No lingering "Connected & Syncing..." after the event.
+    onCRMSuccess();
+    showCRMSyncStatus('Deal edit sent successfully');
+    setTimeout(() => {
+      hideCRMSyncStatus();
+    }, 1500);
     showToast("Deal updated");
     if (group) await refreshGroup(group);
     else await refreshAll();
@@ -6438,10 +7068,14 @@ async function submitDealEditForm(e) {
       openOpportunityPreviewModal(editedId, deal.title || deal.Title || "", group || ctx.group).catch(() => {});
     }
   } catch (err) {
+    clearTimeout(closeTimer);
     const msg = err instanceof Error ? err.message : String(err);
     setDealEditError(msg || "Could not save deal");
+    hideCRMSyncStatus();
   } finally {
+    clearTimeout(closeTimer);
     if (submitBtn) submitBtn.disabled = false;
+    if (submittingNote && submittingNote.parentNode) submittingNote.parentNode.removeChild(submittingNote);
   }
 }
 
@@ -6606,6 +7240,19 @@ async function submitQuickNoteForm(e) {
   const submitBtn = $("#quick-note-submit");
   if (submitBtn) submitBtn.disabled = true;
 
+  // Small tooltip-like note below the button on press.
+  const submittingNote = showSubmittingNote(submitBtn);
+
+  // Show progress immediately on button press
+  setConnectionState('connected');
+  showCRMSyncStatus('Connecting...');
+
+  const connectStart = Date.now();
+
+  const closeTimer = setTimeout(() => {
+    closeQuickNoteModal();
+  }, 2500);
+
   try {
     const oppId = ctx.oppId;
     const dueVal = $("#quick-note-due")?.value ?? "";
@@ -6643,15 +7290,28 @@ async function submitQuickNoteForm(e) {
     }
 
     const group = ctx.group;
+    clearTimeout(closeTimer);
+    hideCRMSyncStatus();  // clear any "Connecting..." immediately on successful response
     closeQuickNoteModal();
+    // Once the CRM server has successfully received the push, go straight to success.
+    // No lingering "Connected & Syncing..." after the event.
+    onCRMSuccess();
+    showCRMSyncStatus('Note sent successfully');
+    setTimeout(() => {
+      hideCRMSyncStatus();
+    }, 1500);
     showToast("Note saved");
     if (group) await refreshGroup(group);
     else await refreshAll();
   } catch (err) {
+    clearTimeout(closeTimer);
     const msg = err instanceof Error ? err.message : String(err);
     setQuickNoteError(msg || "Could not save note");
+    hideCRMSyncStatus();
   } finally {
+    clearTimeout(closeTimer);
     if (submitBtn) submitBtn.disabled = false;
+    if (submittingNote && submittingNote.parentNode) submittingNote.parentNode.removeChild(submittingNote);
   }
 }
 
@@ -7331,11 +7991,25 @@ function buildOpportunityCreateBody(form) {
 }
 
 async function createCrmOpportunity(body) {
-  return api("/api/2.0/crm/opportunity", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const res = await withCrmQueueOnTransient(
+    () => api("/api/2.0/crm/opportunity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      showCrashBanner: false,
+    }),
+    {
+      method: "POST",
+      path: "/api/2.0/crm/opportunity",
+      body: JSON.stringify(body),
+      description: `Create opportunity "${body?.title || body?.Title || 'untitled'}"`,
+      opType: "opp",
+    }
+  );
+  if (res && res.queued) {
+    return { queued: true };
+  }
+  return res;
 }
 
 function bindCreateOppContactPicker() {
@@ -7404,6 +8078,18 @@ async function submitCreateOpportunityForm(e) {
   const submitBtn = $("#create-opportunity-submit");
   if (submitBtn) submitBtn.disabled = true;
 
+  // Small tooltip-like note below the button on press.
+  const submittingNote = showSubmittingNote(submitBtn);
+
+  // Show progress immediately on button press (bottom right, with bar).
+  setConnectionState('connected');
+  showCRMSyncStatus('Connecting...');
+
+  // Cap popup visible time at 2.5s max. Safe to close sooner because data is saved locally first (optimistic + queue).
+  const closeTimer = setTimeout(() => {
+    closeCreateOpportunityModal();
+  }, 2500);
+
   try {
     const customFields = collectCreateOppCustomFieldValues();
     const body = buildOpportunityCreateBody({
@@ -7418,6 +8104,12 @@ async function submitCreateOpportunityForm(e) {
     });
 
     const data = await createCrmOpportunity(body);
+    if (data && data.queued) {
+      clearTimeout(closeTimer);
+      closeCreateOpportunityModal();
+      await refreshAll().catch(() => {});
+      return;
+    }
     const created = unwrapCreatedEntity(data);
     const oppId = created?.id ?? created?.ID ?? data?.id ?? data?.ID;
     if (oppId == null) throw new Error("Opportunity created but no id returned");
@@ -7435,13 +8127,23 @@ async function submitCreateOpportunityForm(e) {
     const tags = state.newOpportunityDraft?.tags || [];
     if (tags.length) await applyCreateOpportunityTags(oppId, tags);
 
+    clearTimeout(closeTimer);
     closeCreateOpportunityModal();
-    showToast("Opportunity created");
+    hideCRMSyncStatus();
+    onCRMSuccess();
+    showCRMSyncStatus('Opportunity created successfully');
+    setTimeout(() => {
+      hideCRMSyncStatus();
+    }, 1500);
     await refreshAll();
   } catch (err) {
+    clearTimeout(closeTimer);
     setCreateOpportunityError(err.message || "Could not create opportunity");
+    hideCRMSyncStatus();
   } finally {
+    clearTimeout(closeTimer);
     if (submitBtn) submitBtn.disabled = false;
+    if (submittingNote && submittingNote.parentNode) submittingNote.parentNode.removeChild(submittingNote);
   }
 }
 
@@ -7647,6 +8349,1307 @@ function bindAddTileModal() {
   });
 }
 
+// ---------------- Presence / Team feature (status, list, DMs, pinned top tile, idle, admin) ----------------
+
+function loadPresenceUsersCache() {
+  try {
+    const raw = localStorage.getItem(PRESENCE_USERS_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && Array.isArray(parsed.users)) {
+      const age = Date.now() - (parsed.fetchedAt || 0);
+      if (age < PRESENCE_CACHE_MAX_AGE_MS) return parsed;
+    }
+  } catch {}
+  return null;
+}
+
+function savePresenceUsersCache(users) {
+  try {
+    const payload = { fetchedAt: Date.now(), users: Array.isArray(users) ? users : [] };
+    localStorage.setItem(PRESENCE_USERS_CACHE_KEY, JSON.stringify(payload));
+  } catch {}
+}
+
+function clearPresenceUsersCache() {
+  try { localStorage.removeItem(PRESENCE_USERS_CACHE_KEY); } catch {}
+}
+
+async function ensurePresenceUsersCache(force = false) {
+  if (!force) {
+    const cached = loadPresenceUsersCache();
+    if (cached) {
+      state.presenceUsersCache = cached;
+      return cached.users;
+    }
+  }
+  try {
+    const res = await presenceFetch(`/api/presence/users`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Failed to load users");
+    // The endpoint returns the CRM people response shape {response: [...] } or the array directly
+    const list = data?.response ?? data?.result ?? data ?? [];
+    const users = Array.isArray(list) ? list : [];
+    savePresenceUsersCache(users);
+    state.presenceUsersCache = { fetchedAt: Date.now(), users };
+    return users;
+  } catch (e) {
+    // Fall back to any cached (even stale) or empty
+    const cached = loadPresenceUsersCache();
+    if (cached) {
+      state.presenceUsersCache = cached;
+      return cached.users;
+    }
+    return [];
+  }
+}
+
+function getPresenceUserLabel(u) {
+  if (!u) return "";
+  return u.displayName || u.DisplayName || u.userName || u.UserName || (u.id != null ? String(u.id) : "User");
+}
+
+function getPresenceUserId(u) {
+  if (!u) return "";
+  return String(u.id ?? u.ID ?? u.userId ?? u.UserId ?? "");
+}
+
+// Helper for direct presence API calls (bypass the /api/proxy wrapper).
+// Always sends credentials + X-OnlyOffice-Portal (when known) so server _portal_base
+// works even if the python process has no PORTAL_URL env. Matches pattern used by
+// user-profile direct fetches and api() wrapper.
+function presenceFetch(path, init = {}) {
+  const headers = { ...(init.headers || {}) };
+  if (state.portalUrl) headers["X-OnlyOffice-Portal"] = state.portalUrl;
+  return fetch(path, { credentials: "same-origin", ...init, headers });
+}
+
+async function fetchPresenceSnapshot() {
+  try {
+    const res = await presenceFetch(`/api/presence`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Failed to fetch presence");
+    state.presenceData = data || null;
+    return data;
+  } catch {
+    return state.presenceData;
+  }
+}
+
+function startPresencePolling() {
+  stopPresencePolling();
+  if (!state.presenceModalOpen && !state.hasPresenceTile) return;
+  state.presencePollTimer = setInterval(async () => {
+    if (!state.presenceModalOpen && !state.hasPresenceTile) {
+      stopPresencePolling();
+      return;
+    }
+    const snap = await fetchPresenceSnapshot();
+    if (state.presenceModalOpen) {
+      renderPresenceModal(snap);
+      // While a DM thread is open, refresh its log so read receipts (and any new replies) update live
+      if (state.presenceSelectedUserId) {
+        presenceFetch(`/api/presence/dm?with=${encodeURIComponent(state.presenceSelectedUserId)}`)
+          .then(r => r.json())
+          .then(d => {
+            const log = $("#presence-dm-log");
+            if (log) renderDMLog(log, (d && d.messages) || []);
+          })
+          .catch(() => {});
+      }
+    }
+    if (state.hasPresenceTile) {
+      renderPresenceTileCompact(snap);
+    }
+    updatePresenceHeaderIndicators(snap);
+  }, PRESENCE_POLL_MS);
+}
+
+function stopPresencePolling() {
+  if (state.presencePollTimer) {
+    clearInterval(state.presencePollTimer);
+    state.presencePollTimer = null;
+  }
+}
+
+function startPresenceHeartbeats() {
+  stopPresenceHeartbeats();
+  // Send a heartbeat on visibility + periodic when the dashboard is visible
+  const send = () => {
+    // Fire and forget; the server updates lastHeartbeat
+    presenceFetch(`/api/presence/heartbeat`, { method: "POST" }).catch(() => {});
+    noteDashboardActivity(); // also keep the existing idle machinery happy
+  };
+  // Initial
+  send();
+  // Quick follow-up snapshot so self-online indicator appears promptly on header icon
+  setTimeout(() => {
+    fetchPresenceSnapshot().then(s => updatePresenceHeaderIndicators(s)).catch(() => {});
+  }, 800);
+  // Periodic
+  state.presenceHeartbeatTimer = setInterval(() => {
+    if (document.visibilityState === "visible") send();
+  }, PRESENCE_HEARTBEAT_MS);
+  // On visibility change
+  const onVis = () => {
+    if (document.visibilityState === "visible") send();
+  };
+  document.addEventListener("visibilitychange", onVis, { once: false });
+  // Store a cleanup handle (simple; we don't remove the listener on stop for v1)
+}
+
+function stopPresenceHeartbeats() {
+  if (state.presenceHeartbeatTimer) {
+    clearInterval(state.presenceHeartbeatTimer);
+    state.presenceHeartbeatTimer = null;
+  }
+}
+
+function setupPresenceIdleAndAutoLogout() {
+  // Extend the existing activity tracking.
+  // We already call noteDashboardActivity() from various places and visibility.
+  // Add a 4h auto-logout timer that resets on activity.
+  if (state.presenceIdleTimer) {
+    clearTimeout(state.presenceIdleTimer);
+  }
+
+  const checkAndMaybeLogout = () => {
+    const idleMs = Date.now() - lastDashboardActivityAt;
+    if (idleMs >= PRESENCE_AUTO_LOGOUT_4H_MS) {
+      // Auto logout (best effort)
+      (async () => {
+        try {
+          await fetch("/api/logout", { method: "POST", credentials: "same-origin" });
+        } catch {}
+        try { showToast("Logged out due to 4 hours of inactivity"); } catch {}
+        // Show login screen
+        try { showLogin(); } catch {}
+      })();
+      return;
+    }
+    // Re-arm
+    const remaining = Math.max(30000, PRESENCE_AUTO_LOGOUT_4H_MS - idleMs);
+    state.presenceIdleTimer = setTimeout(checkAndMaybeLogout, remaining);
+  };
+
+  // Seed the timer
+  state.presenceIdleTimer = setTimeout(checkAndMaybeLogout, PRESENCE_AUTO_LOGOUT_4H_MS);
+
+  // Also surface a 2h "idle" visual in the presence UI when we render (see render functions)
+}
+
+function updatePresenceHeaderBadge(snapshot = null) {
+  const badge = $("#presence-online-badge");
+  if (!badge) return;
+  const data = snapshot || state.presenceData;
+  if (!data || !Array.isArray(data.users)) {
+    badge.classList.add("hidden");
+    badge.textContent = "";
+    return;
+  }
+  const online = data.users.filter(u => u.online).length;
+  if (online > 0) {
+    badge.textContent = String(online);
+    badge.classList.remove("hidden");
+    badge.title = `${online} user${online === 1 ? "" : "s"} online`;
+  } else {
+    badge.classList.add("hidden");
+    badge.textContent = "";
+  }
+}
+
+// --- Waiting messages (flashing indicator separate from online count) ---
+let presenceLastRead = {};
+function loadPresenceLastRead() {
+  try {
+    const raw = localStorage.getItem("oo_board_presence_last_read_v1");
+    presenceLastRead = raw ? JSON.parse(raw) : {};
+  } catch { presenceLastRead = {}; }
+}
+function savePresenceLastRead() {
+  try {
+    localStorage.setItem("oo_board_presence_last_read_v1", JSON.stringify(presenceLastRead));
+  } catch {}
+}
+
+function computeHasWaitingMessages(recentDms) {
+  if (!recentDms || !recentDms.length) return false;
+  const me = String(state.currentUserId || "");
+  for (const m of recentDms) {
+    const from = m.from ? String(m.from) : "";
+    if (from && from !== me) {
+      const last = presenceLastRead[from] || 0;
+      const ts = m.ts ? new Date(m.ts).getTime() : 0;
+      if (ts > last) return true;
+    }
+  }
+  return false;
+}
+
+function updatePresenceHeaderIndicators(snapshot = null) {
+  const snap = snapshot || state.presenceData;
+  updatePresenceHeaderBadge(snap);
+
+  const recent = (snap && snap.myRecentDms) || [];
+  const hasWait = computeHasWaitingMessages(recent);
+
+  const btn = $("#presence-btn");
+  if (btn) {
+    if (hasWait) {
+      btn.classList.add("has-waiting-messages");
+    } else {
+      btn.classList.remove("has-waiting-messages");
+    }
+
+    // Self online indicator on the button icon itself (steady green, visible even if alone or count==1).
+    // Separate from the count badge and the red waiting flash.
+    let meOnline = false;
+    const meId = String(state.currentUserId || "");
+    if (snap && Array.isArray(snap.users)) {
+      const candidates = [];
+      if (meId) candidates.push(meId);
+      if (snap.me && snap.me.id) candidates.push(String(snap.me.id));
+      for (const cand of candidates) {
+        const meEntry = snap.users.find(u => String(u.id || u.ID) === cand);
+        if (meEntry && meEntry.online) {
+          meOnline = true;
+          break;
+        }
+      }
+    }
+    if (meOnline) {
+      btn.classList.add("is-online");
+    } else {
+      btn.classList.remove("is-online");
+    }
+  }
+}
+
+// Mark a conversation as read when the user opens/views the DM thread
+function markPresenceDMRead(otherUserId) {
+  if (!otherUserId) return;
+  presenceLastRead[String(otherUserId)] = Date.now();
+  savePresenceLastRead();
+}
+
+function formatTimeAgo(iso) {
+  if (!iso) return "";
+  const ts = new Date(iso).getTime();
+  if (!ts) return "";
+  const diff = Date.now() - ts;
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const d = Math.floor(hr / 24);
+  return `${d}d ago`;
+}
+
+function ensureNotesToolbarRows(section) {
+  if (!section || !section.classList.contains('notes-tile')) return;
+  const bar = section.querySelector(':scope > .notes-tile-bar') || section.querySelector('.notes-tile-bar');
+  if (!bar) return;
+  const isNarrow = section.classList.contains('tile-quarter') || section.classList.contains('tile-half');
+  let topRow = bar.querySelector('.notes-layout-top-row');
+  const layouts = bar.querySelector('.tile-layout-btns');
+  const removeB = bar.querySelector('.btn-remove-notes');
+  const nameInput = bar.querySelector('.notes-tile-name');
+  if (isNarrow) {
+    if (!topRow) {
+      topRow = document.createElement('div');
+      topRow.className = 'notes-layout-top-row';
+      bar.insertBefore(topRow, bar.firstChild);
+    }
+    // Keep the note name in the top row of the title bar even at quarter/half size
+    // (layout buttons + remove also live here for narrow; other toolbar buttons stay below).
+    if (nameInput && nameInput.parentNode !== topRow) {
+      topRow.insertBefore(nameInput, topRow.firstChild);
+    }
+    if (layouts && layouts.parentNode !== topRow) topRow.appendChild(layouts);
+    if (removeB && removeB.parentNode !== topRow) topRow.appendChild(removeB);
+  } else if (topRow) {
+    if (nameInput && nameInput.parentNode !== bar) bar.insertBefore(nameInput, bar.querySelector('.notes-tile-utils') || bar.firstChild);
+    if (layouts) bar.appendChild(layouts);
+    if (removeB) bar.appendChild(removeB);
+    topRow.remove();
+  }
+}
+
+function renderPresenceStatusPicker(container, currentStatus = "", onChange) {
+  if (!container) return;
+  container.innerHTML = "";
+
+  const templates = [
+    "Estimating - Do Not Disturb",
+    "AFK - Lunch",
+    "AFK - Pesky In-laws",
+  ];
+
+  const row = document.createElement("div");
+  row.className = "presence-my-status";
+
+  const label = document.createElement("span");
+  label.textContent = "Status: ";
+  label.style.marginRight = "0.3rem";
+  label.style.color = "var(--muted)";
+  row.appendChild(label);
+
+  // Pull-down menu for status (as requested)
+  const sel = document.createElement("select");
+  sel.className = "presence-status-select";
+
+  // Default to "Online"
+  const effectiveStatus = currentStatus || "Online";
+
+  const onlineOpt = document.createElement("option");
+  onlineOpt.value = "Online";
+  onlineOpt.textContent = "Online";
+  if (effectiveStatus === "Online") onlineOpt.selected = true;
+  sel.appendChild(onlineOpt);
+
+  templates.forEach(t => {
+    const o = document.createElement("option");
+    o.value = t;
+    o.textContent = t;
+    if (t === effectiveStatus) o.selected = true;
+    sel.appendChild(o);
+  });
+
+  const customOpt = document.createElement("option");
+  customOpt.value = "__custom__";
+  customOpt.textContent = "Custom...";
+  if (effectiveStatus && !["Online", ...templates].includes(effectiveStatus)) {
+    customOpt.selected = true;
+  }
+  sel.appendChild(customOpt);
+
+  const ta = document.createElement("textarea");
+  ta.className = "presence-status-custom";
+  const isCustomNow = effectiveStatus && !["Online", ...templates].includes(effectiveStatus);
+  ta.style.display = isCustomNow ? "" : "none";
+  ta.style.width = "220px";
+  ta.style.height = "2.4em";
+  ta.style.fontSize = "0.8rem";
+  ta.maxLength = PRESENCE_CUSTOM_MAX;
+  ta.placeholder = "Custom status (emojis OK)";
+  if (isCustomNow) ta.value = effectiveStatus;
+
+  const save = async () => {
+    let val = sel.value;
+    if (val === "__custom__") {
+      val = (ta.value || "").trim().slice(0, PRESENCE_CUSTOM_MAX);
+    } else if (val === "") {
+      val = "";
+    }
+    try {
+      const res = await presenceFetch(`/api/presence/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: val }),
+      });
+      if (!res.ok) {
+        let errMsg = `HTTP ${res.status}`;
+        try {
+          const d = await res.json();
+          if (d && d.error) errMsg = d.error;
+          else if (d && d.detail) errMsg = d.detail;
+        } catch (_) {}
+        throw new Error(errMsg);
+      }
+      if (onChange) onChange(val);
+    } catch (e) {
+      try { showToast(`Could not set status: ${e && e.message ? e.message : 'server error'}`, true); } catch {}
+    }
+  };
+
+  sel.addEventListener("change", () => {
+    const showTa = sel.value === "__custom__";
+    ta.style.display = showTa ? "" : "none";
+    if (showTa && !ta.value && effectiveStatus && !["Online", ...templates].includes(effectiveStatus)) {
+      ta.value = effectiveStatus;
+    }
+    if (!showTa) {
+      save();
+    }
+  });
+
+  ta.addEventListener("blur", () => {
+    if (sel.value === "__custom__") save();
+  });
+  ta.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && sel.value === "__custom__") {
+      e.preventDefault();
+      save();
+    }
+  });
+
+  row.append(sel, ta);
+  container.appendChild(row);
+}
+
+function renderPresenceUserList(container, snapshot, usersCache, onUserClick) {
+  if (!container) return;
+  container.innerHTML = "";
+
+  // Base the list on the CRM portalUsers (same list used for "notify user" selects in notes/quick note/deal edit).
+  // This guarantees all users (online or offline) are shown.
+  let baseUsers = state.portalUsers && state.portalUsers.length ? state.portalUsers : [];
+  if (!baseUsers.length) {
+    baseUsers = usersCache || (state.presenceUsersCache ? state.presenceUsersCache.users : []);
+  }
+
+  const data = snapshot || state.presenceData || { users: [] };
+  const presenceById = new Map();
+  (data.users || []).forEach(p => {
+    const id = getPresenceUserId(p) || p.id;
+    if (id) presenceById.set(String(id), p);
+  });
+
+  const onlineRows = [];
+  const offlineRows = [];
+
+  baseUsers.forEach(u => {
+    const id = getPresenceUserId(u);
+    if (!id) return;
+    const p = presenceById.get(String(id)) || {};
+    const name = getPresenceUserLabel(u) || id;
+
+    const row = document.createElement("div");
+    row.className = "presence-user";
+    row.dataset.userId = id;
+
+    const dot = document.createElement("span");
+    const isOnline = !!p.online;
+    const isIdle = !!p.idle;
+    dot.className = "presence-dot " + (isOnline ? (isIdle ? "idle" : "online") : "offline");
+
+    const nm = document.createElement("span");
+    nm.className = "presence-name";
+    nm.textContent = name;
+
+    const st = document.createElement("span");
+    st.className = "presence-status";
+    let statusText = p.status || "";
+    if (statusText === "Online") statusText = ""; // default, keep list clean
+    if (!isOnline) {
+      const last = p.lastSeen || "";
+      if (last) {
+        statusText = (statusText ? statusText + " · " : "") + "last seen " + formatTimeAgo(last);
+      } else {
+        statusText = statusText || "last seen unknown";
+      }
+    }
+    st.textContent = statusText;
+
+    row.append(dot, nm, st);
+
+    if (typeof onUserClick === "function") {
+      row.addEventListener("click", () => onUserClick(id, name, p));
+    }
+
+    if (isOnline) {
+      onlineRows.push(row);
+    } else {
+      offlineRows.push(row);
+    }
+  });
+
+  // Online section
+  if (onlineRows.length) {
+    const header = document.createElement("div");
+    header.className = "presence-section-header";
+    header.textContent = `Online (${onlineRows.length})`;
+    container.appendChild(header);
+    onlineRows.forEach(r => container.appendChild(r));
+  }
+
+  // Separator / Offline
+  if (offlineRows.length) {
+    if (onlineRows.length) {
+      const sep = document.createElement("div");
+      sep.className = "presence-divider";
+      container.appendChild(sep);
+    }
+    const header = document.createElement("div");
+    header.className = "presence-section-header";
+    header.textContent = `Offline (${offlineRows.length})`;
+    container.appendChild(header);
+    offlineRows.forEach(r => container.appendChild(r));
+  }
+
+  if (!baseUsers.length) {
+    const empty = document.createElement("div");
+    empty.className = "presence-empty";
+    empty.style.padding = "0.5rem";
+    empty.style.color = "var(--muted)";
+    empty.textContent = "No users yet.";
+    container.appendChild(empty);
+  }
+}
+
+/**
+ * Render the Messages inbox (past + recent DM conversations) into the given container.
+ * Used when the "Messages" tab is active. Supports opening threads and per-convo clear (archive/delete).
+ */
+function renderPresenceInbox(container, recentDms, cache, snap) {
+  if (!container) return;
+  container.innerHTML = '';
+
+  const recent = Array.isArray(recentDms) ? recentDms : [];
+  if (!recent.length) {
+    const empty = document.createElement('div');
+    empty.className = 'presence-empty';
+    empty.style.padding = '0.5rem';
+    empty.style.color = 'var(--muted)';
+    empty.textContent = 'No messages yet. Send or receive DMs and they will appear here (with delete option).';
+    container.appendChild(empty);
+    return;
+  }
+
+  const head = document.createElement('div');
+  head.className = 'presence-section-header';
+  head.textContent = 'Recent messages';
+  container.appendChild(head);
+
+  // Group latest per other party
+  const byOther = new Map();
+  const meIdStr = String(state.currentUserId || '');
+  for (const m of recent) {
+    const f = m.from != null ? String(m.from) : '';
+    const t = m.to != null ? String(m.to) : '';
+    const other = (f === meIdStr) ? t : f;
+    if (!other || other === meIdStr) continue;
+    if (!byOther.has(other)) byOther.set(other, m);
+  }
+
+  byOther.forEach((m, otherId) => {
+    const row = document.createElement('div');
+    row.className = 'presence-recent-row';
+
+    let disp = otherId;
+    const hit = cache.find(u => getPresenceUserId(u) === otherId) ||
+                (snap.users || []).find(u => String(u.id || u.ID) === otherId);
+    if (hit) disp = getPresenceUserLabel(hit) || disp;
+
+    const who = document.createElement('span');
+    who.className = 'presence-recent-who';
+    who.textContent = disp;
+
+    const snip = document.createElement('span');
+    snip.className = 'presence-recent-snip';
+    const rawTxt = (m.text || '').trim();
+    const short = rawTxt.length > 48 ? rawTxt.slice(0, 48) + '…' : rawTxt;
+    snip.textContent = (String(m.from) === meIdStr ? 'you: ' : '') + short;
+
+    const tm = document.createElement('span');
+    tm.className = 'presence-recent-time';
+    tm.textContent = m.ts ? formatTimeAgo(m.ts) : '';
+
+    const clr = document.createElement('button');
+    clr.type = 'button';
+    clr.className = 'btn btn-ghost btn-tiny presence-clear-btn';
+    clr.textContent = '×';
+    clr.title = 'Clear / archive this conversation';
+    clr.addEventListener('click', (ev) => {
+      ev.stopImmediatePropagation();
+      clearPresenceConversation(otherId);
+    });
+
+    row.append(who, snip, tm, clr);
+    row.addEventListener('click', () => {
+      openPresenceDMThread(otherId, disp);
+    });
+
+    container.appendChild(row);
+  });
+}
+
+/**
+ * Render the DM conversation log with rich features:
+ * - reply context (quoted previous message in smaller font)
+ * - read receipts on my sent messages
+ * - click to reply to any message
+ */
+function renderDMLog(logEl, msgs) {
+  if (!logEl) return;
+  logEl.innerHTML = '';
+  if (!msgs || !msgs.length) {
+    const empty = document.createElement("div");
+    empty.className = "presence-empty";
+    empty.textContent = "No messages yet. Say hi!";
+    logEl.appendChild(empty);
+    return;
+  }
+  const msgByTs = new Map();
+  msgs.forEach(m => { if (m && m.ts) msgByTs.set(String(m.ts), m); });
+
+  msgs.forEach(m => {
+    const div = document.createElement("div");
+    const isMe = m.from === state.currentUserId;
+    div.className = "presence-msg " + (isMe ? "me" : "");
+
+    // Reply context (quoted message) in smaller font
+    // Prefer embedded reply_text (sent with the reply) so it always shows even for fresh sends or trimmed history.
+    if (m.reply_to || m.reply_text) {
+      let short = m.reply_text || "previous message";
+      if (!m.reply_text && m.reply_to) {
+        const key = String(m.reply_to);
+        if (msgByTs.has(key)) {
+          const orig = msgByTs.get(key);
+          short = (orig.text || "").slice(0, 70) + ((orig.text || "").length > 70 ? "…" : "");
+        }
+      }
+      const ctx = document.createElement("div");
+      ctx.className = "presence-reply-context";
+      ctx.innerHTML = `<span class="presence-reply-label">Replying to:</span> ${escapeHtml(short)}`;
+      div.appendChild(ctx);
+    }
+
+    // Main message text
+    const textEl = document.createElement("div");
+    textEl.className = "presence-msg-text";
+    textEl.textContent = m.text || "";
+    div.appendChild(textEl);
+
+    // Read receipt for my sent messages
+    if (isMe && m.read) {
+      const receipt = document.createElement("span");
+      receipt.className = "presence-read-receipt";
+      receipt.textContent = "read";
+      div.appendChild(receipt);
+    }
+
+    // Click anywhere on the bubble to reply to this message
+    div.addEventListener("click", () => {
+      setPresenceReplyTo(m);
+    });
+
+    logEl.appendChild(div);
+  });
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function setPresenceReplyTo(msg) {
+  presenceCurrentReplyTo = msg;
+  let preview = $("#presence-dm-reply-preview");
+  if (!preview) {
+    preview = document.createElement("div");
+    preview.id = "presence-dm-reply-preview";
+    preview.className = "presence-reply-preview";
+    const dm = $("#presence-dm");
+    const inputDiv = dm ? dm.querySelector(".presence-dm-input") : null;
+    if (inputDiv && inputDiv.parentNode) {
+      inputDiv.parentNode.insertBefore(preview, inputDiv);
+    }
+  }
+  const short = (msg.text || "").slice(0, 50) + ((msg.text || "").length > 50 ? "…" : "");
+  preview.innerHTML = `Replying to: <span>${escapeHtml(short)}</span> <button type="button" class="btn btn-ghost btn-tiny">×</button>`;
+  const cancel = preview.querySelector("button");
+  if (cancel) cancel.onclick = clearPresenceReplyTo;
+}
+
+function clearPresenceReplyTo() {
+  presenceCurrentReplyTo = null;
+  const preview = $("#presence-dm-reply-preview");
+  if (preview && preview.parentNode) preview.parentNode.removeChild(preview);
+}
+
+function insertEmoji(textarea, emoji) {
+  if (!textarea) return;
+  const start = textarea.selectionStart || textarea.value.length;
+  const end = textarea.selectionEnd || textarea.value.length;
+  const val = textarea.value;
+  textarea.value = val.substring(0, start) + emoji + val.substring(end);
+  const pos = start + emoji.length;
+  textarea.selectionStart = textarea.selectionEnd = pos;
+  textarea.focus();
+}
+
+function showEmojiPicker() {
+  let picker = $("#presence-emoji-picker");
+  if (picker) { picker.remove(); return; }
+  picker = document.createElement("div");
+  picker.id = "presence-emoji-picker";
+  picker.className = "presence-emoji-picker";
+  const emojis = ["😀","😃","😄","😁","😆","😅","😂","🤣","😊","😇","🙂","🙃","😉","😌","😍","🥰","😘","😗","😙","😚","😋","😛","😝","😜","🤪","🤨","🧐","🤓","😎","🤩","🥳","😏","😒","😞","😔","😟","😕","🙁","☹️","😣","😖","😫","😩","🥺","😢","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🤗","🤔","🤭","🤫","🤥","😶","😐","😑","😬","🙄","😯","😦","😧","😮","😲","🥱","😴","🤤","😪","😵","🤐","🥴","🤢","🤮","🤧","😷","🤒","🤕","🤑","🤠","😈","👿","👹","👺","🤡","💩","👻","💀","☠️","👽","👾","🤖","🎃","😺","😸","😹","😻","😼","😽","🙀","😿","😾","🙈","🙉","🙊","💋","💌","💘","💝","💖","💗","💓","💞","💕","💟","❣️","💔","❤️","🧡","💛","💚","💙","💜","🤎","🖤","🤍","💯","💢","💥","💫","💦","💨","🕳️","💣","💬","👁️‍🗨️","🗨️","🗯️","💭","💤","👍","👎","👌","✌️","🤞","🤟","🤘","🤙","👈","👉","👆","👇","☝️","✋","🤚","🖐️","🖖","👋","🤙","💪","🦾","🦿","🦵","🦶","👂","🦻","👃","🧠","🦷","🦴","👀","👁️","👅","👄","💋"];
+  emojis.forEach(em => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = em;
+    b.className = "presence-emoji-btn";
+    b.onclick = (e) => {
+      e.stopPropagation();
+      const ta = $("#presence-dm-text");
+      insertEmoji(ta, em);
+      picker.remove();
+    };
+    picker.appendChild(b);
+  });
+  const inputDiv = $("#presence-dm").querySelector(".presence-dm-input");
+  if (inputDiv) {
+    inputDiv.style.position = "relative";
+    inputDiv.appendChild(picker);
+  }
+}
+
+function enhanceDMInputForCurrentThread() {
+  const dm = $("#presence-dm");
+  if (!dm) return;
+  const inputDiv = dm.querySelector(".presence-dm-input");
+  if (!inputDiv || inputDiv.dataset.enhancedDm) return;
+  inputDiv.dataset.enhancedDm = "1";
+  inputDiv.style.position = "relative";
+  // Emoji selector button
+  const emBtn = document.createElement("button");
+  emBtn.type = "button";
+  emBtn.className = "btn btn-ghost btn-tiny";
+  emBtn.textContent = "😊";
+  emBtn.title = "Insert emoji";
+  const send = inputDiv.querySelector("#presence-dm-send");
+  if (send) {
+    inputDiv.insertBefore(emBtn, send);
+  } else {
+    inputDiv.appendChild(emBtn);
+  }
+  emBtn.addEventListener("click", showEmojiPicker);
+  // Reply preview is created on-demand by setPresenceReplyTo
+}
+
+function renderPresenceAdminTab(container, snapshot) {
+  if (!container) return;
+  container.innerHTML = "";
+  const data = snapshot || state.presenceData || {};
+  const people = Array.isArray(data.users) ? data.users : [];
+
+  const list = document.createElement("div");
+  list.className = "presence-admin-list";
+
+  people.forEach(p => {
+    if (!p.admin) return; // only present for kenc and when the server included it
+    const row = document.createElement("div");
+    row.className = "presence-admin-row";
+    const name = p.displayName || p.id;
+    let html = `<strong>${escapeHtml(name)}</strong>`;
+    if (p.admin.lastCrmMinutesAgo != null) html += ` · Last CRM (proxy): ${p.admin.lastCrmMinutesAgo}m`;
+    if (p.admin.lastDashMinutesAgo != null) html += ` · Last dashboard: ${p.admin.lastDashMinutesAgo}m`;
+    row.innerHTML = html;
+    list.appendChild(row);
+  });
+
+  if (!list.children.length) {
+    const note = document.createElement("div");
+    note.textContent = "No additional admin activity recorded yet.";
+    note.style.color = "var(--muted)";
+    list.appendChild(note);
+  }
+
+  container.appendChild(list);
+}
+
+let presenceModalBound = false;
+let presenceCurrentReplyTo = null;  // for quoting/replying to a specific previous message
+let presenceHeaderPollTimer = null;
+
+async function openPresenceModal() {
+  const modal = $("#presence-modal");
+  if (!modal) return;
+
+  state.presenceModalOpen = true;
+  modal.classList.remove("hidden");
+
+  // Immediate render with whatever cache/snapshot we have (from login priming or prior).
+  // This makes the button feel instant; no await on full CRM loadPortalUsers or first fetch.
+  // The async ensure below will refresh the list + snap and re-render.
+  const cachedUsers = state.presenceUsersCache ? state.presenceUsersCache.users : null;
+  renderPresenceModal(state.presenceData, cachedUsers);
+
+  // Background refresh (non-blocking for open)
+  ensurePresenceUsersCache().then(async (users) => {
+    const snap = await fetchPresenceSnapshot();
+    renderPresenceModal(snap, users);
+    updatePresenceHeaderIndicators(snap);
+    startPresencePolling();
+    startPresenceHeartbeats();
+  }).catch(() => {});
+
+  if (!presenceModalBound) {
+    presenceModalBound = true;
+    modal.querySelectorAll("[data-presence-dismiss]").forEach(el => {
+      el.addEventListener("click", closePresenceModal);
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !modal.classList.contains("hidden")) closePresenceModal();
+    });
+
+    // (pin-to-tile functionality removed per request -- feature is popup only via the header button)
+
+    // DM back button
+    const dmBack = $("#presence-dm-back");
+    if (dmBack) dmBack.addEventListener("click", () => {
+      state.presenceSelectedUserId = null;
+      clearPresenceReplyTo();
+      const snap = state.presenceData;
+      const users = state.presenceUsersCache ? state.presenceUsersCache.users : [];
+      renderPresenceModal(snap, users);
+    });
+
+    const dmSend = $("#presence-dm-send");
+    if (dmSend) dmSend.addEventListener("click", sendPresenceDM);
+
+    const dmTa = $("#presence-dm-text");
+    if (dmTa) dmTa.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendPresenceDM();
+      }
+    });
+  }
+
+  setupPresenceIdleAndAutoLogout();
+}
+
+// (pin-to-tile UI removed; no updatePresencePinToggleLabel)
+
+function closePresenceModal() {
+  const modal = $("#presence-modal");
+  if (modal) modal.classList.add("hidden");
+  state.presenceModalOpen = false;
+  state.presenceSelectedUserId = null;
+  stopPresencePolling();
+  // Keep heartbeats running if the tile is visible
+  if (!state.hasPresenceTile) {
+    // optional: stopHeartbeats if we want to be strict, but heartbeats are cheap and useful for presence
+  }
+  const dm = $("#presence-dm");
+  if (dm) dm.classList.add("hidden");
+  clearPresenceReplyTo();
+  // Reset admin area to hidden by default on close
+  const adminEl = $("#presence-admin");
+  if (adminEl) adminEl.classList.add("hidden");
+}
+
+async function sendPresenceDM() {
+  const ta = $("#presence-dm-text");
+  if (!ta || !state.presenceSelectedUserId) return;
+  const text = (ta.value || "").trim();
+  if (!text) return;
+  try {
+    const body = { to: state.presenceSelectedUserId, text };
+    if (presenceCurrentReplyTo) {
+      body.reply_to = presenceCurrentReplyTo.ts;
+      body.reply_text = (presenceCurrentReplyTo.text || "").slice(0, 100);
+    }
+    const res = await presenceFetch(`/api/presence/dm`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      let errMsg = `HTTP ${res.status}`;
+      try {
+        const d = await res.json();
+        if (d && d.error) errMsg = d.error;
+        else if (d && d.detail) errMsg = d.detail;
+      } catch (_) {}
+      throw new Error(errMsg);
+    }
+    ta.value = "";
+    clearPresenceReplyTo();
+    // Refresh the thread (re-render modal + explicitly refresh DM log with rich features)
+    const snap = await fetchPresenceSnapshot();
+    const users = state.presenceUsersCache ? state.presenceUsersCache.users : [];
+    renderPresenceModal(snap, users);
+    // Re-load the current DM log so new message + reply contexts + read receipts appear immediately
+    if (state.presenceSelectedUserId) {
+      presenceFetch(`/api/presence/dm?with=${encodeURIComponent(state.presenceSelectedUserId)}`)
+        .then(r => r.json())
+        .then(d => {
+          const log = $("#presence-dm-log");
+          if (log) renderDMLog(log, (d && d.messages) || []);
+          enhanceDMInputForCurrentThread();
+        })
+        .catch(() => {});
+    }
+  } catch (e) {
+    try { showToast(`Unable to send message: ${e && e.message ? e.message : 'server error'}`, true); } catch {}
+  }
+}
+
+async function clearPresenceConversation(otherUserId, onDone) {
+  if (!otherUserId) return;
+  try {
+    const res = await presenceFetch(`/api/presence/dm?with=${encodeURIComponent(otherUserId)}`, { method: "DELETE" });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.error || "Failed to clear");
+    }
+    // clear local read marker too
+    try { delete presenceLastRead[String(otherUserId)]; savePresenceLastRead(); } catch {}
+    if (typeof onDone === "function") onDone();
+    else {
+      // default: refresh current modal view
+      const snap = await fetchPresenceSnapshot();
+      const users = state.presenceUsersCache ? state.presenceUsersCache.users : [];
+      renderPresenceModal(snap, users);
+      updatePresenceHeaderIndicators(snap);
+    }
+  } catch (e) {
+    try { showToast("Could not clear conversation", true); } catch {}
+  }
+}
+
+function openPresenceDMThread(id, name) {
+  const dmEl = $("#presence-dm");
+  if (!dmEl || !id) return;
+  state.presenceSelectedUserId = id;
+  markPresenceDMRead(id);
+  updatePresenceHeaderIndicators(state.presenceData);
+  dmEl.classList.remove("hidden");
+  $("#presence-dm-with").textContent = `Chat with ${name || id}`;
+
+  // Ensure a Clear button in the thread header (for archive/delete of history)
+  let clr = $("#presence-dm-clear");
+  if (!clr) {
+    clr = document.createElement("button");
+    clr.id = "presence-dm-clear";
+    clr.type = "button";
+    clr.className = "btn btn-ghost btn-small";
+    clr.textContent = "Clear";
+    clr.style.marginLeft = "auto";
+    const hdr = dmEl.querySelector(".presence-dm-header");
+    if (hdr) hdr.appendChild(clr);
+  }
+  clr.onclick = () => {
+    if (!state.presenceSelectedUserId) return;
+    if (!confirm("Clear this conversation history?")) return;
+    clearPresenceConversation(state.presenceSelectedUserId, () => {
+      state.presenceSelectedUserId = null;
+      const s = state.presenceData;
+      const us = state.presenceUsersCache ? state.presenceUsersCache.users : [];
+      renderPresenceModal(s, us);
+    });
+  };
+
+  $("#presence-dm-log").innerHTML = "<div class=\"presence-loading\">Loading…</div>";
+  // Clear any stale reply when (re)opening a thread
+  clearPresenceReplyTo();
+  presenceFetch(`/api/presence/dm?with=${encodeURIComponent(id)}`)
+    .then(async (res) => {
+      if (!res.ok) {
+        let errMsg = `HTTP ${res.status}`;
+        try {
+          const d = await res.json();
+          if (d && d.error) errMsg = d.error;
+          else if (d && d.detail) errMsg = d.detail;
+        } catch (_) {}
+        throw new Error(errMsg);
+      }
+      return res.json();
+    })
+    .then(d => {
+      const log = $("#presence-dm-log");
+      const msgs = (d && d.messages) || [];
+      renderDMLog(log, msgs);
+      enhanceDMInputForCurrentThread();
+    })
+    .catch((err) => {
+      const msg = (err && err.message) ? err.message : 'server error';
+      $("#presence-dm-log").innerHTML = `<div class=\"presence-empty\">Could not load messages: ${escapeHtml ? escapeHtml(msg) : msg}</div>`;
+    });
+}
+
+function renderPresenceModal(snapshot = null, usersCache = null) {
+  const listEl = $("#presence-list");
+  const myEl = $("#presence-my-status");
+  const dmEl = $("#presence-dm");
+  const adminEl = $("#presence-admin");
+  const adminToggle = $("#presence-admin-toggle");
+  if (!listEl || !myEl) return;
+
+  const snap = snapshot || state.presenceData || { users: [] };
+  const cache = usersCache || (state.presenceUsersCache ? state.presenceUsersCache.users : []);
+
+  if (!state.presenceTab) state.presenceTab = 'team';
+
+  // Ensure DM thread is hidden unless we have a selection (supports back button + re-renders)
+  if (dmEl) {
+    if (!state.presenceSelectedUserId) dmEl.classList.add("hidden");
+  }
+
+  // My status picker (top)
+  const me = (snap.me || {});
+  const myStatus = me.status || (snap.users || []).find(u => u.id === state.currentUserId)?.status || "";
+  renderPresenceStatusPicker(myEl, myStatus, (newStatus) => {
+    // After save, re-fetch and re-render
+    fetchPresenceSnapshot().then(s => renderPresenceModal(s, cache));
+  });
+
+  // Tabs (Team roster / Messages inbox). Wire clicks and active state.
+  const tabsContainer = $("#presence-tabs");
+  const activeTab = state.presenceTab || 'team';
+  if (tabsContainer) {
+    tabsContainer.querySelectorAll('.presence-tab').forEach(btn => {
+      const t = btn.dataset.tab || 'team';
+      btn.classList.toggle('active', t === activeTab);
+      if (!btn.dataset.tabBound) {
+        btn.dataset.tabBound = '1';
+        btn.addEventListener('click', () => {
+          state.presenceTab = t;
+          const s = state.presenceData || snap;
+          const c = cache || (state.presenceUsersCache ? state.presenceUsersCache.users : []);
+          renderPresenceModal(s, c);
+        });
+      }
+    });
+  }
+
+  // Clear any stale non-tab recent section from previous impl
+  const priorRecent = $("#presence-recent");
+  if (priorRecent && priorRecent.parentNode) priorRecent.parentNode.removeChild(priorRecent);
+
+  if (activeTab === 'messages') {
+    // Messages tab: dedicated inbox of past/recent DMs with delete/archive
+    listEl.innerHTML = '';
+    const recentDms = Array.isArray(snap.myRecentDms) ? snap.myRecentDms : [];
+    renderPresenceInbox(listEl, recentDms, cache, snap);
+  } else {
+    // Team tab: the user roster (online/offline + last seen)
+    renderPresenceUserList(listEl, snap, cache, (id, name, p) => {
+      // Open DM thread for this user (uses shared helper which wires Clear too)
+      openPresenceDMThread(id, name);
+    });
+  }
+
+  // Admin area (kenc only): hidden by default, toggleable via button that says "Admin" when hidden.
+  if (adminEl && adminToggle) {
+    const isKenc = (state.currentUserEmail || "").toLowerCase() === "kenc@vanguardadj.com";
+    const hasAdminData = snap && snap.users && snap.users.some(u => u.admin);
+    const onTeamTab = activeTab === 'team';
+    if (isKenc && hasAdminData && onTeamTab) {
+      adminToggle.classList.remove("hidden");
+      const isVisible = !adminEl.classList.contains("hidden");
+      adminToggle.textContent = isVisible ? "Hide Admin" : "Admin";
+
+      // Bind toggle once (safe across re-renders)
+      if (!adminToggle.dataset.adminBound) {
+        adminToggle.dataset.adminBound = "1";
+        adminToggle.addEventListener("click", () => {
+          if (adminEl.classList.contains("hidden")) {
+            adminEl.classList.remove("hidden");
+            if (!adminEl.dataset.rendered) {
+              renderPresenceAdminTab(adminEl, snap);
+              adminEl.dataset.rendered = "1";
+            }
+            adminToggle.textContent = "Hide Admin";
+          } else {
+            adminEl.classList.add("hidden");
+            adminToggle.textContent = "Admin";
+          }
+        });
+      }
+
+      // If currently visible (user had it open), refresh the content on re-render
+      if (isVisible) {
+        renderPresenceAdminTab(adminEl, snap);
+      }
+    } else {
+      adminToggle.classList.add("hidden");
+      adminEl.classList.add("hidden");
+    }
+  }
+
+  // (no pin toggle label update -- feature removed)
+}
+
+function renderPresenceTileCompact(snapshot = null) {
+  // The tile body is created by the mount / renderPresenceTile logic below.
+  // This function just updates the inner list when we have fresh data.
+  const body = $("#presence-tile-body");
+  if (!body) return;
+  const snap = snapshot || state.presenceData || { users: [] };
+  const users = (snap.users || []).slice(0, 12); // keep the compact view small
+
+  body.innerHTML = "";
+  const list = document.createElement("div");
+  list.className = "presence-list-compact";
+
+  users.forEach(u => {
+    const row = document.createElement("div");
+    row.className = "presence-user";
+    const dot = document.createElement("span");
+    dot.className = "presence-dot " + (u.online ? (u.idle ? "idle" : "online") : "offline");
+    const nm = document.createElement("span");
+    nm.textContent = u.displayName || u.id || "";
+    nm.style.marginLeft = "0.35rem";
+    const st = document.createElement("span");
+    st.className = "presence-status";
+    st.style.fontSize = "0.7rem";
+    st.textContent = u.status ? (" · " + u.status) : "";
+    row.append(dot, nm, st);
+    list.appendChild(row);
+  });
+
+  if (!users.length) {
+    const empty = document.createElement("div");
+    empty.style.color = "var(--muted)";
+    empty.style.fontSize = "0.75rem";
+    empty.textContent = "No team data yet.";
+    body.appendChild(empty);
+    return;
+  }
+
+  body.appendChild(list);
+
+  // Optional: click the tile body to open the full modal
+  body.onclick = () => openPresenceModal();
+}
+
+// Called from mount logic (similar to renderFeedTile / renderTasksTile)
+function renderPresenceTile() {
+  const tileId = "tile-presence";
+  let tile = document.querySelector(`[data-tile-id="${tileId}"]`);
+  if (!tile) {
+    tile = document.createElement("section");
+    tile.className = "dashboard-tile panel presence-panel";
+    tile.dataset.tileId = tileId;
+    tile.dataset.tileLabel = "Team";
+    tile.innerHTML = `
+      <div class="panel-header">
+        <span class="panel-sub">Team presence</span>
+      </div>
+      <div id="presence-tile-body" class="presence-tile-body"></div>
+    `;
+    // Append initially to panel row (will be moved by mount if needed)
+    $("#dashboard-panel-row")?.appendChild(tile);
+    bindTileChrome(tile, tileId);
+  }
+  // Initial compact render (will be refreshed by polling)
+  renderPresenceTileCompact();
+  return tile;
+}
+
+function updatePresenceInstalledFlagFromLayout() {
+  // Simple persistence: if "tile-presence" is present in the current order and marked pinnedTop, consider it installed.
+  const order = (state.tileLayout && state.tileLayout.order) || [];
+  const pinned = (state.tileLayout && state.tileLayout.pinned) || {};
+  state.hasPresenceTile = order.includes("tile-presence") && !!pinned["tile-presence"];
+}
+
+// Extend the existing mount to support the presence tile in the top area when hasPresenceTile.
+const _origMountDashboardTiles = mountDashboardTiles;
+mountDashboardTiles = function mountDashboardTiles() {
+  // First let the normal logic run (it will handle feed/tasks and regular tiles)
+  _origMountDashboardTiles.apply(this, arguments);
+
+  // After the normal mount, if the user has the presence tile "installed", make sure it is in the top panel.
+  if (!state.hasPresenceTile) return;
+
+  const panelRow = $("#dashboard-panel-row");
+  const pinnedRoot = $("#dashboard-tiles-pinned");
+  if (!panelRow) return;
+
+  let pTile = document.querySelector('[data-tile-id="tile-presence"]');
+  if (!pTile) {
+    pTile = renderPresenceTile(); // creates and appends
+  }
+
+  // Move it into the top area (after the existing pinned items or according to order)
+  // For simplicity we append it to the panel row (the recent pinnedToRender logic already handles ordering of feed/tasks;
+  // presence will sit at the end of the top row or can be reordered via the normal drag if we allow it).
+  if (pTile.parentNode !== panelRow) {
+    panelRow.appendChild(pTile);
+  }
+
+  // Apply basic panel classes so it participates in the flex row sizing
+  pTile.classList.add("panel-tile");
+  // Optional: give it a slot class if you want fixed left/middle/right ordering among the three
+  // (left feed, middle presence, right tasks) – can be driven by order in pinnedToRender later.
+};
+
+// Make sure the presence tile participates in the "pinned" decision if the user has it.
+const _origIsTilePinnedToTop = isTilePinnedToTop;
+isTilePinnedToTop = function isTilePinnedToTop(tileId) {
+  if (tileId === "tile-presence") return !!state.hasPresenceTile;
+  return _origIsTilePinnedToTop.apply(this, arguments);
+};
+
+const _origSetTilePinnedToTop = setTilePinnedToTop;
+setTilePinnedToTop = function setTilePinnedToTop(tileId, pinned) {
+  if (tileId === "tile-presence") {
+    state.hasPresenceTile = !!pinned;
+    // Persist the choice (the mount will pick it up via updatePresenceInstalledFlagFromLayout on next load)
+    try {
+      const layout = state.tileLayout || {};
+      if (!layout.pinned) layout.pinned = {};
+      layout.pinned["tile-presence"] = !!pinned;
+      if (!layout.order.includes("tile-presence")) layout.order.unshift("tile-presence");
+      state.tileLayout = layout;
+    } catch {}
+    return;
+  }
+  return _origSetTilePinnedToTop.apply(this, arguments);
+};
+
+// When loading layout after login, pick up a previously pinned presence tile
+const _origEnsureTileLayout = ensureTileLayout;
+ensureTileLayout = function ensureTileLayout() {
+  _origEnsureTileLayout.apply(this, arguments);
+  updatePresenceInstalledFlagFromLayout();
+};
+
+// Wire the header button (called from init / bind after login)
+function bindPresenceButton() {
+  const btn = $("#presence-btn");
+  if (!btn || btn.dataset.bound) return;
+  btn.dataset.bound = "1";
+  btn.addEventListener("click", () => {
+    openPresenceModal();
+  });
+}
+
+// Called from the post-login / refresh path (similar to bindAddTileModal)
+function ensurePresenceOnLogin() {
+  // Prime the user list cache (the "initial poll")
+  ensurePresenceUsersCache().catch(() => {});
+  loadPresenceLastRead();
+  // Tile support removed for now (pure popup via header button); force flag off
+  state.hasPresenceTile = false;
+  // Start light heartbeats so we appear online
+  startPresenceHeartbeats();
+  // Optimistic: mark self as online on the header icon immediately (we just heartbeated).
+  // Real snapshot below (and the 800ms follow-up in startPresenceHeartbeats) will confirm with server data.
+  const _btn = $("#presence-btn");
+  if (_btn) _btn.classList.add("is-online");
+  // If the user previously had the tile pinned, render it
+  updatePresenceInstalledFlagFromLayout();
+  if (state.hasPresenceTile) {
+    // The mountDashboardTiles (called elsewhere) will pick it up.
+    // We also render a first compact view in case the mount hasn't run yet.
+    setTimeout(() => {
+      fetchPresenceSnapshot().then(s => {
+        renderPresenceTileCompact(s);
+        updatePresenceHeaderIndicators(s);
+      });
+    }, 50);
+  }
+  // Wire the header button
+  bindPresenceButton();
+  // Immediate badge + self-online + waiting indicators update
+  fetchPresenceSnapshot().then(s => updatePresenceHeaderIndicators(s)).catch(() => {});
+  // Light periodic poll for header indicators (badge, self-online dot, waiting flash) so they are live
+  // even without opening the modal. (Full poll only when modal open.)
+  if (presenceHeaderPollTimer) clearInterval(presenceHeaderPollTimer);
+  presenceHeaderPollTimer = setInterval(() => {
+    fetchPresenceSnapshot().then(s => updatePresenceHeaderIndicators(s)).catch(() => {});
+  }, 30000);
+  // Idle / auto-logout safety net
+  setupPresenceIdleAndAutoLogout();
+}
+
+// Expose a tiny helper so other code (e.g. after a successful login) can kick the feature
+window.__ensurePresenceOnLogin = ensurePresenceOnLogin;
+
 function bindCreateOpportunityModal() {
   const modal = $("#create-opportunity-modal");
   const form = $("#create-opportunity-form");
@@ -7698,6 +9701,8 @@ function closeNewTaskModal() {
   const modal = $("#task-modal");
   if (modal) modal.classList.add("hidden");
   setTaskModalError("");
+  // Re-eval header marquee now that a popup is closed (may need to show if queued >8s)
+  setTimeout(updateMutationSyncStatus, 30);
 }
 
 function clearNewTaskOpportunitySelection() {
@@ -7729,12 +9734,35 @@ function setNewTaskOpportunitySelection(id, title) {
   }
 }
 
-async function loadTaskCategories() {
+async function loadTaskCategories({ force = false } = {}) {
+  // Prefer in-memory cache
+  if (state.taskCategories.length && !force) return;
+
+  // Restore from localStorage cache (survives reloads / offline). We only hit the CRM server
+  // to (re)validate the list on explicit login (see login paths).
+  if (!state.taskCategories.length) {
+    try {
+      const cached = localStorage.getItem(TASK_CATEGORIES_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length) {
+          state.taskCategories = parsed;
+          if (!force) return;
+        }
+      }
+    } catch {}
+  }
+
+  if (!force && state.taskCategories.length) return;
+
   try {
     const data = await api("/api/2.0/crm/task/category");
     state.taskCategories = unwrap(data);
+    try {
+      localStorage.setItem(TASK_CATEGORIES_KEY, JSON.stringify(state.taskCategories));
+    } catch {}
   } catch {
-    state.taskCategories = [];
+    if (!state.taskCategories.length) state.taskCategories = [];
   }
 }
 
@@ -9082,13 +11110,26 @@ async function fetchOpportunityPreviewData(oppId) {
   ]);
 
   const opp = await fetchOpportunityForUpdate(id);
-  const [customFieldValues, history, tags] = await Promise.all([
+  const [customFieldValues, history, tags, documents] = await Promise.all([
     fetchOpportunityCustomFieldValues(id),
     fetchAllOpportunityHistory(id),
     loadDealEditTags(opp),
+    fetchOpportunityDocuments(id),
   ]);
 
-  return { opp, customFieldValues, history, tags, oppId: id };
+  return { opp, customFieldValues, history, tags, documents, oppId: id };
+}
+
+async function fetchOpportunityDocuments(oppId) {
+  const id = Number(oppId);
+  if (!Number.isFinite(id) || id <= 0) return [];
+  try {
+    // CRM opportunity attached files endpoint (proxy will forward)
+    const data = await api(`/api/2.0/crm/opportunity/${id}/files`);
+    return unwrap(data);
+  } catch {
+    return [];
+  }
 }
 
 function appendPreviewSection(container, title, renderContent) {
@@ -9126,21 +11167,87 @@ function renderPreviewFieldGrid(parent, rows) {
   parent.appendChild(dl);
 }
 
+/** Make phone numbers (tel:) and emails (mailto:) clickable inside preview modals (and similar content). */
+function linkifyPhonesAndEmails(container) {
+  if (!container) return;
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
+  const textNodes = [];
+  let node;
+  while ((node = walker.nextNode())) textNodes.push(node);
+  for (const tnode of textNodes) {
+    let txt = tnode.textContent || "";
+    if (!txt || (!/@/.test(txt) && !/\d/.test(txt))) continue;
+    const parent = tnode.parentNode;
+    const parentText = (parent.textContent || "").toLowerCase();
+    const ancestor = parent.closest ? parent.closest(".opp-preview-documents, .opp-preview-field, .opp-preview-history-item") : null;
+    const contextText = ancestor ? ancestor.textContent.toLowerCase() : parentText;
+    // Skip phones in obvious non-telephone number fields (address, claim number, policy number, ids, docs, etc.)
+    // and any content inside the documents tab (doc titles, file ids, links etc. often contain digit sequences).
+    let skipPhone = /address|claim|policy|document|file|ref|reference|number|id|doc|fileid|case|invoice|account|quote|estimate|report|serial|zip|postal|street/i.test(contextText) ||
+                    (parent.closest && parent.closest(".opp-preview-documents"));
+    if (!skipPhone && ancestor && ancestor.classList && ancestor.classList.contains("opp-preview-field")) {
+      // For field rows, only allow phone linking if the label indicates a phone-related field.
+      const labelEl = ancestor.querySelector("dt");
+      const labelText = (labelEl ? labelEl.textContent : ancestor.textContent || "").toLowerCase();
+      if (!/phone|tel|mobile|cell|fax|call|voice|pager|contact\s*(number|phone|tel|mobile)|phone\s*number/i.test(labelText)) {
+        skipPhone = true;
+      }
+    }
+    // Emails first (avoid phone overlap)
+    txt = txt.replace(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g, (m) => `<a href="mailto:${encodeURIComponent(m)}" class="preview-link">${m}</a>`);
+    if (!skipPhone) {
+      // Phones: keep display, sanitize for tel: (remove non-digits except leading +)
+      txt = txt.replace(/(\+?[\d\s().-]{7,}\d)/g, (m) => {
+        const clean = m.replace(/[^\d+]/g, "");
+        if (clean.length < 7) return m;
+        return `<a href="tel:${clean}" class="preview-link">${m}</a>`;
+      });
+    }
+    if (txt !== tnode.textContent) {
+      const wrap = document.createElement("span");
+      wrap.innerHTML = txt;
+      tnode.parentNode.replaceChild(wrap, tnode);
+    }
+  }
+}
+
 function renderOpportunityPreviewBody(data) {
   const body = $("#opp-preview-body");
   if (!body) return;
   body.innerHTML = "";
 
-  const { opp, customFieldValues, history, tags } = data;
+  const { opp, customFieldValues, history, tags, documents } = data;
   const standardRows = buildOpportunityPreviewStandardFields(opp, tags);
   const userRows = buildOpportunityPreviewUserFields(opp, customFieldValues);
   const description = String(opp.description ?? opp.Description ?? "").trim();
 
-  appendPreviewSection(body, "Deal fields", (section) => {
+  // Tabs at top of preview window
+  const tabs = document.createElement("div");
+  tabs.className = "opp-preview-tabs";
+  const tabDetails = document.createElement("button");
+  tabDetails.type = "button";
+  tabDetails.className = "opp-preview-tab active";
+  tabDetails.textContent = "Details";
+  tabDetails.dataset.tab = "details";
+  const tabDocs = document.createElement("button");
+  tabDocs.type = "button";
+  tabDocs.className = "opp-preview-tab";
+  tabDocs.textContent = "Documents";
+  tabDocs.dataset.tab = "documents";
+  tabs.appendChild(tabDetails);
+  tabs.appendChild(tabDocs);
+  body.appendChild(tabs);
+
+  // Details content
+  const detailsContent = document.createElement("div");
+  detailsContent.className = "opp-preview-tab-content";
+  detailsContent.dataset.tabContent = "details";
+
+  appendPreviewSection(detailsContent, "Deal fields", (section) => {
     renderPreviewFieldGrid(section, standardRows);
   });
 
-  appendPreviewSection(body, "Description", (section) => {
+  appendPreviewSection(detailsContent, "Description", (section) => {
     if (!description) {
       const p = document.createElement("p");
       p.className = "opp-preview-empty";
@@ -9154,11 +11261,11 @@ function renderOpportunityPreviewBody(data) {
     section.appendChild(p);
   });
 
-  appendPreviewSection(body, "User fields", (section) => {
+  appendPreviewSection(detailsContent, "User fields", (section) => {
     renderPreviewFieldGrid(section, userRows);
   });
 
-  appendPreviewSection(body, "History & notes", (section) => {
+  appendPreviewSection(detailsContent, "History & notes", (section) => {
     if (!history.length) {
       const p = document.createElement("p");
       p.className = "opp-preview-empty";
@@ -9173,6 +11280,77 @@ function renderOpportunityPreviewBody(data) {
     }
     section.appendChild(ul);
   });
+
+  body.appendChild(detailsContent);
+
+  // Documents tab content - actual tab showing list with download icons
+  const docsContent = document.createElement("div");
+  docsContent.className = "opp-preview-tab-content";
+  docsContent.dataset.tabContent = "documents";
+  docsContent.style.display = "none";
+
+  const docs = documents || [];
+  if (!docs.length) {
+    const p = document.createElement("p");
+    p.className = "opp-preview-empty";
+    p.textContent = "No documents attached to this deal";
+    docsContent.appendChild(p);
+  } else {
+    const ul = document.createElement("ul");
+    ul.className = "opp-preview-documents";
+    for (const d of docs) {
+      const li = document.createElement("li");
+      const fid = d.id ?? d.ID ?? d.fileId ?? d.FileId ?? "";
+      const base = (state.portalUrl || "").replace(/\/$/, "");
+
+      // View link (keep text same color as other text)
+      const a = document.createElement("a");
+      a.href = fid ? `${base}/Products/Files/DocEditor.aspx?fileid=${fid}` : "#";
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = d.title || d.Title || d.name || d.Name || "Document";
+      a.style.color = "inherit";
+      a.style.textDecoration = "none";
+      li.appendChild(a);
+
+      // Download button icon
+      if (fid) {
+        const dl = document.createElement("a");
+        dl.href = portalFileDownloadUrl ? portalFileDownloadUrl(fid) : `${base}/Products/Files/HttpHandlers/filehandler.ashx?action=download&fileid=${fid}`;
+        dl.title = "Download";
+        dl.setAttribute("aria-label", "Download document");
+        dl.setAttribute("download", "");
+        // Minimalistic download icon (chosen; see 3 examples below in comments)
+        dl.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
+        dl.style.marginLeft = '0.5em';
+        dl.style.textDecoration = 'none';
+        dl.style.fontSize = '0.9em';
+        dl.style.display = 'inline-flex';
+        dl.style.alignItems = 'center';
+        // 3 example minimalistic download/save document icons (stroke-based to match dashboard style):
+        // 1. (chosen) Classic down arrow into box: <svg ...><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        // 2. Simple arrow down: <svg ...><line x1="12" y1="3" x2="12" y2="21"/><polyline points="19 14 12 21 5 14"/></svg>
+        // 3. Disk save with arrow: <svg ...><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><line x1="7" y1="3" x2="7" y2="8"/></svg>
+        dl.target = '_blank';
+        dl.rel = 'noopener';
+        li.appendChild(dl);
+      }
+
+      ul.appendChild(li);
+    }
+    docsContent.appendChild(ul);
+  }
+
+  body.appendChild(docsContent);
+
+  // Tab switching
+  const activateTab = (tabName) => {
+    tabs.querySelectorAll('.opp-preview-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tabName));
+    detailsContent.style.display = tabName === 'details' ? '' : 'none';
+    docsContent.style.display = tabName === 'documents' ? '' : 'none';
+  };
+  tabDetails.addEventListener('click', () => activateTab('details'));
+  tabDocs.addEventListener('click', () => activateTab('documents'));
 }
 
 function setOpportunityPreviewCrmLink(oppId) {
@@ -9260,6 +11438,7 @@ async function openOpportunityPreviewModal(oppId, titleHint = "", group = null) 
     setOpportunityPreviewContext(id, data.opp, resolvedGroup);
     titleEl.textContent = data.opp.title || data.opp.Title || titleHint || `Opportunity #${id}`;
     renderOpportunityPreviewBody(data);
+    linkifyPhonesAndEmails(body);
   } catch (err) {
     body.innerHTML = `<p class="opp-preview-error">${escapeHtml(err.message)}</p>`;
     showToast(err.message, true);
@@ -9462,11 +11641,27 @@ function unwrapCreatedEntity(data) {
 }
 
 async function createCrmTask(body) {
-  return api("/api/2.0/crm/task", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const res = await withCrmQueueOnTransient(
+    () => api("/api/2.0/crm/task", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      showCrashBanner: false,
+    }),
+    {
+      method: "POST",
+      path: "/api/2.0/crm/task",
+      body: JSON.stringify(body),
+      description: `Create task "${body?.title || body?.Title || 'untitled'}"`,
+      opType: "task",
+      targetId: body?.entityId ? String(body.entityId) : undefined,
+    }
+  );
+  if (res && res.queued) {
+    // Return a shape the caller can detect (it currently only uses the success path for ID)
+    return { queued: true };
+  }
+  return res;
 }
 
 async function notifyCrmTaskResponsible(taskId) {
@@ -9487,6 +11682,23 @@ async function submitNewTaskForm(e) {
   const form = e.target;
   const submitBtn = $("#task-modal-submit");
   if (submitBtn) submitBtn.disabled = true;
+
+  // Small tooltip-like note below the button on press.
+  const submittingNote = showSubmittingNote(submitBtn);
+
+  // Show progress immediately on button press (bottom right, with bar).
+  // This ensures the indicator appears right when the user commits the action.
+  setConnectionState('connected');
+  showCRMSyncStatus('Connecting...');
+
+  const connectStart = Date.now();
+
+  // Cap popup visible time at 2.5s max. Safe to close sooner because data is saved locally first (optimistic + queue).
+  // The status bar + toasts carry the result.
+  const closeTimer = setTimeout(() => {
+    closeNewTaskModal();
+  }, 2500);
+
   try {
     const body = buildCreateTaskBody({
       title: $("#new-task-title")?.value,
@@ -9497,18 +11709,40 @@ async function submitNewTaskForm(e) {
       isNotify: $("#new-task-notify")?.checked,
     });
     const data = await createCrmTask(body);
+    if (data && data.queued) {
+      // Transient failure — already enqueued + toasted by the wrapper.
+      // Close the modal (user action "succeeded" from their perspective) and let the
+      // processor + loadTasks reconcile when it succeeds.
+      clearTimeout(closeTimer);
+      closeNewTaskModal();
+      // The enqueueCrmMutation already showed the "queued" toast.
+      await loadTasks().catch(() => {});
+      return;
+    }
     const created = unwrapCreatedEntity(data);
     const taskId = created?.id ?? created?.ID ?? data?.id ?? data?.ID;
     if ($("#new-task-notify")?.checked && taskId != null) {
       await notifyCrmTaskResponsible(taskId);
     }
+    clearTimeout(closeTimer);
     closeNewTaskModal();
-    showToast("Task created");
+    hideCRMSyncStatus();  // clear any "Connecting..." immediately on successful response
+    // Once the CRM server has successfully received the push, go straight to success.
+    // No lingering "Connected & Syncing..." after the event.
+    onCRMSuccess();
+    showCRMSyncStatus('Task sent successfully');
+    setTimeout(() => {
+      hideCRMSyncStatus();
+    }, 1500);
     await loadTasks();
   } catch (err) {
+    clearTimeout(closeTimer);
     setTaskModalError(err.message || "Could not create task");
+    hideCRMSyncStatus();
   } finally {
+    clearTimeout(closeTimer);
     if (submitBtn) submitBtn.disabled = false;
+    if (submittingNote && submittingNote.parentNode) submittingNote.parentNode.removeChild(submittingNote);
   }
 }
 
@@ -9521,7 +11755,7 @@ async function openNewTaskModal() {
   form.reset();
   clearNewTaskOpportunitySelection();
 
-  await loadTaskCategories();
+  await loadTaskCategories(); // uses local cache if present (populated on login); never blocks on network when down
   populateNewTaskCategorySelect();
   populateNewTaskResponsibleSelect();
 
@@ -9611,21 +11845,53 @@ async function openTasksListModal() {
         const wasClosed = !!task.isClosed;
         try {
           if (cb.checked && !wasClosed) {
-            await api(`/api/2.0/crm/task/${task.id}/close`, {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: "{}",
-            });
-            task.isClosed = true;
+            const res = await withCrmQueueOnTransient(
+              () => api(`/api/2.0/crm/task/${task.id}/close`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: "{}",
+                showCrashBanner: false,
+              }),
+              {
+                method: "PUT",
+                path: `/api/2.0/crm/task/${task.id}/close`,
+                body: "{}",
+                description: `Close task ${task.id}`,
+                opType: "task",
+                targetId: String(task.id),
+              }
+            );
+            if (res && res.queued) {
+              // Keep optimistic toggle; processor will reconcile
+            } else {
+              task.isClosed = true;
+            }
           } else if (!cb.checked && wasClosed) {
-            await api(`/api/2.0/crm/task/${task.id}/reopen`, {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: "{}",
-            });
-            task.isClosed = false;
+            const res = await withCrmQueueOnTransient(
+              () => api(`/api/2.0/crm/task/${task.id}/reopen`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: "{}",
+                showCrashBanner: false,
+              }),
+              {
+                method: "PUT",
+                path: `/api/2.0/crm/task/${task.id}/reopen`,
+                body: "{}",
+                description: `Reopen task ${task.id}`,
+                opType: "task",
+                targetId: String(task.id),
+              }
+            );
+            if (res && res.queued) {
+              // keep optimistic
+            } else {
+              task.isClosed = false;
+            }
           }
           row.classList.toggle("done", !!task.isClosed);
+          // Toast the immediate action. The enqueue already surfaces "queued" when transient.
+          // Processor will surface "Synced" on recovery.
           showToast(task.isClosed ? "Task marked complete" : "Task reopened");
           // refresh main tasks tile if present
           setTimeout(() => { loadTasks().catch(() => {}); }, 200);
@@ -9639,10 +11905,12 @@ async function openTasksListModal() {
 
       const label = document.createElement("label");
       const titleLink = document.createElement("a");
-      titleLink.href = crmTaskUrl(task);
-      titleLink.target = "_blank";
-      titleLink.rel = "noopener noreferrer";
       titleLink.textContent = task.title || "(Task)";
+      titleLink.style.cursor = "pointer";
+      titleLink.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        openTaskPreviewModal(task);
+      });
       label.appendChild(titleLink);
 
       if (task.deadLine?.value || task.deadLine) {
@@ -9650,14 +11918,6 @@ async function openTasksListModal() {
         dl.className = "feed-meta";
         dl.textContent = `Due ${new Date(task.deadLine?.value || task.deadLine).toLocaleDateString()}`;
         label.appendChild(dl);
-      }
-
-      const r = task.responsible;
-      if (r?.displayName || r?.userName) {
-        const resp = document.createElement("span");
-        resp.className = "feed-meta";
-        resp.textContent = r.displayName || r.userName || r.id;
-        label.appendChild(resp);
       }
 
       row.appendChild(cb);
@@ -9690,6 +11950,59 @@ async function openTasksListModal() {
     $("#tasks-list-new")?.addEventListener("click", () => {
       modal.classList.add("hidden");
       openNewTaskModal().catch((e) => showToast(e.message, true));
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !modal.classList.contains("hidden")) {
+        modal.classList.add("hidden");
+      }
+    });
+  }
+
+  modal.classList.remove("hidden");
+}
+
+function openTaskPreviewModal(task) {
+  const modal = $("#task-preview-modal");
+  const titleEl = $("#task-preview-modal-title");
+  const body = $("#task-preview-body");
+  const crmLink = $("#task-preview-crm-link");
+  if (!modal || !titleEl || !body || !crmLink) return;
+
+  titleEl.textContent = task.title || "Task";
+  crmLink.href = crmTaskUrl(task);
+  crmLink.target = "_blank";
+  crmLink.rel = "noopener noreferrer";
+
+  const created = task.createOn?.value ?? task.createOn ?? task.created?.value ?? task.created ?? task.dateAndTime;
+  const createdStr = created ? new Date(created).toLocaleString() : "Unknown";
+  const responsible = task.responsible ? (task.responsible.displayName || task.responsible.userName || task.responsible.id) : "Unknown";
+  const desc = (task.description || task.Description || "No description").replace(/</g, "&lt;");
+  const due = task.deadLine?.value || task.deadLine ? new Date(task.deadLine?.value || task.deadLine).toLocaleDateString() : "None";
+
+  let html = `
+    <p><strong>Created by:</strong> ${responsible} on ${createdStr}</p>
+    <p><strong>Due:</strong> ${due}</p>
+    <p><strong>Description:</strong> ${desc}</p>
+  `;
+  if (task.entity?.entityType === "opportunity" && task.entity.entityTitle) {
+    html += `
+      <p><strong>Linked Deal:</strong> ${task.entity.entityTitle}
+        <button type="button" class="btn btn-ghost btn-icon-only" title="Preview deal" onclick="openOpportunityPreviewModal(${task.entity.entityId}, '${(task.entity.entityTitle || '').replace(/'/g, "\\'")}')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
+        </button>
+      </p>
+    `;
+  }
+
+  body.innerHTML = html;
+  linkifyPhonesAndEmails(body);
+
+  if (!modal.dataset.bound) {
+    modal.dataset.bound = "1";
+    modal.addEventListener("click", (e) => {
+      if (e.target.hasAttribute("data-task-preview-dismiss") || e.target.classList.contains("modal-backdrop")) {
+        modal.classList.add("hidden");
+      }
     });
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && !modal.classList.contains("hidden")) {
@@ -9779,10 +12092,12 @@ function createTaskRow(task) {
 
   const label = document.createElement("label");
   const titleLink = document.createElement("a");
-  titleLink.href = crmTaskUrl(task);
-  titleLink.target = "_blank";
-  titleLink.rel = "noopener noreferrer";
   titleLink.textContent = task.title || "(Task)";
+  titleLink.style.cursor = "pointer";
+  titleLink.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    openTaskPreviewModal(task);
+  });
   label.appendChild(titleLink);
   if (task.deadLine?.value || task.deadLine) {
     const dl = document.createElement("span");
@@ -9793,10 +12108,12 @@ function createTaskRow(task) {
   if (task.entity?.entityType === "opportunity" && task.entity.entityTitle) {
     const ent = document.createElement("a");
     ent.className = "feed-meta";
-    ent.href = crmOpportunityUrl(task.entity.entityId);
-    ent.target = "_blank";
-    ent.rel = "noopener noreferrer";
     ent.textContent = task.entity.entityTitle;
+    ent.style.cursor = "pointer";
+    ent.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      openOpportunityPreviewModal(task.entity.entityId, task.entity.entityTitle || "");
+    });
     label.appendChild(ent);
   }
 
@@ -9865,10 +12182,7 @@ function renderTasksByUser() {
   for (const { name, tasks: userTasks } of byUser.values()) {
     const block = document.createElement("div");
     block.className = "tasks-user-block";
-    const h = document.createElement("h3");
-    h.textContent = name;
-    block.appendChild(h);
-
+    // No h3 name header: the dropdown already indicates the selected responsible user (avoids duplicate label)
     for (const task of userTasks) {
       block.appendChild(createTaskRow(task));
     }
@@ -10076,10 +12390,13 @@ function showApp() {
   $("#portal-label").textContent = state.portalUrl;
   noteDashboardActivity();
   startPanelTileAutoRefresh();
+  // No periodic global unreachable poller (removed per request to avoid spurious "unreachable" indicators during normal use).
+  // The marquee / status only appears for actual queued/stale push failures.
 }
 
 function showLogin() {
   stopPanelTileAutoRefresh();
+  if (presenceHeaderPollTimer) { clearInterval(presenceHeaderPollTimer); presenceHeaderPollTimer = null; }
   userProfileReady = false;
   $("#app").classList.add("hidden");
   $("#login-screen").classList.remove("hidden");
@@ -10091,6 +12408,10 @@ async function checkSession() {
 }
 
 async function init() {
+  // Load any previously queued CRM mutations (survives reload / offline periods).
+  loadMutationQueue();
+  updateMutationSyncStatus();
+
   const config = await (await fetch("/api/config")).json();
   if (config.portalUrl) {
     state.portalUrl = config.portalUrl;
@@ -10128,13 +12449,40 @@ async function init() {
   $("#refresh-btn").addEventListener("click", refreshAll);
   $("#logout-btn").addEventListener("click", async () => {
     await fetch("/api/logout", { method: "POST", credentials: "same-origin" });
+    // Clean presence cache on explicit logout (the "until next login" contract)
+    try { clearPresenceUsersCache(); } catch {}
     showLogin();
   });
+
+  // Mutation queue lifecycle wiring (client-side only, per plan)
+  window.addEventListener("online", () => {
+    processMutationQueue().catch(() => {});
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      processMutationQueue().catch(() => {});
+    }
+  });
+  // Background safety net (the guard + online check inside process make this cheap)
+  setInterval(() => {
+    processMutationQueue().catch(() => {});
+  }, RETRY_INTERVAL_MS);
 
   $("#login-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const errEl = $("#login-error");
+    const loadingEl = $("#login-loading");
+    const submitBtn = $("#login-submit-btn");
     errEl.classList.add("hidden");
+    if (loadingEl) loadingEl.classList.remove("hidden");
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Logging in…";
+    }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, 30000);
     try {
       const res = await fetch("/api/login", {
         method: "POST",
@@ -10145,25 +12493,85 @@ async function init() {
           userName: $("#username").value,
           password: $("#password").value,
         }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || data.detail || "Login failed");
       state.portalUrl = data.portalUrl || $("#portal-url").value.trim();
       localStorage.setItem("oo_portal_url", state.portalUrl);
       showApp();
+      // Start presence (bind button, heartbeats for self-online, snapshot for indicators/badge) immediately.
+      // This makes the header icon show indicators right away, and button responsive without waiting for refreshAll.
+      try { ensurePresenceOnLogin(); } catch {}
       await refreshAll();
+      // Re-kick after refresh (harmless; bind/heartbeats are guarded, primes roster etc.)
+      try { ensurePresenceOnLogin(); } catch {}
+      // Explicit login: check/refresh the (rarely changing) task categories from CRM server into our local cache.
+      // This populates state + localStorage so that "New Task" works offline later.
+      loadTaskCategories({ force: true }).catch(() => {});
+      // Kick any queued mutations after the initial data load
+      processMutationQueue().catch(() => {});
     } catch (err) {
-      errEl.textContent = err.message;
+      clearTimeout(timeoutId);
+      let msg = err.message || "Login failed";
+      if (err.name === "AbortError" || /aborted|timeout/i.test(msg)) {
+        msg = "Server unreachable, contact admin";
+      }
+      errEl.textContent = msg;
       errEl.classList.remove("hidden");
+    } finally {
+      if (loadingEl) loadingEl.classList.add("hidden");
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Sign in";
+      }
     }
   });
 
   if (await checkSession()) {
     showApp();
+    // Start presence immediately after showApp so header icon gets indicators (badge, self-online dot, waiting flash)
+    // and button is bound/responsive without waiting for the slow refreshAll.
+    try { ensurePresenceOnLogin(); } catch {}
     await refreshAll();
+    // Re-kick after refresh (harmless due to guards in bind/heartbeats/timers; ensures roster cache etc.)
+    try { ensurePresenceOnLogin(); } catch {}
+    // Rehydrate: restore task categories from local cache (no server hit unless later explicit login).
+    // This lets New Task modal work immediately even if CRM is currently unreachable.
+    loadTaskCategories({ force: false }).catch(() => {});
+    // Kick queue processor after first successful load on existing session
+    processMutationQueue().catch(() => {});
   } else {
     showLogin();
   }
 }
 
 init();
+
+// Safety net: if *both* login and app screens are still hidden long after load
+// (e.g. early JS error or init never reached a showApp/showLogin decision),
+// force the login screen visible. Do *not* fight a real async login/restore that
+// has already called showApp (even if refreshAll is still loading data).
+setTimeout(() => {
+  try {
+    var login = document.getElementById('login-screen');
+    var appEl = document.getElementById('app');
+    const bothHidden = !!(login && login.classList && login.classList.contains('hidden') &&
+                          appEl && appEl.classList && appEl.classList.contains('hidden'));
+    if (bothHidden) {
+      console.warn('[dashboard] Both screens still hidden after init; forcing login UI visible as fallback.');
+      if (typeof showLogin === 'function') {
+        showLogin();
+      } else if (login) {
+        login.classList.remove('hidden');
+        if (appEl) appEl.classList.add('hidden');
+      }
+    }
+  } catch (e) {
+    // Last resort - pure vanilla
+    try {
+      document.body.innerHTML = '<div style="padding:2rem;font-family:sans-serif"><h1>Dashboard failed to load</h1><p>Server may be unreachable or there is a JS error. Check console (F12) and contact admin. <button onclick="location.reload()">Reload</button></p></div>';
+    } catch(_) {}
+  }
+}, 4000);

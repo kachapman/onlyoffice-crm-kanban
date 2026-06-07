@@ -10,6 +10,18 @@ Related docs:
 
 ---
 
+## Offline Resilience — Mutation Queue for CRM writes (implemented)
+
+Client-side queue (localStorage) + background retry worker for transient failures (network, 5xx from proxy/CRM, cross-droplet blips).
+
+- All important mutators (stage change, due date, tags, history/notes, task create + close/reopen) now transparently queue on transient errors while preserving optimistic UI.
+- FIFO replay on recovery with status badge ("N pending"), toasts on enqueue + successful sync, and light reconciliation (loadTasks / refreshAll).
+- Hard errors (validation, auth, etc.) continue to fail immediately with original UX.
+- No server.py changes required for this feature. Fully additive in public/app.js following existing api() + mutator + refresh patterns.
+- See the session plan.md (in .grok history) for the full approved design, verification matrix, and rationale.
+
+This directly addresses the "Offline Resilience (Mutation Queue)" part of the prior implementation suggestions. The real-time SSE polling bridge remains future work.
+
 ## FEAT-021 — Header quick note + icon actions (implemented)
 
 ### Shipped behavior

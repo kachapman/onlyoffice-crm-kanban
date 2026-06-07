@@ -25,14 +25,46 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div id="login-screen" class="login-screen hidden">
+  <!-- Early vanilla script for error handling and fallback in case main app.js fails to parse/execute (prevents blank screen) -->
+  <script>
+  (function(){
+    window.addEventListener('error', function(e) {
+      try {
+        document.body.innerHTML = '<div style="padding:2rem;font-family:sans-serif;background:#fff;color:#000"><h1>Dashboard failed to load</h1><p>JavaScript error: ' + (e.message || e) + '</p><p>Check the browser console (F12) for details. Try hard refresh (Ctrl/Cmd+Shift+R). If server issue, contact admin.</p><button onclick="location.reload()">Reload page</button></div>';
+      } catch(_) {}
+    });
+    // Fallback: only if *both* screens are still hidden (or app.js never decided) after a generous delay.
+    // Do not fight legitimate async login / session restore / refreshAll which can take several seconds.
+    setTimeout(function(){
+      try {
+        var login = document.getElementById('login-screen');
+        var app = document.getElementById('app');
+        const bothHidden = !!(login && (login.classList ? login.classList.contains('hidden') : true) &&
+                              app && (app.classList ? app.classList.contains('hidden') : true));
+        if (bothHidden) {
+          if (login) {
+            login.style.display = '';
+            if (login.classList && login.classList.contains('hidden')) login.classList.remove('hidden');
+          }
+          if (app) app.style.display = 'none';
+        }
+      } catch(_) {}
+    }, 5000);
+  })();
+  </script>
+  <noscript>
+    <div style="padding:2rem;font-family:sans-serif">JavaScript is required for the Vanguard Adjusting CRM Board dashboard. Please enable it and reload.</div>
+  </noscript>
+  <div id="login-screen" class="login-screen">
+    <!-- Large watermark ship logo (same as header) behind the login card, low opacity -->
+    <img src="hero-ship-168.png" class="login-watermark" alt="" aria-hidden="true" />
     <div class="login-card">
-      <h1 class="login-title">Vanguard CRM board</h1>
+      <h1 class="login-title">Vanguard Adjusting CRM Board</h1>
       <p class="login-sub">Sign in with your OnlyOffice account at <strong>office.vanguardadj.com</strong>.</p>
       <form id="login-form">
         <label>
           Portal URL
-          <input type="url" id="portal-url" value="https://office.vanguardadj.com" required />
+          <input type="url" id="portal-url" value="https://office.vanguardadj.com" readonly />
         </label>
         <label>
           Username
@@ -43,21 +75,22 @@
           <input type="password" id="password" autocomplete="current-password" required />
         </label>
         <p id="login-error" class="error-text hidden"></p>
-        <button type="submit" class="btn btn-primary btn-block">Sign in</button>
+        <button type="submit" class="btn btn-primary btn-block" id="login-submit-btn">Sign in</button>
+        <p id="login-loading" class="login-loading hidden" aria-live="polite">Logging in…</p>
       </form>
     </div>
   </div>
 
+  <!-- #app starts hidden; JS will show it (and hide login) only on successful session restore.
+       #login-screen has no "hidden" by default so that if JS fails entirely (parse error, load fail, etc.)
+       the sign-in form is still visible instead of a blank page. -->
   <div id="app" class="app hidden">
     <header class="hero">
       <button type="button" id="logout-btn" class="btn btn-ghost hero-sign-out">Sign out</button>
       <div class="hero-inner">
         <div class="hero-copy">
-          <p class="eyebrow">Vanguard · OnlyOffice CRM</p>
+          <p class="eyebrow">Vanguard Adjusting · OnlyOffice CRM</p>
           <h1 class="hero-title">Workspace <em>dashboard</em></h1>
-          <p class="hero-desc">
-            CRM Viewer and organizer for Opportunities, Notifications and Tasks.
-          </p>
         </div>
         <div class="hero-actions">
           <div class="global-opp-search" id="global-opp-search">
@@ -77,6 +110,19 @@
           <button type="button" id="new-opportunity-btn" class="btn btn-primary btn-icon-only" title="New opportunity" aria-label="New opportunity">
             <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 14h6"/><path d="M12 17v-6"/></svg>
           </button>
+          <!-- Team / Presence button: secondary (like Add tile), left of the new tile button.
+               Shows online count badge. Opens the rich modal; can be "moved" to/from a pinned top tile. -->
+          <button type="button" id="presence-btn" class="btn btn-secondary btn-icon-only" title="Team presence &amp; messages" aria-label="Team presence &amp; messages">
+            <!-- Default icon: classic "users" (two people). User can choose another from the plan options. -->
+            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+              <circle cx="9" cy="7" r="4"/>
+              <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+            </svg>
+            <!-- Small live online count badge (populated by JS) -->
+            <span id="presence-online-badge" class="presence-badge hidden" aria-hidden="true"></span>
+          </button>
           <button type="button" id="add-tile-btn" class="btn btn-secondary btn-icon-only" title="Add tile" aria-label="Add tile">
             <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
           </button>
@@ -93,6 +139,10 @@
     <section class="global-meta">
       <span id="status-text">Ready</span>
       <span id="portal-label" class="portal-label"></span>
+      <!-- Minimal mutation queue sync status (added for offline resilience). Hidden when empty. -->
+      <span id="mutation-sync-status" class="mutation-sync-status hidden" title="Actions waiting to sync with CRM"></span>
+      <!-- CRM unreachable marquee: pinned under header on the right side, matching the font/size of the left meta text (larger than old tiny version for better height/visibility). Compact width, scrolls. -->
+      <div id="crm-header-marquee" class="crm-header-marquee hidden" aria-live="polite" role="status"></div>
     </section>
 
     <div id="dashboard-tiles-pinned" class="dashboard-tiles-pinned hidden" aria-label="Pinned collapsed feed and tasks"></div>
@@ -166,6 +216,55 @@
       </div>
       <div class="modal-actions" id="add-tile-modal-actions">
         <button type="button" id="add-tile-cancel" class="btn btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Presence / Team modal: same color scheme and structure as other modals.
+       Main list (online green / offline dark), status picker (3 templates + custom), basic DMs,
+       top-right "Pin as top tile" (or "Move back to header" when the tile exists).
+       Admin details (for kenc only) are behind a tab, never on the main team list. -->
+  <div id="presence-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="presence-modal-title">
+    <div class="modal-backdrop" data-presence-dismiss></div>
+    <div class="modal-card">
+      <h2 id="presence-modal-title" class="modal-title">Team</h2>
+      <div class="presence-header">
+        <div id="presence-my-status" class="presence-my-status">
+          <!-- Your status controls populated by JS: pulldown for templates + custom textarea -->
+        </div>
+      </div>
+
+      <!-- Tabs for Team roster vs Messages inbox (with past DMs + delete/archive) -->
+      <div id="presence-tabs" class="presence-tabs">
+        <button type="button" class="presence-tab active" data-tab="team">Team</button>
+        <button type="button" class="presence-tab" data-tab="messages">Messages</button>
+      </div>
+
+      <!-- Main content area: roster (team) or inbox (messages). Switched by tabs. -->
+      <div id="presence-list" class="presence-list" role="list" aria-live="polite"></div>
+
+      <!-- DM thread area (shown when a user is selected; hidden by default) -->
+      <div id="presence-dm" class="presence-dm hidden">
+        <div class="presence-dm-header">
+          <button type="button" id="presence-dm-back" class="btn btn-ghost btn-small">← Back</button>
+          <span id="presence-dm-with" class="presence-dm-with"></span>
+        </div>
+        <div id="presence-dm-log" class="presence-dm-log"></div>
+        <div class="presence-dm-input">
+          <textarea id="presence-dm-text" rows="2" maxlength="2000" placeholder="Message..."></textarea>
+          <button type="button" id="presence-dm-send" class="btn btn-primary">Send</button>
+        </div>
+      </div>
+
+      <!-- Admin tab/section (only rendered/visible for kenc@vanguardadj.com; hidden from main list) -->
+      <div id="presence-admin" class="presence-admin hidden">
+        <div class="presence-admin-header">Admin (you only)</div>
+        <div id="presence-admin-list" class="presence-admin-list"></div>
+      </div>
+
+      <div class="modal-actions">
+        <button type="button" id="presence-admin-toggle" class="btn btn-secondary hidden">Admin</button>
+        <button type="button" class="btn btn-secondary" data-presence-dismiss>Close</button>
       </div>
     </div>
   </div>
@@ -261,6 +360,22 @@
         <button type="button" id="tasks-list-close" class="btn btn-secondary">Close</button>
         <button type="button" id="tasks-list-new" class="btn btn-primary">New Task</button>
       </div>
+    </div>
+  </div>
+
+  <div id="task-preview-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="task-preview-modal-title">
+    <div class="modal-backdrop" data-task-preview-dismiss></div>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="task-preview-modal-title" class="modal-title">Task Details</h2>
+        <div class="modal-actions">
+          <a id="task-preview-crm-link" class="btn btn-ghost btn-icon-only" target="_blank" rel="noopener noreferrer" title="Open in CRM">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+          </a>
+          <button type="button" class="btn btn-ghost" data-task-preview-dismiss>Close</button>
+        </div>
+      </div>
+      <div id="task-preview-body" class="modal-body"></div>
     </div>
   </div>
 

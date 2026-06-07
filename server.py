@@ -13,6 +13,7 @@ import re
 import ssl
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from http import cookies
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,6 +21,19 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 from ics_calendar import _MAX_ICS_BYTES, is_allowed_calendar_url, parse_ics_calendar
 from user_profile_store import load_user_profile, save_user_profile
+from presence_store import (
+    append_dm,
+    clear_conversation,
+    get_conversation,
+    get_portal_presence_snapshot,
+    get_recent_dms_for_user,
+    load_user_presence,
+    mark_messages_read,
+    save_user_presence,
+    set_status,
+    touch_crm_activity,
+    touch_heartbeat,
+)
 
 ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
@@ -413,8 +427,273 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         profile = save_user_profile(portal, user_id, existing)
         _json_response(self, 200, {"ok": True, "tiles": profile.get("notesTiles", [])})
 
+    # ---------------- Presence / Team (user status, heartbeats, basic DMs, admin for kenc) ----------------
+
+    def _handle_presence_users(self) -> None:
+        """Return the CRM people list (mediated). Client caches this until next login.
+        Uses the caller's token so permissions/visibility are correct.
+        """
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, token, _user_id = auth
+        # Mediate the people list request (same as client would do directly to CRM)
+        url = f"{portal.rstrip('/')}/api/2.0/people.json"
+        req = urllib.request.Request(
+            url,
+            headers={"Accept": "application/json", "Authorization": token},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, context=_ssl_context(), timeout=30) as resp:
+                body = resp.read()
+                ctype = resp.headers.get_content_type() or "application/json"
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
+            _json_response(self, 502, {"error": f"Could not load users: {exc}"})
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_presence_get(self) -> None:
+        """Live presence snapshot + merged user info + DM hints.
+        Admin-only fields (last* activity) are only included when the requester is kenc@vanguardadj.com.
+        """
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, token, user_id = auth
+
+        # Who am I (for admin check and "me" context)
+        my_email = ""
+        try:
+            url = f"{portal.rstrip('/')}/api/2.0/people/@self.json"
+            req = urllib.request.Request(
+                url,
+                headers={"Accept": "application/json", "Authorization": token},
+                method="GET",
+            )
+            with urllib.request.urlopen(req, context=_ssl_context(), timeout=20) as resp:
+                me_data = json.loads(resp.read().decode("utf-8"))
+                me = me_data.get("response") or me_data.get("result") or me_data
+                if isinstance(me, dict):
+                    my_email = str(me.get("email") or me.get("Email") or "").strip().lower()
+        except Exception:
+            pass
+
+        is_admin = my_email == "kenc@vanguardadj.com"
+
+        # Base people list (small, mediated)
+        people: list[dict[str, Any]] = []
+        try:
+            url = f"{portal.rstrip('/')}/api/2.0/people.json"
+            req = urllib.request.Request(
+                url,
+                headers={"Accept": "application/json", "Authorization": token},
+                method="GET",
+            )
+            with urllib.request.urlopen(req, context=_ssl_context(), timeout=30) as resp:
+                pdata = json.loads(resp.read().decode("utf-8"))
+                people = pdata.get("response") or pdata.get("result") or []
+                if not isinstance(people, list):
+                    people = []
+        except Exception:
+            people = []
+
+        # Presence overlays (from our store)
+        overlays = get_portal_presence_snapshot(portal)
+
+        # Build response list
+        now = datetime.now(timezone.utc)
+        out_users: list[dict[str, Any]] = []
+        for p in people:
+            if not isinstance(p, dict):
+                continue
+            uid = str(p.get("id") or p.get("ID") or p.get("userId") or p.get("UserId") or "")
+            if not uid:
+                continue
+            ov = overlays.get(uid) or {}
+            status = ov.get("status") or ""
+            hb = self._parse_iso_datetime(ov.get("lastHeartbeat") or "")
+            last_crm = self._parse_iso_datetime(ov.get("lastCrmActivity") or "")
+            last_dash = self._parse_iso_datetime(ov.get("lastDashboardActivity") or "")
+
+            online = False
+            idle = False
+            if hb:
+                delta = (now - hb).total_seconds()
+                online = delta < (10 * 60)  # 10 min window for "online"
+                idle = delta > (2 * 60 * 60)  # >2h idle flag
+
+            row: dict[str, Any] = {
+                "id": uid,
+                "displayName": str(p.get("displayName") or p.get("DisplayName") or p.get("userName") or p.get("UserName") or uid),
+                "email": str(p.get("email") or p.get("Email") or "").strip().lower(),
+                "online": online,
+                "idle": idle and online,
+                "status": status,
+                "lastSeen": ov.get("lastHeartbeat") or ov.get("lastDashboardActivity") or "",
+            }
+
+            if is_admin:
+                # Only for the admin user – extra details (never shown on the main "Team" list)
+                row["admin"] = {
+                    "lastCrmActivity": ov.get("lastCrmActivity") or "",
+                    "lastDashboardActivity": ov.get("lastDashboardActivity") or "",
+                    "lastCrmMinutesAgo": int((now - last_crm).total_seconds() / 60) if last_crm else None,
+                    "lastDashMinutesAgo": int((now - last_dash).total_seconds() / 60) if last_dash else None,
+                }
+
+            out_users.append(row)
+
+        # Also surface the caller's own presence record (for the modal to know "me")
+        my_presence = load_user_presence(portal, user_id)
+
+        _json_response(
+            self,
+            200,
+            {
+                "users": out_users,
+                "me": {
+                    "id": user_id,
+                    "email": my_email,
+                    "status": my_presence.get("status", ""),
+                    "lastHeartbeat": my_presence.get("lastHeartbeat", ""),
+                },
+                "isAdmin": is_admin,
+                "myRecentDms": get_recent_dms_for_user(portal, user_id, 50),
+            },
+        )
+
+    def _handle_presence_heartbeat(self) -> None:
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, _token, user_id = auth
+        # Body is optional; we just touch the times
+        touch_heartbeat(portal, user_id)
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_presence_status(self) -> None:
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, _token, user_id = auth
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        status_text = str(payload.get("status") or payload.get("text") or "")[:200]
+        if not status_text:
+            _json_response(self, 400, {"error": "status is required"})
+            return
+        rec = set_status(portal, user_id, status_text)
+        _json_response(self, 200, {"ok": True, "status": rec.get("status", "")})
+
+    def _handle_presence_dm_get(self) -> None:
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, _token, user_id = auth
+        query = parse_qs(urlparse(self.path).query)
+        with_id = (query.get("with") or [""])[0]
+        if not with_id:
+            _json_response(self, 400, {"error": "with=<userId> is required"})
+            return
+        # Mark incoming messages as read (for read receipts) before returning
+        mark_messages_read(portal, user_id, with_id)
+        msgs = get_conversation(portal, user_id, with_id)
+        _json_response(self, 200, {"messages": msgs})
+
+    def _handle_presence_dm_post(self) -> None:
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, _token, user_id = auth
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        to_id = str(payload.get("to") or "").strip()
+        text = str(payload.get("text") or "").strip()
+        if not to_id or not text:
+            _json_response(self, 400, {"error": "to and text are required"})
+            return
+        reply_to = payload.get("reply_to")
+        reply_text = payload.get("reply_text")
+        msg = append_dm(portal, user_id, to_id, text, reply_to, reply_text)
+        _json_response(self, 200, {"ok": True, "message": msg})
+
+    def _handle_presence_dm_clear(self) -> None:
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, _token, user_id = auth
+        query = parse_qs(urlparse(self.path).query)
+        with_id = (query.get("with") or [""])[0]
+        if not with_id:
+            _json_response(self, 400, {"error": "with=<userId> is required"})
+            return
+        clear_conversation(portal, user_id, with_id)
+        _json_response(self, 200, {"ok": True})
+
+    def _maybe_touch_crm_activity_for_current_request(self) -> None:
+        """Best-effort resolution of the current user from the session cookie and touch CRM activity.
+        Never sends error responses; used from the generic proxy path.
+        """
+        try:
+            token = _session_token(self)
+            if not token:
+                return
+            portal = _portal_base(self)
+            if not portal:
+                return
+            # Resolve user id without using _require_auth (which would send 4xx/5xx on failure)
+            user_id = _fetch_crm_user_id(portal, token)
+            if user_id:
+                touch_crm_activity(portal, user_id)
+        except Exception:
+            # Never let presence tracking break a real proxy response
+            pass
+
+    def _parse_iso_datetime(self, value: str):
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        try:
+            if raw.endswith("Z"):
+                raw = raw[:-1] + "+00:00"
+            dt = datetime.fromisoformat(raw)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except Exception:
+            return None
+
     def _handle_api_get(self) -> None:
         api_path = urlparse(self.path).path
+
+        # Presence / Team endpoints (before any other /api/ handling or proxy fallback).
+        # Use exact match on the path (query is stripped by .path). This must come early
+        # so direct /api/presence/* calls from the client are not treated as proxied CRM calls.
+        if api_path.startswith("/api/presence"):
+            if api_path == "/api/presence/users":
+                self._handle_presence_users()
+                return
+            if api_path == "/api/presence":
+                self._handle_presence_get()
+                return
+            if api_path == "/api/presence/dm":
+                self._handle_presence_dm_get()
+                return
+            # Unknown /api/presence/* path -> explicit 404 (do not fall through to proxy logic)
+            self.send_error(404)
+            return
+
         if api_path == "/api/user-profile":
             self._handle_user_profile_get()
             return
@@ -445,6 +724,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         api_path, query = route
         status, body, ctype = _proxy_request(self, "GET", api_path, query)
+        # Best-effort: record CRM activity for presence (only when we can resolve the user without failing the response)
+        if status < 400 and ("/crm/" in api_path.lower() or "/people/" in api_path.lower()):
+            self._maybe_touch_crm_activity_for_current_request()
         self.send_response(status)
         self.send_header("Content-Type", ctype or "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -453,12 +735,33 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_api_post_put(self, method: str) -> None:
         api_path = urlparse(self.path).path
+
+        # Presence endpoints (before other /api/ or proxy fallback). Startswith guard + explicit 404
+        # for unknown presence paths so they never leak to the CRM proxy logic.
+        if api_path.startswith("/api/presence"):
+            if api_path == "/api/presence/heartbeat" and method == "POST":
+                self._handle_presence_heartbeat()
+                return
+            if api_path == "/api/presence/status" and method == "POST":
+                self._handle_presence_status()
+                return
+            if api_path == "/api/presence/dm" and method == "POST":
+                self._handle_presence_dm_post()
+                return
+            if api_path == "/api/presence/dm" and method == "DELETE":
+                self._handle_presence_dm_clear()
+                return
+            # Unknown /api/presence/* + method -> 404 (do not proxy)
+            self.send_error(404)
+            return
+
         if api_path == "/api/user-profile" and method == "PUT":
             self._handle_user_profile_put()
             return
         if api_path == "/api/dashboard-notes" and method == "PUT":
             self._handle_dashboard_notes_put()
             return
+
         route = self._api_route()
         if not route:
             self.send_error(404)
@@ -475,6 +778,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         status, resp_body, ctype = _proxy_request(
             self, method, api_path, query, body if body else None, content_type=proxy_ct
         )
+        if status < 400 and ("/crm/" in api_path.lower() or "/people/" in api_path.lower()):
+            self._maybe_touch_crm_activity_for_current_request()
         self.send_response(status)
         self.send_header("Content-Type", ctype or "application/json")
         self.send_header("Content-Length", str(len(resp_body)))

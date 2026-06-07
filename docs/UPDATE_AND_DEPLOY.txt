@@ -80,15 +80,15 @@ PART B — ON THE SERVER (DigitalOcean droplet)
 
    VERIFY: ls -lh /backup/dashboard-data-*.tar.gz shows a new non-zero file.
 
-8. Pull v1.1
+8. Pull v1.3
 
    cd /opt/vanguard/onlyoffice-crm-kanban
    git fetch origin
    git checkout main
    git pull --ff-only origin main
-   # Or: git checkout v1.1.0
+   # Or: git checkout v1.3.0
 
-   VERIFY: git log -1 --oneline; cat VERSION → 1.1.0; git status clean.
+   VERIFY: git log -1 --oneline; cat VERSION → 1.3.0; git status clean.
 
 9. Rebuild and restart (CRM container only)
 
