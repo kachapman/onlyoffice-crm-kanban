@@ -5,12 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Vanguard Adjusting Dashboard</title>
   <meta name="description" content="CRM Viewer and organizer for Opportunities, Notifications and Tasks." />
-  <link rel="icon" href="favicon.ico?v=4" sizes="any" />
-  <!-- Using white ship for better visibility (esp. dark tab bars); replace favicon-*.png with properly sized white variants from ship-logo-white.png if needed -->
-  <link rel="icon" type="image/png" sizes="64x64" href="ship-logo-white.png?v=4" />
-  <link rel="icon" type="image/png" sizes="48x48" href="ship-logo-white.png?v=4" />
-  <link rel="icon" type="image/png" sizes="32x32" href="ship-logo-white.png?v=4" />
-  <link rel="apple-touch-icon" sizes="192x192" href="ship-logo-white.png?v=4" />
+  <link rel="icon" href="favicon.ico?v=5" sizes="any" />
+  <!-- Thick exclamation mark (instead of ship) as data SVG so it always renders (no missing asset) and is visible in both dark and light browser tab bars. -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32' width='32' height='32'%3E%3Crect x='2' y='2' width='28' height='28' rx='4' fill='%23f8fafc' stroke='%230f172a' stroke-width='2'/%3E%3Crect x='14' y='6' width='4' height='14' rx='1' fill='%230f172a'/%3E%3Ccircle cx='16' cy='23' r='2.2' fill='%230f172a'/%3E%3C/svg%3E" />
   <meta property="og:type" content="website" />
   <meta property="og:title" content="Vanguard Adjusting Dashboard" />
   <meta property="og:description" content="CRM Viewer and organizer for Opportunities, Notifications and Tasks." />
@@ -152,6 +149,8 @@
       <span id="mutation-sync-status" class="mutation-sync-status hidden" title="Actions waiting to sync with CRM"></span>
       <!-- CRM unreachable marquee: pinned under header on the right side, matching the font/size of the left meta text (larger than old tiny version for better height/visibility). Compact width, scrolls. -->
       <div id="crm-header-marquee" class="crm-header-marquee hidden" aria-live="polite" role="status"></div>
+      <!-- CRM crash banner: subtle amber, right side, persistent until successful CRM responses after refresh. -->
+      <div id="crm-crash-banner" class="crm-crash-banner hidden" role="alert" aria-live="polite"></div>
     </section>
 
     <div id="dashboard-tiles-pinned" class="dashboard-tiles-pinned hidden" aria-label="Pinned collapsed feed and tasks"></div>
@@ -169,7 +168,7 @@
       <div id="add-tile-options" class="add-tile-options">
         <button type="button" id="add-tile-opportunity-group" class="add-tile-option">
           <span class="add-tile-option-title">Opportunity Group</span>
-          <span class="add-tile-option-desc">Kanban board with filters, stages, and tags — same as before.</span>
+           <span class="add-tile-option-desc">Kanban board organizer for opportunities</span>
         </button>
         <button type="button" id="add-tile-calendar" class="add-tile-option">
           <span class="add-tile-option-title">Calendar</span>
@@ -314,13 +313,14 @@
           <div id="mail-list" class="mail-list"></div>
         </div>
 
-        <div class="mail-right-sidebar mail-viewer-warning" style="width:210px; min-width:210px; max-width:230px;">
-          <!-- Viewer-only warning sidebar (added per request). Old linking UI removed/hidden.
-               This email feature is kept strictly as a viewer for now. No server pushes for status or links.
-               See ISSUES.md ISSUE-002 for full tracker. -->
-          <div class="mail-viewer-warning-content">
-            <h4>⚠️ Email Viewer (read-only)</h4>
-            <p>This is a <strong>viewer only</strong>. It cannot push read/unread statuses, deletions, links, or other changes to the CRM Mail module or history.</p>
+         <div class="mail-right-sidebar mail-viewer-warning" style="width:210px; min-width:210px; max-width:230px;">
+           <!-- Viewer-only warning sidebar (added per request). Old linking UI removed/hidden.
+                This email feature is kept strictly as a viewer for now. No server pushes for status or links.
+                See ISSUES.md ISSUE-002 for full tracker. -->
+           <div class="mail-viewer-warning-content">
+             <button type="button" class="mail-warning-dismiss" title="Hide this warning (remembers per browser)" aria-label="Hide warning">×</button>
+             <h4>⚠️ Email Viewer (read-only)</h4>
+             <p>This is a <strong>viewer only</strong>. It cannot push read/unread statuses, deletions, links, or other changes to the CRM Mail module or history.</p>
             <p><strong>Known limitations (documented in ISSUES.md ISSUE-002):</strong></p>
             <ul>
               <li>Read/unread marks — local viewer only (no sync to native CRM mail)</li>
@@ -388,10 +388,11 @@
     <div class="modal-card modal-card-opp-preview">
       <div class="opp-preview-head">
         <h2 id="opp-preview-title" class="modal-title">Opportunity</h2>
-        <div class="opp-preview-head-actions">
-          <button type="button" id="opp-preview-edit" class="opp-preview-edit-btn" title="Edit deal" aria-label="Edit deal">✎</button>
-          <span id="opp-preview-open-crm-wrap"></span>
-        </div>
+         <div class="opp-preview-head-actions">
+           <button type="button" id="opp-preview-refresh" class="opp-preview-refresh-btn" title="Refresh" aria-label="Refresh preview">⟳</button>
+           <button type="button" id="opp-preview-edit" class="opp-preview-edit-btn" title="Edit deal" aria-label="Edit deal">✎</button>
+           <span id="opp-preview-open-crm-wrap"></span>
+         </div>
       </div>
       <div id="opp-preview-body" class="opp-preview-body" aria-live="polite"></div>
       <div class="modal-actions">
@@ -489,11 +490,18 @@
             <label for="deal-edit-note-category">Note type</label>
             <select id="deal-edit-note-category" name="noteCategoryId"></select>
           </div>
-          <div class="field">
-            <label for="deal-edit-note-body">Note</label>
-            <textarea id="deal-edit-note-body" name="noteDescription" rows="4" placeholder="Well go on, write the note already"></textarea>
-            <span class="field-hint deal-edit-attach-hint">(You can not attach files in this popup)</span>
-          </div>
+           <div class="field">
+             <label for="deal-edit-note-body">Note</label>
+             <div class="note-format-toolbar" aria-label="Formatting">
+               <button type="button" class="note-format-btn" data-cmd="bold" title="Bold">B</button>
+               <button type="button" class="note-format-btn" data-cmd="italic" title="Italic"><i>I</i></button>
+               <button type="button" class="note-format-btn" data-cmd="underline" title="Underline">U</button>
+               <button type="button" class="note-format-btn" data-cmd="hiliteColor" title="Highlight (light green)">H</button>
+               <button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear">⌫</button>
+             </div>
+             <div id="deal-edit-note-body" class="note-editor" contenteditable="true" data-placeholder="Well go on, write the note already"></div>
+             <span class="field-hint deal-edit-attach-hint">(You can not attach files in this popup)</span>
+           </div>
           <div class="field">
             <label for="deal-edit-notify">Notify users</label>
             <select id="deal-edit-notify" name="notifyUsers" multiple size="4"></select>
@@ -542,10 +550,17 @@
             <label for="quick-note-note-category">Note type</label>
             <select id="quick-note-note-category" name="noteCategoryId"></select>
           </div>
-          <div class="field">
-            <label for="quick-note-note-body">Note</label>
-            <textarea id="quick-note-note-body" name="noteDescription" rows="4" required placeholder="Enter activity note…"></textarea>
-          </div>
+           <div class="field">
+             <label for="quick-note-note-body">Note</label>
+             <div class="note-format-toolbar" aria-label="Formatting">
+               <button type="button" class="note-format-btn" data-cmd="bold" title="Bold">B</button>
+               <button type="button" class="note-format-btn" data-cmd="italic" title="Italic"><i>I</i></button>
+               <button type="button" class="note-format-btn" data-cmd="underline" title="Underline">U</button>
+               <button type="button" class="note-format-btn" data-cmd="hiliteColor" title="Highlight (light green)">H</button>
+               <button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear">⌫</button>
+             </div>
+             <div id="quick-note-note-body" class="note-editor" contenteditable="true" data-placeholder="Enter activity note…"></div>
+           </div>
           <div class="field">
             <label for="quick-note-notify">Notify users</label>
             <select id="quick-note-notify" name="notifyUsers" multiple size="4"></select>

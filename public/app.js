@@ -40,7 +40,7 @@ const PRESENCE_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // refresh on next lo
 const PRESENCE_POLL_MS = 30000; // when modal or visible tile is active
 const PRESENCE_HEARTBEAT_MS = 60000; // when tab visible
 const PRESENCE_IDLE_2H_MS = 2 * 60 * 60 * 1000;
-const PRESENCE_AUTO_LOGOUT_4H_MS = 4 * 60 * 60 * 1000;
+const PRESENCE_AUTO_LOGOUT_3H_MS = 3 * 60 * 60 * 1000;
 const PRESENCE_CUSTOM_MAX = 120; // modest char limit for custom status (emojis allowed)
 
 let userProfileReady = false;
@@ -1563,7 +1563,15 @@ async function api(path, options = {}) {
     throw new Error(res.ok ? "Invalid JSON from server" : text.slice(0, 300) || res.statusText);
   }
   if (!res.ok) {
-    throw new Error(parseApiError(body, res.status));
+    const msg = parseApiError(body, res.status);
+    const err = new Error(msg);
+    if (options.showCrashBanner !== false) {
+      const lower = msg.toLowerCase();
+      if (res.status >= 500 || /502|503|504|500|5\d{2}|bad gateway|unavailable|proxy|gateway/.test(lower)) {
+        showCrmCrashBanner();
+      }
+    }
+    throw err;
   }
   // Successful CRM-ish call
   if (/\/crm\//i.test(path)) {
@@ -1691,8 +1699,10 @@ async function processMutationQueue() {
             }, 80);
           }
         }
-        // Gentle full refresh for opp changes (quiet)
-        if (item.opType === 'stage' || item.opType === 'due' || item.opType === 'tag' || item.opType === 'history') {
+        // Gentle full refresh for opp changes (quiet).
+        // NOTE: 'history' (event notes) intentionally omitted — adding a note does not change board cards/tiles,
+        // and the full refreshAll (profile + renders) was causing perceived UI hang shortly after send.
+        if (item.opType === 'stage' || item.opType === 'due' || item.opType === 'tag') {
           // Do not block the queue loop
           refreshAll().catch(() => {});
         }
@@ -1853,9 +1863,22 @@ function onCRMSuccess() {
   clearConnectingTimer();
   lastCRMSuccessTime = Date.now();
   setConnectionState('connected');
+  hideCrmCrashBanner();
   // Do NOT auto-hide here. The "sent successfully" messages in form handlers control
   // a deliberate linger (so the progress bar is visible for a readable moment even on fast success).
   // General CRM successes will rely on the per-action "sent" calls or other hides.
+}
+
+function showCrmCrashBanner() {
+  const el = $("#crm-crash-banner");
+  if (!el) return;
+  el.textContent = "CRM is temporarily unreachable and may have crashed. Refresh again in 30 seconds or contact system administrator.";
+  el.classList.remove("hidden");
+}
+
+function hideCrmCrashBanner() {
+  const el = $("#crm-crash-banner");
+  if (el) el.classList.add("hidden");
 }
 
 function showSubmittingNote(button, message = 'Submitting — do not press the button again') {
@@ -1915,6 +1938,7 @@ function newGroup(overrides = {}) {
     stageColumnsConfigured: false,
     showEmptyStages: true,
     showOnlyRedOpportunities: false,
+    stageColors: {},
     opportunities: [],
     ...overrides,
   };
@@ -3317,6 +3341,10 @@ function renderBasicMarkdown(text) {
     s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>");
     s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     s = s.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+    // underline via _text_ (free since italic uses only *)
+    s = s.replace(/_([^_]+)_/g, "<u>$1</u>");
+    // highlight via ==text== (common in note apps; rendered as <mark>)
+    s = s.replace(/==([^=]+)==/g, "<mark>$1</mark>");
     s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label, url) => {
       const href = escapeHtml(url.trim());
       if (!/^https?:\/\//i.test(href) && !/^mailto:/i.test(href)) return escapeHtml(label);
@@ -3418,6 +3446,24 @@ function insertNotesEditorText(editor, insert) {
   editor.focus();
 }
 
+function wrapNotesSelection(editor, prefix, suffix) {
+  if (!editor) return;
+  const start = editor.selectionStart ?? 0;
+  const end = editor.selectionEnd ?? 0;
+  const val = editor.value;
+  const selected = val.slice(start, end);
+  const toInsert = prefix + selected + suffix;
+  editor.value = val.slice(0, start) + toInsert + val.slice(end);
+  const innerStart = start + prefix.length;
+  if (selected.length > 0) {
+    editor.selectionStart = innerStart;
+    editor.selectionEnd = innerStart + selected.length;
+  } else {
+    editor.selectionStart = editor.selectionEnd = innerStart;
+  }
+  editor.focus();
+}
+
 function downloadNotesFile(notes, ext) {
   const body = notes.content || "";
   const type = ext === "md" ? "text/markdown;charset=utf-8" : "text/plain;charset=utf-8";
@@ -3449,6 +3495,8 @@ ul,ol{margin:0.35rem 0 0.35rem 1.25rem;}
 del{opacity:0.65;}
 code{background:#f0f0f0;padding:0.1em 0.3em;border-radius:3px;}
 blockquote{border-left:3px solid #ccc;margin:0.5rem 0;padding-left:0.75rem;color:#444;}
+u{text-decoration:underline;}
+mark{background:rgba(255,235,59,0.35);padding:0 2px;border-radius:2px;}
 .notes-md-checklist{list-style:none;padding-left:0;}
 .notes-md-check-label{display:flex;gap:0.5rem;align-items:flex-start;}
 @media print{body{margin:0.75rem;}}
@@ -3650,6 +3698,19 @@ function bindNotesTileChrome(section, notes, tileId) {
   listBtnsWrap.appendChild(bulletBtn);
   listBtnsWrap.appendChild(numberedBtn);
 
+  // Inline formatting buttons (bold/italic/underline/highlight/quote/code) placed next to lists.
+  // Uses markdown syntax; renderer extended for _underline_ and ==highlight==.
+  const boldBtn = mkTextBtn("B", "btn-notes-bold", "Bold — **text**");
+  const italicBtn = mkTextBtn("I", "btn-notes-italic", "Italic — *text*");
+  const strikeBtn = mkTextBtn("S", "btn-notes-strike", "Strikethrough — ~~text~~");
+  const underlineBtn = mkTextBtn("U", "btn-notes-underline", "Underline — _text_");
+  const highlightBtn = mkTextBtn("H", "btn-notes-highlight", "Highlight — ==text==");
+  const quoteBtn = mkTextBtn(">", "btn-notes-quote", "Quote — > text (or selection)");
+  const codeBtn = mkTextBtn("`", "btn-notes-code", "Inline code — `text`");
+  const formatBtnsWrap = document.createElement("span");
+  formatBtnsWrap.className = "notes-format-btns";
+  formatBtnsWrap.append(boldBtn, italicBtn, strikeBtn, underlineBtn, highlightBtn, quoteBtn, codeBtn);
+
   const editBtn = mkTextBtn("Edit", "btn-notes-mode", "Edit mode");
   editBtn.dataset.mode = "edit";
   const previewBtn = mkTextBtn("Preview", "btn-notes-mode", "Preview mode");
@@ -3683,6 +3744,7 @@ function bindNotesTileChrome(section, notes, tileId) {
     copyBtn,
     dateBtn,
     listBtnsWrap,
+    formatBtnsWrap,
     printBtn,
     crmBtn,
     accentSel,
@@ -3760,6 +3822,71 @@ function bindNotesTileChrome(section, notes, tileId) {
     const editor = $(".notes-editor", section);
     if (editor && notes.viewMode !== "preview") {
       insertNotesEditorText(editor, "1. ");
+      notes.content = editor.value;
+      scheduleNotesTileSave(notes);
+    }
+  });
+
+  // Formatting button handlers (wrap selection or insert placeholder syntax)
+  boldBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const editor = $(".notes-editor", section);
+    if (editor && notes.viewMode !== "preview") {
+      wrapNotesSelection(editor, "**", "**");
+      notes.content = editor.value;
+      scheduleNotesTileSave(notes);
+    }
+  });
+  italicBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const editor = $(".notes-editor", section);
+    if (editor && notes.viewMode !== "preview") {
+      wrapNotesSelection(editor, "*", "*");
+      notes.content = editor.value;
+      scheduleNotesTileSave(notes);
+    }
+  });
+  strikeBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const editor = $(".notes-editor", section);
+    if (editor && notes.viewMode !== "preview") {
+      wrapNotesSelection(editor, "~~", "~~");
+      notes.content = editor.value;
+      scheduleNotesTileSave(notes);
+    }
+  });
+  underlineBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const editor = $(".notes-editor", section);
+    if (editor && notes.viewMode !== "preview") {
+      wrapNotesSelection(editor, "_", "_");
+      notes.content = editor.value;
+      scheduleNotesTileSave(notes);
+    }
+  });
+  highlightBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const editor = $(".notes-editor", section);
+    if (editor && notes.viewMode !== "preview") {
+      wrapNotesSelection(editor, "==", "==");
+      notes.content = editor.value;
+      scheduleNotesTileSave(notes);
+    }
+  });
+  quoteBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const editor = $(".notes-editor", section);
+    if (editor && notes.viewMode !== "preview") {
+      insertNotesEditorText(editor, "> ");
+      notes.content = editor.value;
+      scheduleNotesTileSave(notes);
+    }
+  });
+  codeBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const editor = $(".notes-editor", section);
+    if (editor && notes.viewMode !== "preview") {
+      wrapNotesSelection(editor, "`", "`");
       notes.content = editor.value;
       scheduleNotesTileSave(notes);
     }
@@ -3891,7 +4018,7 @@ function renderNotesTiles(dash) {
     section.dataset.notesId = notes.id;
     section.innerHTML = `
       <div class="notes-tile-body">
-        <textarea class="notes-editor" placeholder="Notes &amp; to-dos — **bold**, *italic*, ~~strike~~, \`code\`, # headings, - [ ] tasks, --- rules, URLs auto-link" spellcheck="true"></textarea>
+        <textarea class="notes-editor" placeholder="Notes &amp; to-dos — **bold** *italic* ~~strike~~ _underline_ ==highlight== &gt; quote \`code\` # h1 ## h2 - [ ] tasks 1. lists --- hr, links" spellcheck="true"></textarea>
         <div class="notes-preview hidden" aria-live="polite"></div>
         <div class="notes-tile-footer" aria-live="polite">
           <span class="notes-stats-label"></span>
@@ -5204,7 +5331,7 @@ function groupOpportunities(group) {
       .map((s) => ({
         id: Number(s.id),
         title: s.title,
-        color: s.color || "#4f8cff",
+        color: (group.stageColors && group.stageColors[String(s.id)]) || s.color || "#4f8cff",
         items: [],
         stageId: Number(s.id),
         empty: true,
@@ -5664,6 +5791,54 @@ function renderGroupBoard(group, container) {
       <span class="column-title">${escapeHtml(col.title)}</span>
       <span class="column-count">${col.items.length}</span>
     `;
+
+    // Color editing for stage columns (CRM stages), matching local kanban column color picker UX.
+    // Only for actual stage columns (have stageId). Title from CRM is fixed; only color override per-group.
+    if (col.stageId != null) {
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "group-col-edit btn btn-ghost btn-tiny";
+      editBtn.title = "Edit stage column color";
+      editBtn.style.cssText = "padding:0 3px; margin-left:2px;";
+      editBtn.textContent = "✎";
+      header.appendChild(editBtn);
+
+      editBtn.addEventListener("click", e => {
+        e.stopPropagation();
+        const dotSpan = header.querySelector(".column-dot");
+        const titleSpan = header.querySelector(".column-title");
+        const origColor = col.color || "#4f8cff";
+        if (dotSpan) dotSpan.style.display = "none";
+        const editWrap = document.createElement("span");
+        editWrap.style.display = "inline-flex";
+        editWrap.style.gap = "2px";
+        editWrap.style.alignItems = "center";
+        editWrap.innerHTML = `
+          <input type="color" value="${origColor}" style="width:16px;height:14px;padding:0;border:0;" />
+          <button class="btn btn-ghost btn-tiny" style="padding:0 1px;font-size:0.6rem;">✓</button>
+          <button class="btn btn-ghost btn-tiny" style="padding:0 1px;font-size:0.6rem;">✕</button>
+        `;
+        header.insertBefore(editWrap, titleSpan);
+        const colorIn = editWrap.querySelector("input");
+        const [okBtn, cancelBtn] = editWrap.querySelectorAll("button");
+        const clean = () => {
+          if (dotSpan) dotSpan.style.display = "";
+          editWrap.remove();
+        };
+        const doSave = () => {
+          if (!group.stageColors) group.stageColors = {};
+          group.stageColors[String(col.stageId)] = colorIn.value;
+          saveGroupsToStorage();
+          scheduleUserProfileSave();
+          renderGroupBoard(group, container);
+          clean();
+        };
+        okBtn.onclick = doSave;
+        cancelBtn.onclick = clean;
+        // focus the color input (user can click to open picker)
+        colorIn.focus();
+      });
+    }
 
     const body = document.createElement("div");
     body.className = "column-body";
@@ -7156,6 +7331,13 @@ function renderFeedNotificationItem(it) {
   const li = document.createElement("li");
   li.className = "feed-item";
   li.dataset.feedKey = it.key;
+  if (it.date) {
+    const d = new Date(it.date);
+    const now = new Date();
+    if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) {
+      li.classList.add("feed-item-today");
+    }
+  }
 
   const row = document.createElement("div");
   row.className = "feed-item-row";
@@ -7539,10 +7721,13 @@ function setDealEditError(message) {
 }
 
 function closeDealEditModal() {
+  restoreSideBySideCards();
   const modal = $("#deal-edit-modal");
   if (modal) modal.classList.add("hidden");
   state.dealEdit = null;
   setDealEditError("");
+  const ne = $("#deal-edit-note-body");
+  if (ne) ne.innerHTML = "";
 }
 
 function tagIdForTitle(title, catalog = buildTagCatalog()) {
@@ -7699,10 +7884,19 @@ async function openDealEditModal(opp, group) {
 
   modal.classList.remove("hidden");
   $("#deal-edit-due")?.focus();
+
+  // When launched from opp preview (edit note / edit deal), position the editor popup LEFT (desktop) or TOP (mobile) of the preview modal.
+  // Both remain interactive (see layout fn for pe:none trick + mobile stacking).
+  setTimeout(() => {
+    const p = $("#opp-preview-modal");
+    if (p && !p.classList.contains("hidden") && state.dealEdit && oppPreviewContext && Number(oppPreviewContext.oppId) === Number(state.dealEdit.oppId)) {
+      layoutSideBySideDealEditAndPreview();
+    }
+  }, 80);
 }
 
 async function createOpportunityHistoryEvent(oppId, { content, categoryId, notifyUserList }) {
-  const html = plainTextToNoteHtml(content);
+  const html = noteContentToHtml(content);
   if (!html) throw new Error("Note text is required");
 
   const body = {
@@ -7742,6 +7936,25 @@ function plainTextToNoteHtml(text) {
     .map((line) => escapeHtml(line))
     .join("<br/>");
 }
+
+function noteContentToHtml(input) {
+  let s = String(input || "").trim();
+  if (!s) return "";
+  // If it contains tags, assume rich HTML from the note editor (controlled formatting)
+  if (/<[a-z]/i.test(s)) {
+    // Light sanitization: drop scripts and inline event handlers
+    s = s
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/\s+on\w+="[^"]*"/gi, "")
+      .replace(/\s+on\w+='[^']*'/gi, "");
+    // Treat "empty" editor artifacts as no content
+    if (!s || /^(<br\s*\/?>|\s*|<div>\s*<br\s*\/?>\s*<\/div>)$/i.test(s)) return "";
+    return s;
+  }
+  return plainTextToNoteHtml(s);
+}
+
+
 
 async function applyDealTagChanges(oppId, initialTags, nextTags) {
   if (!dealTagsChanged(initialTags, nextTags)) return;
@@ -7794,7 +8007,10 @@ async function submitDealEditForm(e) {
     const oppId = ctx.oppId;
     const dueVal = $("#deal-edit-due")?.value ?? "";
     const stageId = $("#deal-edit-stage")?.value ?? "";
-    const noteBody = $("#deal-edit-note-body")?.value?.trim() ?? "";
+    const noteEl = $("#deal-edit-note-body");
+    const noteBody = noteEl
+      ? (noteEl.tagName === "TEXTAREA" ? (noteEl.value || "").trim() : (noteEl.innerHTML || "").trim())
+      : "";
     const notifySel = $("#deal-edit-notify");
     const notifyUserList = notifySel
       ? [...notifySel.selectedOptions].map((o) => o.value).filter(Boolean)
@@ -7920,10 +8136,13 @@ function setQuickNoteError(message) {
 }
 
 function closeQuickNoteModal() {
+  restoreSideBySideCards();
   const modal = $("#quick-note-modal");
   if (modal) modal.classList.add("hidden");
   state.quickNote = null;
   setQuickNoteError("");
+  const ne = $("#quick-note-note-body");
+  if (ne) ne.innerHTML = "";
 }
 
 function clearQuickNoteOpportunitySelection() {
@@ -8014,6 +8233,15 @@ async function openQuickNoteModal() {
   if (results) results.classList.add("hidden");
 
   modal.classList.remove("hidden");
+
+  // If opp preview is open, snap this quick note modal side-by-side (left on desktop, top on mobile) with the preview.
+  setTimeout(() => {
+    const p = $("#opp-preview-modal");
+    if (p && !p.classList.contains("hidden") && oppPreviewContext && oppPreviewContext.oppId != null) {
+      layoutSideBySideDealEditAndPreview();  // generalized to support quick-note as side
+    }
+  }, 80);
+
   $("#quick-note-opportunity-search")?.focus();
 }
 
@@ -8026,11 +8254,13 @@ async function submitQuickNoteForm(e) {
     return;
   }
 
-  const noteBody = $("#quick-note-note-body")?.value?.trim() ?? "";
-  if (!noteBody) {
+  const noteEl = $("#quick-note-note-body");
+  const noteText = noteEl ? (noteEl.innerText || noteEl.textContent || "").trim() : "";
+  if (!noteText) {
     setQuickNoteError("Event note is required.");
     return;
   }
+  const noteBody = noteEl ? (noteEl.innerHTML || "").trim() : "";
 
   const submitBtn = $("#quick-note-submit");
   if (submitBtn) submitBtn.disabled = true;
@@ -8098,6 +8328,17 @@ async function submitQuickNoteForm(e) {
     showToast("Note saved");
     if (group) await refreshGroup(group);
     else await refreshAll();
+
+    // If the preview deal modal is open for this same opp (side quick note case), refresh it
+    // so the new history note appears immediately in the preview's history list.
+    const previewEl = $("#opp-preview-modal");
+    if (previewEl && !previewEl.classList.contains("hidden") && ctx && ctx.oppId != null) {
+      const previewId = oppPreviewContext && oppPreviewContext.oppId;
+      if (previewId != null && Number(previewId) === Number(ctx.oppId)) {
+        const titleHint = ctx.oppTitle || "";
+        openOpportunityPreviewModal(ctx.oppId, titleHint, ctx.group || null).catch(() => {});
+      }
+    }
   } catch (err) {
     clearTimeout(closeTimer);
     const msg = err instanceof Error ? err.message : String(err);
@@ -9246,9 +9487,11 @@ async function fetchPresenceSnapshot() {
     updateClientPresenceCache(state.presenceData);
     if (state.presenceData) {
       if (!Array.isArray(state.presenceData.myRecentDms)) state.presenceData.myRecentDms = [];
+      syncLastReadFromServer();
     }
     return state.presenceData;
   } catch {
+    showCrmCrashBanner();
     state.presenceData = { users: [], myRecentDms: [] };
     updateClientPresenceCache(state.presenceData);
     return state.presenceData;
@@ -9309,12 +9552,15 @@ function startPresenceHeartbeats() {
   state.presenceHeartbeatTimer = setInterval(() => {
     if (document.visibilityState === "visible") send();
   }, PRESENCE_HEARTBEAT_MS);
-  // On visibility change
+  // On visibility change — ensure singleton to avoid accumulation after repeated open/close of team viewer.
+  if (state._presenceVisHandler) {
+    document.removeEventListener("visibilitychange", state._presenceVisHandler);
+  }
   const onVis = () => {
     if (document.visibilityState === "visible") send();
   };
+  state._presenceVisHandler = onVis;
   document.addEventListener("visibilitychange", onVis, { once: false });
-  // Store a cleanup handle (simple; we don't remove the listener on stop for v1)
 }
 
 function stopPresenceHeartbeats() {
@@ -9322,37 +9568,41 @@ function stopPresenceHeartbeats() {
     clearInterval(state.presenceHeartbeatTimer);
     state.presenceHeartbeatTimer = null;
   }
+  if (state._presenceVisHandler) {
+    document.removeEventListener("visibilitychange", state._presenceVisHandler);
+    state._presenceVisHandler = null;
+  }
 }
 
 function setupPresenceIdleAndAutoLogout() {
   // Extend the existing activity tracking.
   // We already call noteDashboardActivity() from various places and visibility.
-  // Add a 4h auto-logout timer that resets on activity.
+  // Add a 3h auto-logout timer that resets on activity.
   if (state.presenceIdleTimer) {
     clearTimeout(state.presenceIdleTimer);
   }
 
   const checkAndMaybeLogout = () => {
     const idleMs = Date.now() - lastDashboardActivityAt;
-    if (idleMs >= PRESENCE_AUTO_LOGOUT_4H_MS) {
+    if (idleMs >= PRESENCE_AUTO_LOGOUT_3H_MS) {
       // Auto logout (best effort)
       (async () => {
         try {
           await fetch("/api/logout", { method: "POST", credentials: "same-origin" });
         } catch {}
-        try { showToast("Logged out due to 4 hours of inactivity"); } catch {}
+        try { showToast("Logged out due to 3 hours of inactivity"); } catch {}
         // Show login screen
         try { showLogin(); } catch {}
       })();
       return;
     }
     // Re-arm
-    const remaining = Math.max(30000, PRESENCE_AUTO_LOGOUT_4H_MS - idleMs);
+    const remaining = Math.max(30000, PRESENCE_AUTO_LOGOUT_3H_MS - idleMs);
     state.presenceIdleTimer = setTimeout(checkAndMaybeLogout, remaining);
   };
 
   // Seed the timer
-  state.presenceIdleTimer = setTimeout(checkAndMaybeLogout, PRESENCE_AUTO_LOGOUT_4H_MS);
+  state.presenceIdleTimer = setTimeout(checkAndMaybeLogout, PRESENCE_AUTO_LOGOUT_3H_MS);
 
   // Also surface a 2h "idle" visual in the presence UI when we render (see render functions)
 }
@@ -9412,6 +9662,21 @@ function loadPresenceLastRead() {
 function savePresenceLastRead() {
   try {
     localStorage.setItem("oo_board_presence_last_read_v1", JSON.stringify(presenceLastRead));
+  } catch {}
+}
+
+// Merge authoritative last-read times from server snapshot (enables same read/unread state across devices)
+function syncLastReadFromServer() {
+  try {
+    const d = (state.presenceData && state.presenceData.lastReadDms) || {};
+    for (const [k, v] of Object.entries(d || {})) {
+      const key = String(k);
+      let n = 0;
+      if (typeof v === "number") n = v;
+      else if (v) n = new Date(v).getTime() || 0;
+      if (n > 0) presenceLastRead[key] = n;
+    }
+    savePresenceLastRead(); // keep localStorage in sync as a cache
   } catch {}
 }
 
@@ -9495,6 +9760,12 @@ function markPresenceDMRead(otherUserId) {
   if (!otherUserId) return;
   presenceLastRead[String(otherUserId)] = Date.now();
   savePresenceLastRead();
+  // Persist to server so other devices (and future logins) see the same read state
+  presenceFetch("/api/presence/last-read", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ with: String(otherUserId), at: new Date().toISOString() })
+  }).catch(() => {});
 }
 
 function formatTimeAgo(iso) {
@@ -9681,6 +9952,7 @@ function renderPresenceUserList(container, snapshot, usersCache, onUserClick) {
   });
 
   const onlineRows = [];
+  const afdRows = [];
   const offlineRows = [];
 
   baseUsers.forEach(u => {
@@ -9696,7 +9968,11 @@ function renderPresenceUserList(container, snapshot, usersCache, onUserClick) {
     const dot = document.createElement("span");
     const isOnline = !!p.online;
     const isIdle = !!p.idle;
-    dot.className = "presence-dot " + (isOnline ? (isIdle ? "idle" : "online") : "offline");
+    const isAfd = !!p.afd;
+    let dotClass = "offline";
+    if (isOnline) dotClass = isIdle ? "idle" : "online";
+    else if (isAfd) dotClass = "afd";
+    dot.className = "presence-dot " + dotClass;
 
     const nm = document.createElement("span");
     nm.className = "presence-name";
@@ -9724,6 +10000,8 @@ function renderPresenceUserList(container, snapshot, usersCache, onUserClick) {
 
     if (isOnline) {
       onlineRows.push(row);
+    } else if (isAfd) {
+      afdRows.push(row);
     } else {
       offlineRows.push(row);
     }
@@ -9738,9 +10016,23 @@ function renderPresenceUserList(container, snapshot, usersCache, onUserClick) {
     onlineRows.forEach(r => container.appendChild(r));
   }
 
-  // Separator / Offline
-  if (offlineRows.length) {
+  // Away from dashboard (AFD) — tabbed away (stale heartbeat) but not signed out (hb not cleared on logout)
+  if (afdRows.length) {
     if (onlineRows.length) {
+      const sep = document.createElement("div");
+      sep.className = "presence-divider";
+      container.appendChild(sep);
+    }
+    const header = document.createElement("div");
+    header.className = "presence-section-header";
+    header.textContent = `Away from dashboard (${afdRows.length})`;
+    container.appendChild(header);
+    afdRows.forEach(r => container.appendChild(r));
+  }
+
+  // Offline (signed out or no active dashboard heartbeat record)
+  if (offlineRows.length) {
+    if (onlineRows.length || afdRows.length) {
       const sep = document.createElement("div");
       sep.className = "presence-divider";
       container.appendChild(sep);
@@ -9983,7 +10275,6 @@ function showEmojiPicker() {
   });
   const inputDiv = $("#presence-dm").querySelector(".presence-dm-input");
   if (inputDiv) {
-    inputDiv.style.position = "relative";
     inputDiv.appendChild(picker);
   }
 }
@@ -9994,21 +10285,27 @@ function enhanceDMInputForCurrentThread() {
   const inputDiv = dm.querySelector(".presence-dm-input");
   if (!inputDiv || inputDiv.dataset.enhancedDm) return;
   inputDiv.dataset.enhancedDm = "1";
-  inputDiv.style.position = "relative";
+  const ta = inputDiv.querySelector("#presence-dm-text");
+  const send = inputDiv.querySelector("#presence-dm-send");
   // Emoji selector button
   const emBtn = document.createElement("button");
   emBtn.type = "button";
   emBtn.className = "btn btn-ghost btn-tiny";
   emBtn.textContent = "😊";
   emBtn.title = "Insert emoji";
-  const send = inputDiv.querySelector("#presence-dm-send");
-  if (send) {
-    inputDiv.insertBefore(emBtn, send);
-  } else {
-    inputDiv.appendChild(emBtn);
-  }
   emBtn.addEventListener("click", showEmojiPicker);
-  // Reply preview is created on-demand by setPresenceReplyTo
+  // Buttons wrapper for the right column (emoji + send, horizontal)
+  const btnWrap = document.createElement("div");
+  btnWrap.className = "presence-dm-input-buttons";
+  btnWrap.appendChild(emBtn);
+  if (send) {
+    if (send.parentNode === inputDiv) inputDiv.removeChild(send);
+    btnWrap.appendChild(send);
+  }
+  // Rebuild inputDiv for grid: ta (stays), btnWrap, picker (added later)
+  // ta remains in place as first child
+  inputDiv.appendChild(btnWrap);
+  // Note: picker will be appended as third child and placed via grid-area
 }
 
 function renderPresenceAdminTab(container, snapshot) {
@@ -10380,7 +10677,10 @@ function renderPresenceTileCompact(snapshot = null) {
     const row = document.createElement("div");
     row.className = "presence-user";
     const dot = document.createElement("span");
-    dot.className = "presence-dot " + (u.online ? (u.idle ? "idle" : "online") : "offline");
+    let dcls = "offline";
+    if (u.online) dcls = u.idle ? "idle" : "online";
+    else if (u.afd) dcls = "afd";
+    dot.className = "presence-dot " + dcls;
     const nm = document.createElement("span");
     nm.textContent = u.displayName || u.id || "";
     nm.style.marginLeft = "0.35rem";
@@ -10729,6 +11029,11 @@ async function openMailInboxModal() {
   // Load any persisted dashboard read overrides (from localStorage) so marks survive close/reopen.
   // Do NOT clear mailDashboardReadIds here — that is the persistence mechanism.
   loadMailDashboardReadIds();
+  // Apply persisted hide for the viewer warning sidebar (per-browser preference)
+  const warningSidebar = modal.querySelector(".mail-right-sidebar.mail-viewer-warning");
+  if (warningSidebar && localStorage.getItem("hideMailViewerWarning") === "1") {
+    warningSidebar.classList.add("hidden");
+  }
   // reset only volatile per-open state (keep dashboard read overrides)
   mailState = { accounts: [], currentAccountId: '', messages: [], page: 1, pageSize: 50, search: '', selected: new Set() };
   $("#mail-search-input").value = "";
@@ -10752,6 +11057,19 @@ function attachMailModalListeners() {
   modal.querySelectorAll("[data-mail-inbox-dismiss]").forEach(el => {
     el.addEventListener("click", () => modal.classList.add("hidden"));
   });
+
+  // dismiss for the viewer warning sidebar (hides it and remembers in localStorage)
+  const warnDismiss = modal.querySelector(".mail-warning-dismiss");
+  if (warnDismiss && !warnDismiss.dataset.bound) {
+    warnDismiss.dataset.bound = "1";
+    warnDismiss.addEventListener("click", () => {
+      const ws = modal.querySelector(".mail-right-sidebar.mail-viewer-warning");
+      if (ws) {
+        ws.classList.add("hidden");
+        try { localStorage.setItem("hideMailViewerWarning", "1"); } catch {}
+      }
+    });
+  }
 
   // account/inbox selector change listener removed (pulldown disabled + hidden; default unified inbox, see loadMailMessagesForModal)
 
@@ -11950,6 +12268,13 @@ function isMailCategoryEvent(ev) {
   return /\b(mail|email)\b/.test(cat);
 }
 
+function isNoteCategoryEvent(ev) {
+  const cat = historyEventCategoryLabel(ev).toLowerCase();
+  // Common note-style categories from the Event note UI in quick/deal modals.
+  // If the category is a note activity, treat rich text as intentional formatting, not email.
+  return /\b(note|comment|activity|meeting|call|task)\b/.test(cat);
+}
+
 function historyContentLooksLikeEmailDump(raw) {
   const s = String(raw || "");
   if (!s.trim()) return false;
@@ -11970,7 +12295,10 @@ function shouldCollapseHistoryNoteContent(ev, raw) {
   if (extractMailMessageIdsFromFields(ev).length) return true;
   if (isMailCategoryEvent(ev)) return true;
   if (historyContentLooksLikeEmailDump(content)) return true;
-  if (historyContentLooksLikeHtml(content) && content.length > 500) return true;
+  if (isNoteCategoryEvent(ev)) return false;
+
+  if (historyContentLooksLikeHtml(content) && content.length > 500 && (isMailCategoryEvent(ev) || historyContentLooksLikeEmailDump(content))) return true;
+
   return false;
 }
 
@@ -12299,7 +12627,7 @@ function renderHistoryNoteBody(container, ev) {
   const mailPayload = parseHistoryMailPayload(ev);
   const mailIds = extractMailMessageIds(ev);
 
-  if (isHistoryMailEvent(ev, mailPayload) || (shouldCollapseHistoryNoteContent(ev, raw) && (mailPayload || mailIds.length))) {
+  if (isHistoryMailEvent(ev, mailPayload) || ((shouldCollapseHistoryNoteContent(ev, raw) && !isNoteCategoryEvent(ev)) && (mailPayload || mailIds.length))) {
     renderHistoryMailReceivedSummary(container, ev, mailPayload);
     return;
   }
@@ -12309,18 +12637,31 @@ function renderHistoryNoteBody(container, ev) {
     return;
   }
 
-  if (shouldCollapseHistoryNoteContent(ev, raw)) {
-    renderHistoryMailReceivedSummary(container, ev, mailPayload);
-    return;
+  if (shouldCollapseHistoryNoteContent(ev, raw) && !isNoteCategoryEvent(ev)) {
+    // Only treat as mail summary if it actually has mail indicators or is a mail category.
+    // Regular rich-text event notes (even long HTML with <mark>/<strong> etc.) should continue
+    // to the HTML rendering path below so bold/italic/underline/highlight are visible.
+    if (isHistoryMailEvent(ev, mailPayload) || mailPayload || mailIds.length) {
+      renderHistoryMailReceivedSummary(container, ev, mailPayload);
+      return;
+    }
   }
 
   if (historyContentLooksLikeHtml(raw)) {
-    const plain = htmlToPlainText(raw);
-    if (plain.length > 0 && plain.length < raw.length * 0.85) {
-      container.classList.add("opp-preview-history-body--plain");
-      container.textContent = plain;
+    const looksLikeMail = (isHistoryMailEvent(ev, mailPayload) || isMailCategoryEvent(ev) || historyContentLooksLikeEmailDump(raw)) && !isNoteCategoryEvent(ev);
+    if (looksLikeMail) {
+      const plain = htmlToPlainText(raw);
+      if (plain.length > 0 && plain.length < raw.length * 0.85) {
+        container.classList.add("opp-preview-history-body--plain");
+        container.textContent = plain;
+        return;
+      }
+      container.classList.add("opp-preview-history-body--html");
+      container.innerHTML = sanitizeHistoryHtml(raw);
       return;
     }
+    // Regular quick/deal event note with rich text (bold/italic/underline/<mark> highlight).
+    // Always render the HTML so formatting is visible in the preview modal history.
     container.classList.add("opp-preview-history-body--html");
     container.innerHTML = sanitizeHistoryHtml(raw);
     return;
@@ -12474,6 +12815,11 @@ function renderHistoryEventItem(ev) {
   const li = document.createElement("li");
   li.className = "opp-preview-history-item";
 
+  const mailPayload = parseHistoryMailPayload(ev);
+  const mailIds = extractMailMessageIds(ev);
+  const messageId = mailIds[0] || mailPayload?.messageId || null;
+  const isDeletableNote = isNoteCategoryEvent(ev) && !messageId && !mailPayload && !isHistoryMailEvent(ev, mailPayload);
+
   const metaRow = document.createElement("div");
   metaRow.className = "opp-preview-history-meta-row";
 
@@ -12488,6 +12834,49 @@ function renderHistoryEventItem(ev) {
 
   metaRow.appendChild(icon);
   metaRow.appendChild(meta);
+
+  if (isDeletableNote) {
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "opp-preview-history-delete";
+    delBtn.textContent = "×";
+    delBtn.title = "Delete this note";
+    delBtn.setAttribute("aria-label", "Delete this history note");
+    delBtn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const histId = ev.id ?? ev.ID ?? ev.historyId ?? ev.Id ?? null;
+      if (histId == null) {
+        showToast("Cannot delete: missing event ID", true);
+        return;
+      }
+      const ok = await confirmDialog({
+        title: "Delete note?",
+        message: "This permanently removes the event note from the CRM history.",
+        confirmLabel: "Delete",
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        await api(`/api/2.0/crm/history/${encodeURIComponent(histId)}`, {
+          method: "DELETE",
+          showCrashBanner: false,
+        });
+        showToast("Note deleted from history");
+        // Refresh the open preview (re-fetches history; keeps side popups if any)
+        const pmodal = $("#opp-preview-modal");
+        if (pmodal && !pmodal.classList.contains("hidden") && oppPreviewContext && oppPreviewContext.oppId != null) {
+          const id = oppPreviewContext.oppId;
+          const titleHint = oppPreviewContext.opp ? (oppPreviewContext.opp.title || oppPreviewContext.opp.Title || "") : "";
+          openOpportunityPreviewModal(id, titleHint, oppPreviewContext.group || null).catch(() => {});
+        }
+      } catch (err) {
+        showToast("Failed to delete note: " + (err && err.message ? err.message : err), true);
+      }
+    });
+    metaRow.appendChild(delBtn);
+  }
+
   li.appendChild(metaRow);
 
   const row = document.createElement("div");
@@ -12501,9 +12890,6 @@ function renderHistoryEventItem(ev) {
   renderHistoryNoteBody(note, ev);
   main.appendChild(note);
 
-  const mailPayload = parseHistoryMailPayload(ev);
-  const mailIds = extractMailMessageIds(ev);
-  const messageId = mailIds[0] || mailPayload?.messageId || null;
   let mailToggle = null;
   let mailPanel = null;
   if (messageId) {
@@ -13028,8 +13414,9 @@ async function openDealEditFromOpportunityPreview() {
     }
   }
   const refreshGroup = group || findGroupForOpportunity(oppId);
-  // Do not close the preview — keep it persistent underneath the edit modal (user request).
-  // On successful edit save we will refresh the preview data if it is still the active one.
+  // Open deal-edit (incl. its note editor) as a side popup to the LEFT of preview (instead of on top).
+  // Allows viewing/scrolling preview history + interacting with note (and deal fields) simultaneously.
+  // Escape in preview prefers closing the side editor first.
   try {
     await openDealEditModal(deal, refreshGroup);
   } catch (err) {
@@ -13038,9 +13425,109 @@ async function openDealEditFromOpportunityPreview() {
 }
 
 function closeOpportunityPreviewModal() {
+  restoreSideBySideCards();
   oppPreviewMailCache.clear();
   setOpportunityPreviewContext(null);
   $("#opp-preview-modal")?.classList.add("hidden");
+}
+
+function layoutSideBySideDealEditAndPreview() {
+  const previewModal = $("#opp-preview-modal");
+  // Support either deal-edit or quick-note as the side editor popup
+  let sideModal = $("#deal-edit-modal");
+  let isQuick = false;
+  if (!sideModal || sideModal.classList.contains("hidden")) {
+    sideModal = $("#quick-note-modal");
+    isQuick = true;
+  }
+  if (!previewModal || previewModal.classList.contains("hidden") || !sideModal || sideModal.classList.contains("hidden")) return;
+  const pCard = previewModal.querySelector(".modal-card");
+  const sCard = sideModal.querySelector(".modal-card");
+  if (!pCard || !sCard) return;
+
+  // hook resize once for re-layout on orientation/resize
+  if (!window._sideBySideResizeHooked) {
+    window._sideBySideResizeHooked = true;
+    window.addEventListener("resize", () => {
+      const p = $("#opp-preview-modal");
+      const d = $("#deal-edit-modal");
+      const q = $("#quick-note-modal");
+      if (p && !p.classList.contains("hidden") && ((d && !d.classList.contains("hidden")) || (q && !q.classList.contains("hidden")))) {
+        layoutSideBySideDealEditAndPreview();
+      }
+    }, { passive: true });
+  }
+
+  if (pCard.dataset.origStyle == null) pCard.dataset.origStyle = pCard.getAttribute("style") || "";
+  if (sCard.dataset.origStyle == null) sCard.dataset.origStyle = sCard.getAttribute("style") || "";
+
+  const isMobile = window.innerWidth < 700;
+  const gap = 12;
+  let sideW, previewW, sideLeft, previewLeft, sideTop, previewTop;
+  const baseTop = 20;
+
+  if (isMobile) {
+    // On mobile: fix the quick edit popup to the TOP of the deal preview modal (stacked vertically)
+    // side on top, preview shifted below so both remain visible and interactive.
+    const w = Math.min(720, window.innerWidth - 24);
+    sideW = w;
+    previewW = w;
+    sideLeft = 12;
+    previewLeft = 12;
+    sideTop = baseTop;
+    previewTop = baseTop + 260 + gap;  // side ~ top section, preview below
+  } else {
+    // Desktop: side (left) + preview (right) side-by-side
+    sideW = Math.min(440, Math.floor(window.innerWidth * 0.38));
+    previewW = Math.min(680, Math.floor(window.innerWidth * 0.48));
+    const total = sideW + previewW + gap;
+    const left = Math.max(12, Math.floor((window.innerWidth - total) / 2));
+    sideLeft = left;
+    previewLeft = left + sideW + gap;
+    sideTop = 36;
+    previewTop = 36;
+  }
+
+  sCard.style.cssText = `position:fixed!important; left:${sideLeft}px!important; top:${sideTop}px!important; width:${sideW}px!important; max-height:${isMobile ? "38vh" : "92vh"}!important; overflow:auto!important; z-index:2100!important; margin:0!important; box-shadow:var(--shadow); pointer-events:auto!important;`;
+  pCard.style.cssText = `position:fixed!important; left:${previewLeft}px!important; top:${previewTop}px!important; width:${previewW}px!important; max-height:${isMobile ? "52vh" : "92vh"}!important; overflow:auto!important; z-index:2005!important; margin:0!important; box-shadow:var(--shadow);`;
+
+  // Hide side backdrop (preview's remains for dim)
+  const sBack = sideModal.querySelector(".modal-backdrop");
+  if (sBack) {
+    sBack.style.display = "none";
+    sBack.dataset.sideHidden = "1";
+  }
+
+  // Critical: allow interaction with preview while quick-edit is open.
+  // The side .modal layer would otherwise block; pe:none on container + auto on its card lets events pass through except on the popup itself.
+  sideModal.style.pointerEvents = "none";
+  sideModal.style.zIndex = "2010";
+  previewModal.style.zIndex = "2000";
+}
+
+function restoreSideBySideCards() {
+  const previewModal = $("#opp-preview-modal");
+  const editModal = $("#deal-edit-modal");
+  [previewModal, editModal].forEach((modal) => {
+    if (!modal) return;
+    const card = modal.querySelector(".modal-card");
+    if (card && card.dataset.origStyle != null) {
+      card.setAttribute("style", card.dataset.origStyle);
+      delete card.dataset.origStyle;
+    }
+  });
+  if (editModal) {
+    editModal.style.pointerEvents = "";
+    editModal.style.zIndex = "";
+    const eBack = editModal.querySelector(".modal-backdrop");
+    if (eBack && eBack.dataset.sideHidden) {
+      eBack.style.display = "";
+      delete eBack.dataset.sideHidden;
+    }
+  }
+  if (previewModal) {
+    previewModal.style.zIndex = "";
+  }
 }
 
 async function openOpportunityPreviewModal(oppId, titleHint = "", group = null) {
@@ -13075,6 +13562,15 @@ function bindOpportunityPreviewModal() {
   if (!modal || modal.dataset.bound) return;
   modal.dataset.bound = "1";
   $("#opp-preview-close")?.addEventListener("click", closeOpportunityPreviewModal);
+  $("#opp-preview-refresh")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const ctx = oppPreviewContext;
+    if (ctx && ctx.oppId != null) {
+      const titleHint = ctx.opp ? (ctx.opp.title || ctx.opp.Title || "") : "";
+      openOpportunityPreviewModal(ctx.oppId, titleHint, ctx.group || null).catch(() => {});
+    }
+  });
   $("#opp-preview-edit")?.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -13084,7 +13580,14 @@ function bindOpportunityPreviewModal() {
     el.addEventListener("click", closeOpportunityPreviewModal);
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && modal && !modal.classList.contains("hidden")) closeOpportunityPreviewModal();
+    if (e.key === "Escape" && modal && !modal.classList.contains("hidden")) {
+      const editM = $("#deal-edit-modal");
+      if (editM && !editM.classList.contains("hidden")) {
+        closeDealEditModal(); // close side note/edit popup first, keep preview
+      } else {
+        closeOpportunityPreviewModal();
+      }
+    }
   });
 }
 
@@ -13995,26 +14498,44 @@ async function refreshGroup(group, { force = false } = {}) {
 async function refreshAll() {
   noteDashboardActivity();
   $("#status-text").textContent = "Loading…";
-  try {
-    state.opportunityById = new Map();
-    state.tileLayout = loadLayoutFromStorage();
-    await loadCurrentUser();
-    syncFeedFilterPlaceholder();
-    await Promise.all([
-      loadPortalUsers(),
-      loadUserProfileFromServer(),
-      loadStages(),
-      loadAllTags(),
-      loadOpportunityCustomFieldDefs(),
-    ]);
-    syncFeedFilterPlaceholder();
-    renderBoardGroups();
-    refreshDashboardTileLayouts();
-    populateTasksUserFilter();
-    await loadExpandedDashboardTiles({ quiet: true });
-  } catch (err) {
+  state.opportunityById = new Map();
+  state.tileLayout = loadLayoutFromStorage();
+  // Use allSettled so tiles can still render even if some CRM loads fail (e.g. during crash).
+  // CRM-dependent loads will have empty state; banner will be shown by api/presence catches.
+  const settled = await Promise.allSettled([
+    loadCurrentUser(),
+    loadPortalUsers(),
+    loadUserProfileFromServer(),
+    loadStages(),
+    loadAllTags(),
+    loadOpportunityCustomFieldDefs(),
+  ]);
+  let hadNonTransientError = false;
+  for (const r of settled) {
+    if (r.status === "rejected") {
+      if (!isTransientError(r.reason)) {
+        hadNonTransientError = true;
+        try { showToast(r.reason && r.reason.message ? r.reason.message : "Load error", true); } catch {}
+      } else {
+        showCrmCrashBanner();
+      }
+    }
+  }
+  syncFeedFilterPlaceholder();
+  renderBoardGroups();
+  refreshDashboardTileLayouts();
+  populateTasksUserFilter();
+  await loadExpandedDashboardTiles({ quiet: true }).catch((err) => {
+    if (isTransientError(err)) {
+      showCrmCrashBanner();
+    } else {
+      try { showToast(err.message, true); } catch {}
+    }
+  });
+  if (hadNonTransientError) {
     $("#status-text").textContent = "Error";
-    showToast(err.message, true);
+  } else {
+    $("#status-text").textContent = "Ready";
   }
 }
 
@@ -14187,6 +14708,30 @@ async function init() {
 }
 
 init();
+
+// Formatting toolbar for quick event note and deal-edit (preview) event note editors.
+// Single light-green highlighter using <mark> (clean markup, no triggering mail heuristics in preview).
+// CSS applies the readable low-opacity tint (copied from notes-tile mark fix).
+document.addEventListener("click", function (e) {
+  const btn = e.target.closest(".note-format-btn");
+  if (!btn) return;
+  const toolbar = btn.closest(".note-format-toolbar");
+  if (!toolbar) return;
+  const editor = toolbar.parentElement && toolbar.parentElement.querySelector(".note-editor");
+  if (!editor) return;
+  e.preventDefault();
+  editor.focus();
+  const cmd = btn.dataset.cmd;
+  const val = btn.dataset.val || null;
+  if (!cmd) return;
+  if (cmd === "hiliteColor" || cmd === "backColor") {
+    // Single light green; CSS below forces the low-opacity readable version (notes-tile style)
+    // so it doesn't wash out text. Using execCommand for stable selection handling (no extra breaks/spaces).
+    document.execCommand("hiliteColor", false, "#c8e6c9");
+  } else {
+    document.execCommand(cmd, false, val);
+  }
+});
 
 // Safety net: if *both* login and app screens are still hidden long after load
 // (e.g. early JS error or init never reached a showApp/showLogin decision),

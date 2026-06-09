@@ -1,6 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
-**Current version:** 1.4.1 (see CHANGELOG.md, docs/RELEASE_v1.4.1.md)  
+**Current version:** 1.4.5 (see CHANGELOG.md, docs/RELEASE_v1.4.5.md)  
+**Last session summary (for next resume):** Side-by-side preview note editor (left/top + delete + manual refresh btn), presence AFD (tab-away vs signed-out), today feed white left lines, crash banner + full tile render on 5xx (no raw errors), quick note auto preview refresh. All tiles render on crash; CRM ones empty. Deployed as v1.4.5.  
 **Production:** https://dashboard.vanguardadj.com  
 **Repo:** https://github.com/kachapman/onlyoffice-crm-kanban (or local)
 
@@ -28,12 +29,12 @@ This file is auto-loaded by Grok into the system prompt for every session in thi
   - Profile: buildUserProfilePayload, applyUserProfile, loadUserProfileFromServer (prefers server), saveGroupsToStorage/scheduleUserProfileSave/saveUserProfileToServer, strip*RuntimeFields.
   - Tiles/layout: bindTileChrome, applyTileBodyCollapsed/applyTileLayoutClasses, createLayoutButtons, attachTileCollapseButton, tileLayout in state.
   - API: `api(path, opts)` + parseApiError (throws on !ok); all CRM calls go through /api/proxy + X-OnlyOffice-Portal header.
-  - Errors: showToast(msg, true); upgrade CRM 5xx to crash notifier.
+   - Errors: showToast(msg, true) only for non-transient; 5xx/unreachable now shows persistent right amber crash banner (text: "CRM is temporarily unreachable and may have crashed. Refresh again in 30 seconds or contact system administrator."); onCRMSuccess() hides it. Tiles always render (CRM pulls show empty content).
   - New tile type (if adding): follow checklist in Toaster_Features (add to HTML+JS chooser, persist in profile py + frontend, refresh policy, empty states, update docs).
   - Modals: reuse .modal / .modal-card / backdrop / data-*-dismiss / escape; openDealEditModal, confirmDialog.
   - History/feed: unwrapHistoryEvents, /api/2.0/crm/history/filter (entityType=opportunity), applyFeedKeywordFilter.
   - Groups: fetchOpportunitiesForGroup + buildFilterQuery, renderCard, setupGroupToolbar (templates, remove, filters).
-  - After mutations: renderXXX() + scheduleUserProfileSave() + optional refreshAll() or loadXXX().
+   - After mutations (incl. note create/delete from side editor): renderXXX() + scheduleUserProfileSave() + optional openOpportunityPreviewModal refresh for side context.
 - **Custom fields on create (ISSUE-001/FEAT-002):** Partial changes landed (CREATE_OPP_USER_FIELDS_ENABLED=false; create omits customFieldList; 300ms delay before per-field POSTs; probe script has variants A/B). UI disabled. Do **not** enable or change without explicit user request + live verification (native capture + probe + end-to-end in CRM). See ISSUES.md + FUTURE_FEATURES.md.
 - **Do not:** Duplicate docs (link to FUTURE_FEATURES.md, ISSUES.md, Toaster_Features, docs/UPDATE_AND_DEPLOY.txt, README). No new abstractions unless the task requires. Prefer minimal changes following existing.
 
@@ -51,6 +52,14 @@ All items from the explicit post-1.1 testing list + live feedback were completed
 - CRM crash/5xx banner (exact wording, 30s guidance, throttle, auto-clear, api() trigger).
 - AGENTS.md added.
 - FUTURE_FEATURES cleanup (crash item removed because shipped).
+
+**v1.4.5 additions (most recent session work — read this first on next resume):**
+- Side-by-side "quick edit" / note popup from opp preview: opens left of preview (desktop) or fixed top (mobile); both fully interactive; auto-refresh of preview history on submit; new manual ⟳ refresh button left of ✎; × delete on note history items in preview (confirm + DELETE /history/{id}).
+- Presence AFD: "Away from dashboard" (subtle gray dot + section) for tab-away but active session vs true "offline" only on sign-out (server clears hb on /logout); 3h auto-logout; "Last CRM (proxy)" confirmed only from real proxied calls.
+- Feed: today's notifications get subtle white left border line (`.feed-item-today`).
+- Crash resilience: on 502/5xx (api + presence), persistent right-side amber banner ("CRM temporarily unreachable... refresh in 30s or contact admin"); no raw toasts; tiles *all* render (CRM ones empty/no-content, local features work); banner hides only on successful CRM response.
+- Quick note side submit now reliably refreshes preview.
+- All changes in v1.4.5 release notes + full deploy checklist followed (local close, git tag/push, prod docker + VERIFY blocks). Update AGENTS on every release.
 
 See CHANGELOG.md and docs/RELEASE_v1.2.md. Custom fields research remains disabled. AccuLynx research stays in FUTURE_FEATURES under Other ideas (not implemented). 
 

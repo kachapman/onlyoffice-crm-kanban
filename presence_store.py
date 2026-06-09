@@ -54,6 +54,7 @@ def _empty_presence() -> dict[str, Any]:
         "lastHeartbeat": "",  # last client heartbeat (for online / idle calc)
         "lastCrmActivity": "",  # last time a CRM-ish request was proxied for this user
         "lastDashboardActivity": "",  # last explicit dashboard activity / heartbeat
+        "lastReadDms": {},  # { other_user_id: iso_or_ms_last_read_time, ... } for cross-device DM read state
     }
 
 
@@ -93,6 +94,8 @@ def load_user_presence(portal: str, user_id: str) -> dict[str, Any]:
     presence["lastCrmActivity"] = str(data.get("lastCrmActivity") or "")[:80]
     presence["lastDashboardActivity"] = str(data.get("lastDashboardActivity") or "")[:80]
     presence["updatedAt"] = str(data.get("updatedAt") or "")
+    lrd = data.get("lastReadDms") or {}
+    presence["lastReadDms"] = lrd if isinstance(lrd, dict) else {}
     return presence
 
 
@@ -112,6 +115,11 @@ def save_user_presence(portal: str, user_id: str, payload: dict[str, Any]) -> di
         "lastCrmActivity": str(payload.get("lastCrmActivity") or "")[:80],
         "lastDashboardActivity": str(payload.get("lastDashboardActivity") or "")[:80],
     }
+    lrd = payload.get("lastReadDms") or {}
+    if isinstance(lrd, dict):
+        cleaned["lastReadDms"] = {str(k): str(v)[:80] for k, v in lrd.items() if k and v}
+    else:
+        cleaned["lastReadDms"] = {}
     path.write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
     return cleaned
 
@@ -276,6 +284,15 @@ def clear_conversation(portal: str, user_a: str, user_b: str) -> None:
             path.unlink()
     except OSError:
         pass
+    # Clear the reader's last-read marker for this peer so a cleared conversation doesn't retain stale cutoff on reload/other devices
+    try:
+        pres = load_user_presence(portal, user_a)
+        if isinstance(pres.get("lastReadDms"), dict):
+            pres["lastReadDms"].pop(str(user_b), None)
+            pres["updatedAt"] = _now_iso()
+            save_user_presence(portal, user_a, pres)
+    except Exception:
+        pass
 
 
 def mark_messages_read(portal: str, reader_id: str, other_id: str) -> None:
@@ -294,3 +311,29 @@ def mark_messages_read(portal: str, reader_id: str, other_id: str) -> None:
             modified = True
     if modified:
         _save_conversation(path, msgs)
+
+
+def load_user_last_read_dms(portal: str, user_id: str) -> dict[str, str]:
+    """Return the map of last-read timestamps (per other user) for DM read-state persistence.
+    Values are stored as ISO or numeric strings; client normalizes to ms for comparison.
+    """
+    pres = load_user_presence(portal, user_id)
+    d = pres.get("lastReadDms") or {}
+    if not isinstance(d, dict):
+        return {}
+    return {str(k): str(v) for k, v in d.items() if k and v}
+
+
+def set_last_read_dm(portal: str, user_id: str, other_id: str, at: str = None) -> dict[str, Any]:
+    """Record that the user has read up to 'now' (or provided ts) for the conversation with other_id.
+    This makes DM read/unread state (inbox shading, unread counts) survive across devices/logins.
+    """
+    if not user_id or not other_id:
+        return {}
+    existing = load_user_presence(portal, user_id)
+    if not isinstance(existing.get("lastReadDms"), dict):
+        existing["lastReadDms"] = {}
+    ts = at or _now_iso()
+    existing["lastReadDms"][str(other_id)] = str(ts)[:80]
+    existing["updatedAt"] = _now_iso()
+    return save_user_presence(portal, user_id, existing)

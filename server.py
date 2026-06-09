@@ -28,8 +28,10 @@ from presence_store import (
     get_portal_presence_snapshot,
     get_recent_dms_for_user,
     load_user_presence,
+    load_user_last_read_dms,
     mark_messages_read,
     save_user_presence,
+    set_last_read_dm,
     set_status,
     touch_crm_activity,
     touch_heartbeat,
@@ -314,6 +316,22 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body_out)
 
     def _handle_logout(self) -> None:
+        # Best-effort: clear the user's lastHeartbeat so they immediately appear "offline"
+        # (not AFD) after explicit or auto sign-out. Tab-away users keep their hb record
+        # (stale) and will show as AFD until hb cleared or aged >3h.
+        try:
+            portal = _portal_base(self)
+            token = _session_token(self)
+            if portal and token:
+                user_id = _fetch_crm_user_id(portal, token)
+                if user_id:
+                    pres = load_user_presence(portal, user_id)
+                    if pres.get("lastHeartbeat"):
+                        pres["lastHeartbeat"] = ""
+                        save_user_presence(portal, user_id, pres)
+        except Exception:
+            pass
+
         self.send_response(200)
         cookie = cookies.SimpleCookie()
         cookie[SESSION_COOKIE] = ""
@@ -522,10 +540,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
             online = False
             idle = False
+            afd = False
             if hb:
                 delta = (now - hb).total_seconds()
                 online = delta < (10 * 60)  # 10 min window for "online"
-                idle = delta > (2 * 60 * 60)  # >2h idle flag
+                idle = delta > (2 * 60 * 60) and online  # >2h idle flag (visual only while "online")
+                if not online:
+                    # Has a (non-cleared) heartbeat record → had an active dashboard session.
+                    # If within the ~3h auto-logout window, this is "tabbed away" (AFD), not signed out.
+                    # Signed-out users have their lastHeartbeat cleared in _handle_logout.
+                    # Very old (>3h) heartbeats without logout are treated as offline (aged out).
+                    if delta < (3 * 60 * 60):
+                        afd = True
 
             row: dict[str, Any] = {
                 "id": uid,
@@ -533,6 +559,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "email": str(p.get("email") or p.get("Email") or "").strip().lower(),
                 "online": online,
                 "idle": idle and online,
+                "afd": afd,
                 "status": status,
                 "lastSeen": ov.get("lastHeartbeat") or ov.get("lastDashboardActivity") or "",
             }
@@ -550,6 +577,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
         # Also surface the caller's own presence record (for the modal to know "me")
         my_presence = load_user_presence(portal, user_id)
+        my_last_read = load_user_last_read_dms(portal, user_id)
 
         _json_response(
             self,
@@ -564,6 +592,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 },
                 "isAdmin": is_admin,
                 "myRecentDms": get_recent_dms_for_user(portal, user_id, 50),
+                "lastReadDms": my_last_read,
             },
         )
 
@@ -592,6 +621,25 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         rec = set_status(portal, user_id, status_text)
         _json_response(self, 200, {"ok": True, "status": rec.get("status", "")})
+
+    def _handle_presence_last_read(self) -> None:
+        """Persist a last-read timestamp for a DM conversation (cross-device read state)."""
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, _token, user_id = auth
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        other = str(payload.get("with") or payload.get("other") or payload.get("to") or "").strip()
+        at = str(payload.get("at") or payload.get("ts") or "")
+        if not other:
+            _json_response(self, 400, {"error": "with=<userId> is required"})
+            return
+        set_last_read_dm(portal, user_id, other, at or None)
+        _json_response(self, 200, {"ok": True})
 
     def _handle_presence_dm_get(self) -> None:
         auth = _require_auth(self)
@@ -744,6 +792,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             if api_path == "/api/presence/status" and method == "POST":
                 self._handle_presence_status()
+                return
+            if api_path == "/api/presence/last-read" and method == "POST":
+                self._handle_presence_last_read()
                 return
             if api_path == "/api/presence/dm" and method == "POST":
                 self._handle_presence_dm_post()

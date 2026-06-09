@@ -2,6 +2,43 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [1.4.5] — 2026-06-09
+
+### Side-by-side preview note editor (quick note / edit from preview)
+- Edit note button (or quick note in preview context) now opens as a separate "side popup" to the left of the preview modal on desktop (or fixed to the top of the preview on mobile <700px width).
+- Both preview (history/details) and the note editor (rich B/I/U/H formatting, tags, due, notify) remain fully interactive simultaneously (pointer-events:none on side modal container + auto on card; fixed positioning + z; preview backdrop provides dim).
+- Auto-refreshes preview on successful note submit (quick note or deal-edit note) so new history event appears immediately.
+- Escape in preview closes side editor first (keeps preview open).
+- Added manual refresh button (⟳) in preview head (left of ✎ edit) to force re-fetch current opp preview (useful after side note or external changes).
+- Delete × button now available on event note history items inside preview (only for note-category non-mail events; uses confirmDialog + DELETE /api/2.0/crm/history/{id}; re-opens preview to refresh list).
+
+### Presence / Team: AFD (away from dashboard) status + accuracy
+- "Online" = tab visible + recent heartbeat (<10m).
+- "Away from dashboard" (AFD): tab backgrounded but still has active session (stale hb record, not cleared by logout; subtle slate-gray dot + "Away from dashboard (N)" section in roster).
+- "Offline": signed out (manual or auto 3h) — server clears lastHeartbeat on /api/logout so immediately offline (or aged >3h).
+- Auto-logout aligned to 3h (was 4h); timer + visibility listeners.
+- "Last CRM (proxy):" confirmed only from real proxied /crm/ or /people/ calls (touch_crm_activity), not heartbeats.
+- Roster splits Online / Away from dashboard / Offline; compact tile respects AFD dots.
+
+### Feed / notifications: today indicator
+- All notifications from the current day (local date match on it.date) now get a subtle white left border line (`.feed-item-today` + border-left: 3px solid rgba(255,255,255,0.25); adjusted padding) in the CRM notifications feed.
+
+### Crash / 5xx resilience (CRM unreachable banner)
+- On 502/5xx (or transient proxy/CRM down errors) from api() or presence: shows persistent amber crash banner on right side of header meta ("CRM is temporarily unreachable and may have crashed. Refresh again in 30 seconds or contact system administrator.").
+- Banner is subtle amber (#f59e0b bg, dark #1f2937 text for readability in dark/light), non-dismissible except by successful CRM response (onCRMSuccess hides) or page reload.
+- No raw error toasts for transients during crash; status stays usable.
+- All tiles still render (board, feed, tasks, etc.); CRM-pulling tiles/sections show no content (empty state from failed loads) while non-CRM parts (local notes, layout) continue.
+- Quick note / side edit from preview still works (local), and preview auto-refreshes on submit even during partial outage.
+- 30s guidance in message; throttle via existing transient queue logic.
+
+### Documentation & Housekeeping
+- Version bumped to 1.4.5 everywhere (VERSION, AGENTS.md, README, CHANGELOG, new RELEASE_v1.4.5.md, docs/GITHUB_RELEASES.md, docs/UPDATE_AND_DEPLOY.txt, docs/DEPLOY_*.md).
+- Added detailed release notes + updated AGENTS.md "Post-v1.2 shipped items" with the new UX (side preview editor + delete + refresh, AFD presence, today lines, crash banner + partial render).
+- Session changes from crash sim, side note flow, delete, feed today, presence AFD all documented.
+- Local server close + prod deploy checklist followed (see below).
+
+See also [docs/RELEASE_v1.4.5.md](./docs/RELEASE_v1.4.5.md) for the full GitHub release text.
+
 ## [1.4.1] — 2026-06-08
 
 Patch release to ensure reliable deployments after v1.4.0.

@@ -965,6 +965,21 @@ body {
   display: none !important;
 }
 
+.crm-crash-banner {
+  margin-left: auto;
+  font-size: 0.75rem;
+  line-height: 1.3;
+  background: #f59e0b;
+  color: #1f2937; /* dark text, readable on amber in both light and dark mode */
+  border: 1px solid #b45309;
+  border-radius: 3px;
+  padding: 2px 6px;
+  max-width: 320px;
+  white-space: normal;
+  flex-shrink: 0;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+
 .btn-collapse-tile {
   flex-shrink: 0;
 }
@@ -1595,6 +1610,12 @@ body {
   padding: 0.65rem 0.85rem;
   border-bottom: 1px solid var(--border);
   font-size: 0.85rem;
+}
+
+.feed-item.feed-item-today,
+.feed-list li.feed-item-today {
+  border-left: 3px solid rgba(255, 255, 255, 0.25);
+  padding-left: 0.5rem;
 }
 
 .feed-item-hiding {
@@ -2298,7 +2319,8 @@ body {
 
 .modal-form .field input:not([type="checkbox"]),
 .modal-form .field select,
-.modal-form .field textarea {
+.modal-form .field textarea,
+.modal-form .field .note-editor {
   display: block;
   width: 100%;
   padding: 0.5rem 0.65rem;
@@ -2313,6 +2335,116 @@ body {
 .modal-form .field textarea {
   resize: vertical;
   min-height: 4.5rem;
+}
+
+.modal-form .field .note-editor {
+  resize: vertical;
+  min-height: 4.5rem;
+  max-height: 12rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  outline: none;
+}
+
+.note-format-toolbar {
+  display: flex;
+  gap: 0.2rem;
+  margin: 0.1rem 0 0.2rem;
+  flex-wrap: wrap;
+}
+
+.note-format-btn {
+  font: inherit;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0.1rem 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  min-width: 1.35em;
+  text-align: center;
+  user-select: none;
+}
+.note-format-btn:hover {
+  background: var(--surface-2);
+  border-color: var(--accent);
+}
+.note-format-btn:active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+/* Single light-green highlighter button swatch (subtle so it doesn't look like the bright applied highlight) */
+.note-format-btn[data-cmd="hiliteColor"] { background: #c8e6c9; color: #222; border-color: #81c784; }
+.note-format-btn[data-cmd="hiliteColor"]:hover { filter: brightness(0.95); }
+
+.note-editor {
+  display: block;
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+  box-sizing: border-box;
+}
+
+.note-editor:focus {
+  border-color: var(--accent);
+}
+
+.note-editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--muted);
+  font-style: italic;
+  pointer-events: none;
+  display: block;
+}
+
+/* Rich text (bold/italic/underline) + highlight from quick event notes / deal-edit event notes
+   must render visibly in the preview deal modal history (and while editing in the modals).
+   Use <mark> for highlight + the notes-tile low-opacity light-green tint so it doesn't wash out text. */
+.opp-preview-history-body strong,
+.opp-preview-history-body b,
+.opp-preview-history-body--html strong,
+.opp-preview-history-body--html b,
+.note-editor strong,
+.note-editor b {
+  font-weight: 700;
+}
+.opp-preview-history-body em,
+.opp-preview-history-body i,
+.opp-preview-history-body--html em,
+.opp-preview-history-body--html i,
+.note-editor em,
+.note-editor i {
+  font-style: italic;
+}
+.opp-preview-history-body u,
+.opp-preview-history-body--html u,
+.note-editor u {
+  text-decoration: underline;
+}
+
+/* Light green highlight (more green, much lower opacity for readability, copied from notes-tile mark fix).
+   !important to override inline styles from execCommand hiliteColor.
+   Targets both <mark> (if produced) and spans. */
+.note-editor mark,
+.note-editor span[style*="background-color"],
+.opp-preview-history-body mark,
+.opp-preview-history-body span[style*="background-color"],
+.opp-preview-history-body--html mark,
+.opp-preview-history-body--html span[style*="background-color"] {
+  background-color: rgba(34, 197, 94, 0.12) !important;
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 2px;
 }
 
 .modal-checkbox {
@@ -2658,6 +2790,7 @@ body {
 .presence-dot.online { background: #22c55e; } /* green */
 .presence-dot.offline { background: #475569; } /* dark slate */
 .presence-dot.idle { background: #eab308; }   /* amber for idle >2h */
+.presence-dot.afd { background: #64748b; }   /* subtle slate gray for "away from dashboard" (tab not focused, but session active) */
 
 .presence-name {
   font-weight: 600;
@@ -2725,13 +2858,17 @@ body {
 }
 
 .presence-dm-input {
-  display: flex;
+  display: grid;
+  grid-template-areas:
+    "text buttons"
+    "picker .";
+  grid-template-columns: 1fr auto;
   gap: 0.35rem;
   padding: 0.5rem;
   border-top: 1px solid var(--border);
 }
 .presence-dm-input textarea {
-  flex: 1;
+  grid-area: text;
   font: inherit;
   font-size: 0.85rem;
   padding: 0.25rem 0.4rem;
@@ -2741,6 +2878,13 @@ body {
   color: var(--text);
   resize: vertical;
   min-height: 2.2em;
+}
+.presence-dm-input-buttons {
+  grid-area: buttons;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.35rem;
 }
 
 .presence-admin {
@@ -2945,6 +3089,28 @@ body {
   background: var(--surface-2);
   border-left: 3px solid var(--warn);
 }
+.mail-right-sidebar.hidden {
+  display: none;
+}
+.mail-viewer-warning-content {
+  position: relative;
+}
+.mail-warning-dismiss {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0 4px;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+.mail-warning-dismiss:hover {
+  color: var(--text);
+}
 .mail-viewer-warning-content h4 {
   color: var(--warn);
   font-size: 0.85rem;
@@ -3132,19 +3298,20 @@ body {
   font-size: 0.85rem;
 }
 .presence-emoji-picker {
-  position: absolute;
-  bottom: 100%;
-  right: 0;
+  grid-area: picker;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-top: none;
+  border-radius: 0 0 6px 6px;
   padding: 0.25rem;
   display: grid;
   grid-template-columns: repeat(8, 1fr);
   gap: 2px;
-  max-width: 240px;
-  z-index: 100;
+  max-width: 100%;
+  max-height: 160px;
+  overflow-y: auto;
   box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  margin-top: 0;
 }
 .presence-emoji-btn {
   font-size: 1.1rem;
@@ -3293,6 +3460,29 @@ body {
 
 .opp-preview-edit-btn:hover,
 .opp-preview-edit-btn:focus-visible {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--surface-2);
+  outline: none;
+}
+
+.opp-preview-refresh-btn {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  margin-right: 0.25rem;
+}
+
+.opp-preview-refresh-btn:hover,
+.opp-preview-refresh-btn:focus-visible {
   border-color: var(--accent);
   color: var(--text);
   background: var(--surface-2);
@@ -3525,6 +3715,23 @@ body {
   color: var(--muted);
   opacity: 0.9;
   white-space: nowrap;
+}
+
+.opp-preview-history-delete {
+  margin-left: auto;
+  font-size: 0.85rem;
+  padding: 0 0.15rem;
+  line-height: 1;
+  color: var(--muted);
+  opacity: 0.45;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.opp-preview-history-delete:hover {
+  opacity: 1;
+  color: #dc2626;
 }
 
 .opp-preview-history-body {
@@ -4225,6 +4432,22 @@ body {
   color: var(--accent);
 }
 
+.notes-preview u {
+  text-decoration: underline;
+}
+
+.notes-preview mark {
+  background-color: rgba(255, 235, 59, 0.35);
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+.notes-preview del {
+  opacity: 0.65;
+  text-decoration: line-through;
+}
+
 .notes-md-empty {
   color: var(--muted);
   font-style: italic;
@@ -4285,6 +4508,55 @@ body {
   background: rgba(0, 0, 0, 0.04);
 }
 .notes-list-btns .btn-notes-bullet + .btn-notes-numbered {
+  border-left: 1px solid var(--border);
+}
+
+/* Formatting buttons (bold/italic/underline etc) grouped next to lists buttons */
+.notes-format-btns {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+  padding: 1px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  background: var(--surface-2);
+  margin: 0 0.05rem;
+}
+.notes-format-btns .btn-notes-bold,
+.notes-format-btns .btn-notes-italic,
+.notes-format-btns .btn-notes-strike,
+.notes-format-btns .btn-notes-underline,
+.notes-format-btns .btn-notes-highlight,
+.notes-format-btns .btn-notes-quote,
+.notes-format-btns .btn-notes-code {
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 0.15rem 0.25rem;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  min-width: 1em;
+  text-align: center;
+  font-family: ui-monospace, monospace;
+}
+.notes-format-btns .btn-notes-bold:hover,
+.notes-format-btns .btn-notes-italic:hover,
+.notes-format-btns .btn-notes-strike:hover,
+.notes-format-btns .btn-notes-underline:hover,
+.notes-format-btns .btn-notes-highlight:hover,
+.notes-format-btns .btn-notes-quote:hover,
+.notes-format-btns .btn-notes-code:hover {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.04);
+}
+.notes-format-btns .btn-notes-bold + .btn-notes-italic,
+.notes-format-btns .btn-notes-italic + .btn-notes-strike,
+.notes-format-btns .btn-notes-strike + .btn-notes-underline,
+.notes-format-btns .btn-notes-underline + .btn-notes-highlight,
+.notes-format-btns .btn-notes-highlight + .btn-notes-quote,
+.notes-format-btns .btn-notes-quote + .btn-notes-code {
   border-left: 1px solid var(--border);
 }
 
