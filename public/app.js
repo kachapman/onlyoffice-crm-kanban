@@ -9246,71 +9246,11 @@ async function fetchPresenceSnapshot() {
     updateClientPresenceCache(state.presenceData);
     if (state.presenceData) {
       if (!Array.isArray(state.presenceData.myRecentDms)) state.presenceData.myRecentDms = [];
-      // Strip any prior demo/test messages (so we control the demo example cleanly)
-      state.presenceData.myRecentDms = state.presenceData.myRecentDms.filter(m => !(m && ((m.id || '').startsWith('demo-') || (m.id || '').startsWith('test-blue-') || (m.from === 'demo-colleague'))));
-      // Always ensure a demo example message is present in myRecentDms.
-      // This makes it visible in the Messages tab of the popup (as an example of a "new message").
-      // The unread count for the header blue bubble will only include it until the user clicks it (which calls markPresenceDMRead).
-      const demoFrom = 'demo-colleague';
-      const lastReadForDemo = (typeof presenceLastRead !== 'undefined' ? (presenceLastRead[demoFrom] || 0) : 0);
-      let demoTs;
-      if (lastReadForDemo <= 0) {
-        // Not yet read in this session: give it a recent ts so it looks like a fresh "new message" and counts as unread.
-        demoTs = new Date(Date.now() - 2 * 60 * 1000).toISOString();
-      } else {
-        // Already read (user clicked the demo convo): give this re-injected instance a ts just before the read time.
-        // This way ts < lastRead so computeUnread will exclude it, but it still appears in the inbox list as a (read) example.
-        demoTs = new Date( new Date(lastReadForDemo).getTime() - 60 * 1000 ).toISOString();
-      }
-      const demoMsg = {
-        from: demoFrom,
-        to: String(state.currentUserId || 'me'),
-        text: "This is a test message for this session — to demonstrate the blue unread counter bubble (top right of the Team button).",
-        ts: demoTs,
-        id: 'test-blue-bubble-' + Date.now()
-      };
-      state.presenceData.myRecentDms.unshift(demoMsg);
-      if (!presenceTestMessageInjected) {
-        // Only the first time we inject the demo in this session: force it as unread so the blue indicator shows initially.
-        // After the user clicks the demo row/thread (markPresenceDMRead), lastRead will be updated to now and it will stop counting.
-        if (typeof presenceLastRead !== 'undefined') {
-          presenceLastRead[demoFrom] = new Date(0).toISOString();
-          try { savePresenceLastRead(); } catch {}
-        }
-        presenceTestMessageInjected = true;
-        demoMessageReadThisSession = false;
-      }
     }
     return state.presenceData;
   } catch {
-    // Fallback: synthesize with the demo message (for inbox visibility + initial indicator).
-    const demoFrom = 'demo-colleague';
-    const lastReadForDemo = (typeof presenceLastRead !== 'undefined' ? (presenceLastRead[demoFrom] || 0) : 0);
-    let demoTs;
-    if (lastReadForDemo <= 0) {
-      demoTs = new Date(Date.now() - 2 * 60 * 1000).toISOString();
-    } else {
-      demoTs = new Date( new Date(lastReadForDemo).getTime() - 60 * 1000 ).toISOString();
-    }
-    state.presenceData = {
-      users: [],
-      myRecentDms: [{
-        from: demoFrom,
-        to: String(state.currentUserId || 'me'),
-        text: "This is a test message for this session — to demonstrate the blue unread counter bubble (top right of the Team button).",
-        ts: demoTs,
-        id: 'test-blue-bubble-' + Date.now()
-      }]
-    };
+    state.presenceData = { users: [], myRecentDms: [] };
     updateClientPresenceCache(state.presenceData);
-    if (!presenceTestMessageInjected) {
-      if (typeof presenceLastRead !== 'undefined') {
-        presenceLastRead[demoFrom] = new Date(0).toISOString();
-        try { savePresenceLastRead(); } catch {}
-      }
-      presenceTestMessageInjected = true;
-      demoMessageReadThisSession = false;
-    }
     return state.presenceData;
   }
 }
@@ -9436,15 +9376,6 @@ function updatePresenceHeaderBadge(snapshot = null) {
   }
   const unreadBadge = $("#presence-unread-badge");
   let unread = computeUnreadMessagesCount(recent);
-  // For the session demo test message: keep the blue indicator showing (at least 1)
-  // as long as the demo hasn't been explicitly "read" this session.
-  // We use a dedicated flag (set false on injection, set true on markPresenceDMRead for the demo).
-  // This is independent of server snapshots / lastRead / ts to avoid the flashing on/off.
-  // Once you click the demo in the inbox (or open its thread), it marks as read for this session
-  // and the force stops; the indicator will then reflect only real unreads (or 0).
-  if (presenceTestMessageInjected && !demoMessageReadThisSession) {
-    unread = Math.max(unread || 0, 1);
-  }
   if (unreadBadge) {
     if (unread > 0) {
       unreadBadge.textContent = String(unread);
@@ -9453,17 +9384,6 @@ function updatePresenceHeaderBadge(snapshot = null) {
     } else {
       unreadBadge.classList.add("hidden");
       unreadBadge.textContent = "";
-    }
-  }
-  // Extra safety for the demo indicator: if the session demo is still "unread",
-  // always assert the visual state of the blue bubble. This ensures it shows and stays on
-  // fresh reloads and across updates/polls, until the user actually clicks the demo message
-  // in the inbox (which sets demoMessageReadThisSession = true).
-  if (presenceTestMessageInjected && !demoMessageReadThisSession) {
-    if (unreadBadge) {
-      unreadBadge.textContent = "1";
-      unreadBadge.classList.remove("hidden");
-      unreadBadge.title = "1 unread message (demo for this session)";
     }
   }
 }
@@ -9575,9 +9495,6 @@ function markPresenceDMRead(otherUserId) {
   if (!otherUserId) return;
   presenceLastRead[String(otherUserId)] = Date.now();
   savePresenceLastRead();
-  if (String(otherUserId) === 'demo-colleague') {
-    demoMessageReadThisSession = true;
-  }
 }
 
 function formatTimeAgo(iso) {
@@ -9888,13 +9805,6 @@ function renderPresenceInbox(container, recentDms, cache, snap) {
     const otherLastRead = presenceLastRead[otherId] || 0;
     const msgTsNum = m.ts ? new Date(m.ts).getTime() : 0;
     let isUnread = msgTsNum > otherLastRead;
-    // For the demo message, base the unread shading strictly on the session "read" state
-    // (!demoMessageReadThisSession = still unread for demo purposes). This makes the shading clearly
-    // distinguish the demo as unread until you click it, independent of the internal ts/lastRead we use
-    // for the count logic.
-    if (otherId === 'demo-colleague' || (m.id || '').startsWith('test-blue-')) {
-      isUnread = !demoMessageReadThisSession;
-    }
     if (isUnread) {
       row.classList.add('unread');
     } else {
@@ -9918,11 +9828,7 @@ function renderPresenceInbox(container, recentDms, cache, snap) {
 
     const tm = document.createElement('span');
     tm.className = 'presence-recent-time';
-    if (m && (m.id || '').startsWith('test-blue-')) {
-      tm.textContent = 'just now (demo)';
-    } else {
-      tm.textContent = m.ts ? formatTimeAgo(m.ts) : '';
-    }
+    tm.textContent = m.ts ? formatTimeAgo(m.ts) : '';
 
     const clr = document.createElement('button');
     clr.type = 'button';
@@ -10139,8 +10045,6 @@ function renderPresenceAdminTab(container, snapshot) {
 let presenceModalBound = false;
 let presenceCurrentReplyTo = null;  // for quoting/replying to a specific previous message
 let presenceHeaderPollTimer = null;
-let presenceTestMessageInjected = false;  // one-time per page load so we can show a test unread DM for the blue bubble counter in this session
-let demoMessageReadThisSession = false;  // tracks if the user has clicked the demo message in the inbox this session (to stop forcing the blue indicator and to shade it as read)
 
 async function openPresenceModal() {
   const modal = $("#presence-modal");
@@ -10283,9 +10187,6 @@ async function clearPresenceConversation(otherUserId, onDone) {
     }
     // clear local read marker too
     try { delete presenceLastRead[String(otherUserId)]; savePresenceLastRead(); } catch {}
-    if (String(otherUserId) === 'demo-colleague') {
-      demoMessageReadThisSession = false;  // allow re-showing as unread demo if cleared
-    }
     if (typeof onDone === "function") onDone();
     else {
       // default: refresh current modal view
@@ -10637,42 +10538,9 @@ function ensurePresenceOnLogin() {
   // Wire the header button
   bindPresenceButton();
 
-  // Force the demo blue unread counter indicator immediately and synchronously for this session.
-  // This guarantees the top-right blue bubble ("1") is visible right away to demonstrate the
-  // new message indicator, even if async fetch timing, currentUserId not yet populated, or
-  // /api/presence returns empty/no data on first calls.
-  const _unreadBadge = $("#presence-unread-badge");
-  if (_unreadBadge) {
-    _unreadBadge.textContent = "1";
-    _unreadBadge.classList.remove("hidden");
-    _unreadBadge.title = "1 unread message (demo/test for this session)";
-  }
-  // Seed a demo message in presenceData immediately (for the Messages inbox if opened right away).
-  // We ensure the demo example is present, but only force it as unread (for the initial blue count)
-  // the first time in the session. After user clicks/reads the demo (markPresenceDMRead), it will
-  // stop contributing to the unread count.
-  state.presenceData = state.presenceData || { users: [] };
-  if (!Array.isArray(state.presenceData.myRecentDms)) state.presenceData.myRecentDms = [];
-  // strip old demos
-  state.presenceData.myRecentDms = state.presenceData.myRecentDms.filter(m => !(m && ((m.id || '').startsWith('demo-') || (m.id || '').startsWith('test-blue-') || (m.from === 'demo-colleague'))));
-  // add fresh demo example
-  state.presenceData.myRecentDms.unshift({
-    from: 'demo-colleague',
-    to: String(state.currentUserId || 'me'),
-    text: "This is a test message for this session — to demonstrate the blue unread counter bubble (top right of the Team button).",
-    ts: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
-    id: 'test-blue-bubble-' + Date.now()
-  });
-  if (!presenceTestMessageInjected) {
-    if (typeof presenceLastRead !== 'undefined') {
-      presenceLastRead['demo-colleague'] = new Date(0).toISOString();
-      try { savePresenceLastRead(); } catch {}
-    }
-    presenceTestMessageInjected = true;
-    demoMessageReadThisSession = false;
-  }
+  // Immediate badge + self-online + waiting indicators update
 
-  // Immediate badge + self-online + waiting indicators update (async will keep the test msg alive)
+
   fetchPresenceSnapshot().then(s => updatePresenceHeaderIndicators(s)).catch(() => {});
   // Light periodic poll for header indicators (badge, self-online dot, waiting flash) so they are live
   // even without opening the modal. (Full poll only when modal open.)
@@ -13744,7 +13612,7 @@ function openTaskPreviewModal(task) {
   if (task.entity?.entityType === "opportunity" && task.entity.entityTitle) {
     html += `
       <p><strong>Linked Deal:</strong> ${task.entity.entityTitle}
-        <button type="button" class="btn btn-ghost btn-icon-only" title="Preview deal" onclick="openOpportunityPreviewModal(${task.entity.entityId}, '${(task.entity.entityTitle || '').replace(/'/g, "\\'")}')">
+        <button type="button" class="btn btn-ghost btn-icon-only" title="Preview deal" data-preview-deal>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
         </button>
       </p>
@@ -13753,6 +13621,15 @@ function openTaskPreviewModal(task) {
 
   body.innerHTML = html;
   linkifyPhonesAndEmails(body);
+
+  // Attach click handler directly (avoids inline onclick global lookup / ReferenceError in some contexts)
+  const previewBtn = body.querySelector('[data-preview-deal]');
+  if (previewBtn && task.entity) {
+    previewBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      openOpportunityPreviewModal(task.entity.entityId, task.entity.entityTitle || '');
+    });
+  }
 
   if (!modal.dataset.bound) {
     modal.dataset.bound = "1";
