@@ -147,21 +147,19 @@ User fields on **New Opportunity** do not persist in CRM although the deal is cr
 
 ---
 
-## FEAT-003 — Attachments on event notes in deal-edit modal
+## FEAT-003 — Attachments on event notes (COMPLETED in v1.6+)
 
-### Problem
+Implemented: native UploadProgress.ashx + history form-urlencoded with fileId[], text priority, 25MB, plain no-icon selected list, right-side 10s queue list near #mutation-sync-status (all items, ✓ success, ✕ fail), works in deal-edit/quick-note/side/notes-tile paths.
 
-The deal-edit modal only supports **plain-text** event notes. The UI states: *“(You can not attach files in this popup)”* (`public/index.html`). Users expect to attach files like in native CRM when adding a history event.
+See CHANGELOG and public/app.js (uploadAttachmentForNote, extended createOpportunityHistoryEvent, submit paths, note queue render + 10s prune).
 
-### Current behavior
+### Problem (historical)
 
-- `createOpportunityHistoryEvent()` posts JSON to `POST /api/2.0/crm/history` with `content` (HTML from `plainTextToNoteHtml`), `categoryId`, optional `notifyUserList`.
-- No `multipart/form-data` or file ids in the payload.
+The deal-edit modal only supported **plain-text** event notes (old hint removed). 
 
-### Research plan
+### Research (completed)
 
-1. **Native CRM capture**
-   - In OnlyOffice CRM, open an opportunity → add event with **file attachment**.
+1. **Native CRM capture** (user provided curl data) — used exactly.
    - Network tab: look for `files`, `upload`, `history`, `attachment` endpoints and request shape.
 
 2. **Likely OnlyOffice Workspace patterns** (confirm on your portal)

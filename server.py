@@ -161,8 +161,6 @@ def _proxy_request(
         return 401, b'{"error":"Not authenticated"}', "application/json"
 
     path = api_path if api_path.startswith("/") else f"/{api_path}"
-    if not path.endswith(".json"):
-        path = f"{path}.json"
     url = f"{portal}{path}"
     if query:
         url = f"{url}?{query}"
@@ -826,6 +824,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 proxy_ct = incoming_ct
             elif "application/json" in incoming_ct.lower():
                 proxy_ct = "application/json"
+            elif "application/x-www-form-urlencoded" in incoming_ct.lower():
+                proxy_ct = incoming_ct
         status, resp_body, ctype = _proxy_request(
             self, method, api_path, query, body if body else None, content_type=proxy_ct
         )

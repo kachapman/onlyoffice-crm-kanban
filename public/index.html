@@ -145,8 +145,11 @@
     <section class="global-meta">
       <span id="status-text">Ready</span>
       <span id="portal-label" class="portal-label"></span>
+      <span id="app-version" class="app-version"></span>
       <!-- Minimal mutation queue sync status (added for offline resilience). Hidden when empty. -->
       <span id="mutation-sync-status" class="mutation-sync-status hidden" title="Actions waiting to sync with CRM"></span>
+      <!-- Note attachments queue: right-side list of recent note sends (with attachments). Shows pending + completed (clears 10s after done). -->
+      <div id="note-queue-list" class="note-queue-list" aria-live="polite" aria-label="Recent note attachments status"></div>
       <!-- CRM unreachable marquee: pinned under header on the right side, matching the font/size of the left meta text (larger than old tiny version for better height/visibility). Compact width, scrolls. -->
       <div id="crm-header-marquee" class="crm-header-marquee hidden" aria-live="polite" role="status"></div>
       <!-- CRM crash banner: subtle amber, right side, persistent until successful CRM responses after refresh. -->
@@ -499,9 +502,13 @@
                <button type="button" class="note-format-btn" data-cmd="hiliteColor" title="Highlight (light green)">H</button>
                <button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear">⌫</button>
              </div>
-             <div id="deal-edit-note-body" class="note-editor" contenteditable="true" data-placeholder="Well go on, write the note already"></div>
-             <span class="field-hint deal-edit-attach-hint">(You can not attach files in this popup)</span>
-           </div>
+              <div id="deal-edit-note-body" class="note-editor" contenteditable="true" data-placeholder="Well go on, write the note already"></div>
+              <div class="field note-attachments-field">
+                <label>Attachments <span class="field-hint-inline">(max 25 MB each)</span></label>
+                <input type="file" id="deal-edit-note-attachments" multiple class="note-attachments-input" />
+                <div id="deal-edit-selected-attachments" class="selected-attachments"></div>
+              </div>
+            </div>
           <div class="field">
             <label for="deal-edit-notify">Notify users</label>
             <select id="deal-edit-notify" name="notifyUsers" multiple size="4"></select>
@@ -559,8 +566,13 @@
                <button type="button" class="note-format-btn" data-cmd="hiliteColor" title="Highlight (light green)">H</button>
                <button type="button" class="note-format-btn" data-cmd="removeFormat" title="Clear">⌫</button>
              </div>
-             <div id="quick-note-note-body" class="note-editor" contenteditable="true" data-placeholder="Enter activity note…"></div>
-           </div>
+              <div id="quick-note-note-body" class="note-editor" contenteditable="true" data-placeholder="Enter activity note…"></div>
+              <div class="field note-attachments-field">
+                <label>Attachments <span class="field-hint-inline">(max 25 MB each)</span></label>
+                <input type="file" id="quick-note-note-attachments" multiple class="note-attachments-input" />
+                <div id="quick-note-selected-attachments" class="selected-attachments"></div>
+              </div>
+            </div>
           <div class="field">
             <label for="quick-note-notify">Notify users</label>
             <select id="quick-note-notify" name="notifyUsers" multiple size="4"></select>

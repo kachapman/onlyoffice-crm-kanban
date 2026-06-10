@@ -1560,7 +1560,13 @@ async function api(path, options = {}) {
   try {
     body = text ? JSON.parse(text) : {};
   } catch {
-    throw new Error(res.ok ? "Invalid JSON from server" : text.slice(0, 300) || res.statusText);
+    if (!res.ok) {
+      throw new Error(text.slice(0, 300) || res.statusText);
+    } else {
+      // Some endpoints (e.g. form-urlencoded history with attachments) may return non-JSON on success.
+      // Do not throw; return a minimal object so caller can proceed.
+      body = {};
+    }
   }
   if (!res.ok) {
     const msg = parseApiError(body, res.status);
@@ -1593,6 +1599,11 @@ async function api(path, options = {}) {
 
 let mutationQueue = [];
 
+/* Note attachments queue list (for history notes with files).
+   Shows all pending (from mutationQueue) + recently completed.
+   Completed entries auto-prune after 10s. */
+let noteQueueCompleted = [];
+
 let connectionState = 'connected'; // 'connected' | 'connecting' | 'disconnected'
 let connectingTimer = null;
 const CONNECTING_GRACE_MS = 10000; // grace before marking a push as queued (progress bar shows unreachable + queue msg)
@@ -1609,6 +1620,7 @@ function loadMutationQueue() {
   } catch {
     mutationQueue = [];
   }
+  updateNoteQueueList();
 }
 
 function persistMutationQueue() {
@@ -1680,6 +1692,14 @@ async function processMutationQueue() {
         persistMutationQueue();
         updateMutationSyncStatus();
         onCRMSuccess();
+        if (item.opType === "history") {
+          addCompletedNoteQueueEntry({
+            preview: item.notePreview,
+            attachmentNames: item.attachmentNames || [],
+            failedNames: item.failedAttachmentNames || [],
+            status: "success",
+          });
+        }
         try {
           showToast(`Synced: ${item.description || 'CRM action'}`);
         } catch {}
@@ -1702,9 +1722,9 @@ async function processMutationQueue() {
         // Gentle full refresh for opp changes (quiet).
         // NOTE: 'history' (event notes) intentionally omitted — adding a note does not change board cards/tiles,
         // and the full refreshAll (profile + renders) was causing perceived UI hang shortly after send.
+        // Defer to avoid blocking clicks / main thread during/after pushes.
         if (item.opType === 'stage' || item.opType === 'due' || item.opType === 'tag') {
-          // Do not block the queue loop
-          refreshAll().catch(() => {});
+          setTimeout(() => { refreshAll().catch(() => {}); }, 50);
         }
       } catch (err) {
         // Only drop queued actions on clear *permanent client errors* (bad data that will never succeed
@@ -1720,6 +1740,14 @@ async function processMutationQueue() {
         if (isPermanentClientError && !isTransientError(err)) {
           mutationQueue.shift();
           persistMutationQueue();
+          if (item.opType === "history") {
+            addCompletedNoteQueueEntry({
+              preview: item.notePreview,
+              attachmentNames: item.attachmentNames || [],
+              failedNames: item.failedAttachmentNames || [],
+              status: "fail",
+            });
+          }
           try {
             showToast(`Sync failed for "${item.description || item.path}". Action dropped (non-retryable client error).`, true);
           } catch {}
@@ -1755,6 +1783,58 @@ function updateMutationSyncStatus() {
   // Header marquee indicator (scrolling, minimal): only shows for actual stale queued items from push failures.
   // (Global time-based + periodic poller removed to stop frequent false positives.)
   updateCrmHeaderMarquee(count, hasStaleQueued);
+  updateNoteQueueList();
+}
+
+function updateNoteQueueList() {
+  const el = $("#note-queue-list");
+  if (!el) return;
+
+  const items = [];
+
+  // Pending history items from the main mutation queue (not yet sent or retrying)
+  for (const item of mutationQueue) {
+    if (item.opType === "history") {
+      const preview = item.notePreview || "(note)";
+      const atts = (item.attachmentNames || []).join(", ");
+      const fails = (item.failedAttachmentNames || []).join(", ");
+      let text = preview;
+      if (atts) text += ` + ${atts}`;
+      if (fails) text += ` (some failed: ${fails})`;
+      items.push(`<span class="note-queue-item">⏳ ${escapeHtml(text)}</span>`);
+    }
+  }
+
+  // Completed (success or fail) — will be pruned by their own timers
+  for (const c of noteQueueCompleted) {
+    const preview = c.preview || "(note)";
+    let text = preview;
+    if (c.attachmentNames && c.attachmentNames.length) text += ` + ${c.attachmentNames.join(", ")}`;
+    if (c.failedNames && c.failedNames.length) text += ` (failed: ${c.failedNames.join(", ")})`;
+    const cls = c.status === "success" ? "success" : "fail";
+    const icon = c.status === "success" ? "✓" : "✕";
+    items.push(`<span class="note-queue-item ${cls}">${icon} ${escapeHtml(text)}</span>`);
+  }
+
+  el.innerHTML = items.join("");
+}
+
+function addCompletedNoteQueueEntry({ preview, attachmentNames = [], failedNames = [], status }) {
+  const entry = {
+    id: Date.now() + Math.random(),
+    preview,
+    attachmentNames,
+    failedNames,
+    status: status || "success",
+    completedAt: Date.now(),
+  };
+  noteQueueCompleted.push(entry);
+  // Auto clear this entry after exactly 10s (per spec: "10 second timer on completion")
+  setTimeout(() => {
+    noteQueueCompleted = noteQueueCompleted.filter((e) => e.id !== entry.id);
+    updateNoteQueueList();
+  }, 10000);
+  updateNoteQueueList();
 }
 
 function updateCrmHeaderMarquee(count, hasStale) {
@@ -3521,7 +3601,10 @@ async function copyNotesClipboard(text, okMessage) {
 async function openQuickNoteModalFromNotes(notes) {
   await openQuickNoteModal();
   const bodyEl = $("#quick-note-note-body");
-  if (bodyEl && notes.content) bodyEl.value = notes.content;
+  if (bodyEl && notes.content) {
+    bodyEl.innerHTML = renderBasicMarkdown(notes.content);
+  }
+  renderSelectedAttachments("quickNote");
 }
 
 function applyNotesTileAccent(section, notes) {
@@ -7728,6 +7811,10 @@ function closeDealEditModal() {
   setDealEditError("");
   const ne = $("#deal-edit-note-body");
   if (ne) ne.innerHTML = "";
+  const sel = $("#deal-edit-selected-attachments");
+  if (sel) sel.innerHTML = "";
+  const inp = $("#deal-edit-note-attachments");
+  if (inp) inp.value = "";
 }
 
 function tagIdForTitle(title, catalog = buildTagCatalog()) {
@@ -7867,6 +7954,7 @@ async function openDealEditModal(opp, group) {
     tags: [...tags],
     initialStageId: String(resolveOppStageId(opp)),
     initialDue: dueDateToInputValue(opportunityDueDateRaw(opp)),
+    selectedAttachments: [],
   };
 
   const titleEl = $("#deal-edit-modal-title");
@@ -7885,6 +7973,10 @@ async function openDealEditModal(opp, group) {
   modal.classList.remove("hidden");
   $("#deal-edit-due")?.focus();
 
+  attachNoteAttachmentsListeners();
+  // Clear any stale selected UI on open (ctx was just (re)created)
+  renderSelectedAttachments("dealEdit");
+
   // When launched from opp preview (edit note / edit deal), position the editor popup LEFT (desktop) or TOP (mobile) of the preview modal.
   // Both remain interactive (see layout fn for pe:none trick + mobile stacking).
   setTimeout(() => {
@@ -7895,37 +7987,193 @@ async function openDealEditModal(opp, group) {
   }, 80);
 }
 
-async function createOpportunityHistoryEvent(oppId, { content, categoryId, notifyUserList }) {
+/* Upload a single file for note attachment using the native CRM handler.
+   Returns {id, title} on success. Throws on failure (25MB check + network/CRM error).
+   Uses state.currentUserId (from loadCurrentUser). */
+async function uploadAttachmentForNote(file) {
+  if (!file) throw new Error("No file");
+  if (file.size > 25 * 1024 * 1024) {
+    throw new Error(`File too large: ${file.name} (max 25 MB)`);
+  }
+  if (!state.currentUserId) {
+    // Ensure we have it (safe to call; it is idempotent-ish)
+    try { await loadCurrentUser(); } catch {}
+  }
+  const userId = state.currentUserId || "";
+  const submit = "ASC.Web.CRM.Classes.FileUploaderHandler, ASC.Web.CRM";
+  const url = `/api/proxy/Products/CRM/UploadProgress.ashx?submit=${encodeURIComponent(submit)}&UserID=${encodeURIComponent(userId)}`;
+
+  const fd = new FormData();
+  fd.append("file", file);
+
+  const res = await fetch(url, {
+    method: "POST",
+    body: fd,
+    credentials: "same-origin",
+  });
+  if (!res.ok) throw new Error(`Upload failed for ${file.name} (${res.status})`);
+  const text = await res.text();
+  // The handler returns a small object literal in text (from native capture)
+  let data = {};
+  try {
+    const m = text.match(/\{[\s\S]*?\}/);
+    if (m) data = Function('"use strict";return (' + m[0] + ")")();
+  } catch {}
+  if (!data || !data.Success || data.Data == null) {
+    throw new Error(data && data.Message ? data.Message : `Upload failed for ${file.name}`);
+  }
+  return {
+    id: data.Data,
+    title: data.FileName || file.name,
+  };
+}
+
+async function createOpportunityHistoryEvent(oppId, { content, categoryId, notifyUserList, fileIds = [], attachmentNames = [], failedAttachmentNames = [] }) {
   const html = noteContentToHtml(content);
   if (!html) throw new Error("Note text is required");
 
-  const body = {
-    entityType: "opportunity",
-    entityId: oppId,
-    contactId: 0,
-    content: html,
-    categoryId,
-  };
+  let apiCall, descriptorBody, descriptorHeaders;
 
-  if (notifyUserList?.length) body.notifyUserList = notifyUserList;
+  const shortPreview = (content || "").replace(/<[^>]+>/g, " ").trim().slice(0, 80) || "(note)";
 
-  const res = await withCrmQueueOnTransient(
-    () => api("/api/2.0/crm/history", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      showCrashBanner: false,
-    }),
-    {
-      method: "POST",
-      path: "/api/2.0/crm/history",
-      body: JSON.stringify(body),
-      description: `Add note to opportunity ${oppId}`,
-      opType: "history",
-      targetId: String(oppId),
+  if (fileIds && fileIds.length > 0) {
+    // Use exact native form-urlencoded shape for attachments (from capture)
+    // Use .json suffix for the history endpoint when sending attachments (matches native capture)
+    const historyPath = "/api/2.0/crm/history.json";
+    const params = new URLSearchParams();
+    params.set("content", html);
+    params.set("categoryId", String(categoryId || 0));
+    params.set("entityId", String(oppId));
+    params.set("entityType", "opportunity");
+    params.set("created", new Date().toISOString());
+    if (notifyUserList?.length) {
+      // notifyUserList is not in the minimal capture but keep support if server accepts
+      params.set("notifyUserList", JSON.stringify(notifyUserList));
     }
-  );
+    fileIds.forEach((fid) => params.append("fileId[]", String(fid)));
+
+    descriptorBody = params.toString();
+    descriptorHeaders = { "Content-Type": "application/x-www-form-urlencoded" };
+
+    apiCall = () => api(historyPath, {
+      method: "POST",
+      headers: descriptorHeaders,
+      body: descriptorBody,
+      showCrashBanner: false,
+    });
+  } else {
+    const body = {
+      entityType: "opportunity",
+      entityId: oppId,
+      contactId: 0,
+      content: html,
+      categoryId,
+    };
+    if (notifyUserList?.length) body.notifyUserList = notifyUserList;
+
+    descriptorBody = JSON.stringify(body);
+    descriptorHeaders = { "Content-Type": "application/json" };
+
+    apiCall = () => api("/api/2.0/crm/history", {
+      method: "POST",
+      headers: descriptorHeaders,
+      body: descriptorBody,
+      showCrashBanner: false,
+    });
+  }
+
+  const historyDescriptorPath = (fileIds && fileIds.length > 0) ? "/api/2.0/crm/history.json" : "/api/2.0/crm/history";
+
+  const res = await withCrmQueueOnTransient(apiCall, {
+    method: "POST",
+    path: historyDescriptorPath,
+    body: descriptorBody,
+    headers: descriptorHeaders,
+    description: `Add note to opportunity ${oppId}`,
+    opType: "history",
+    targetId: String(oppId),
+    // Extra for the right-side note queue list (pending + completed rendering)
+    notePreview: shortPreview,
+    attachmentNames: attachmentNames || [],
+    failedAttachmentNames: failedAttachmentNames || [],
+  });
   if (res && res.queued) return;
+
+  // Immediate success (no queue needed): record for the attachments status list (10s auto-clear)
+  addCompletedNoteQueueEntry({
+    preview: shortPreview,
+    attachmentNames: attachmentNames || [],
+    failedNames: failedAttachmentNames || [],
+    status: "success",
+  });
+}
+
+function renderSelectedAttachments(ctxKey) {
+  const isQuick = ctxKey === "quickNote";
+  const ctx = isQuick ? state.quickNote : state.dealEdit;
+  const container = $(isQuick ? "#quick-note-selected-attachments" : "#deal-edit-selected-attachments");
+  if (!container) return;
+  container.innerHTML = "";
+  if (!ctx || !Array.isArray(ctx.selectedAttachments) || ctx.selectedAttachments.length === 0) return;
+  ctx.selectedAttachments.forEach((file, idx) => {
+    const span = document.createElement("span");
+    span.className = "sel-item";
+    const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+    span.innerHTML = `${escapeHtml(file.name)} (${sizeMB} MB) <span class="sel-remove" data-idx="${idx}">×</span>`;
+    const rem = span.querySelector(".sel-remove");
+    if (rem) {
+      rem.addEventListener("click", (e) => {
+        e.preventDefault();
+        if (ctx.selectedAttachments) ctx.selectedAttachments.splice(idx, 1);
+        renderSelectedAttachments(ctxKey);
+      });
+    }
+    container.appendChild(span);
+  });
+}
+
+function attachNoteAttachmentsListeners() {
+  // Deal-edit
+  const dealInp = $("#deal-edit-note-attachments");
+  if (dealInp && !dealInp._attachmentsBound) {
+    dealInp._attachmentsBound = true;
+    dealInp.addEventListener("change", () => {
+      const ctx = state.dealEdit;
+      if (!ctx) return;
+      if (!Array.isArray(ctx.selectedAttachments)) ctx.selectedAttachments = [];
+      const files = Array.from(dealInp.files || []);
+      files.forEach((f) => {
+        if (f.size > 25 * 1024 * 1024) {
+          showToast(`Skipped ${f.name}: exceeds 25 MB`, true);
+          return;
+        }
+        ctx.selectedAttachments.push(f);
+      });
+      dealInp.value = ""; // reset so same file can be picked again
+      renderSelectedAttachments("dealEdit");
+    });
+  }
+
+  // Quick-note
+  const qInp = $("#quick-note-note-attachments");
+  if (qInp && !qInp._attachmentsBound) {
+    qInp._attachmentsBound = true;
+    qInp.addEventListener("change", () => {
+      const ctx = state.quickNote;
+      if (!ctx) return;
+      if (!Array.isArray(ctx.selectedAttachments)) ctx.selectedAttachments = [];
+      const files = Array.from(qInp.files || []);
+      files.forEach((f) => {
+        if (f.size > 25 * 1024 * 1024) {
+          showToast(`Skipped ${f.name}: exceeds 25 MB`, true);
+          return;
+        }
+        ctx.selectedAttachments.push(f);
+      });
+      qInp.value = "";
+      renderSelectedAttachments("quickNote");
+    });
+  }
 }
 
 function plainTextToNoteHtml(text) {
@@ -8045,10 +8293,33 @@ async function submitDealEditForm(e) {
     if (noteBody) {
       try {
         const categoryId = resolveHistoryCategoryId($("#deal-edit-note-category")?.value);
+
+        // Attachments: upload first (text priority — note is always sent)
+        if (!state.currentUserId) {
+          try { await loadCurrentUser(); } catch {}
+        }
+        const files = Array.isArray(ctx.selectedAttachments) ? ctx.selectedAttachments : [];
+        const successfulIds = [];
+        const successfulNames = [];
+        const failedNames = [];
+        for (const f of files) {
+          try {
+            const up = await uploadAttachmentForNote(f);
+            successfulIds.push(up.id);
+            successfulNames.push(up.title || f.name);
+          } catch (e) {
+            failedNames.push(f.name);
+            showToast(`Failed to upload ${f.name}: ${e && e.message ? e.message : e}`, true);
+          }
+        }
+
         await createOpportunityHistoryEvent(oppId, {
           content: noteBody,
           categoryId,
           notifyUserList,
+          fileIds: successfulIds,
+          attachmentNames: successfulNames,
+          failedAttachmentNames: failedNames,
         });
       } catch (err) {
         throw dealEditStepError("Event note", err);
@@ -8067,17 +8338,22 @@ async function submitDealEditForm(e) {
       hideCRMSyncStatus();
     }, 1500);
     showToast("Deal updated");
-    if (group) await refreshGroup(group);
-    else await refreshAll();
+    // Defer to avoid blocking after edit push (consistent with quick-note + queue fixes for hangs)
+    setTimeout(() => {
+      if (group) refreshGroup(group).catch(() => {});
+      else refreshAll().catch(() => {});
+    }, 40);
 
     // Preview persistence: if the preview modal is still open for this same opp (we launched edit without closing it),
     // refresh its content so the user sees the just-saved changes without having to re-open.
-    const previewEl = $("#opp-preview-modal");
-    const previewId = oppPreviewContext && oppPreviewContext.oppId;
-    const editedId = deal && (deal.id ?? deal.ID);
-    if (previewEl && !previewEl.classList.contains("hidden") && previewId != null && editedId != null && Number(previewId) === Number(editedId)) {
-      openOpportunityPreviewModal(editedId, deal.title || deal.Title || "", group || ctx.group).catch(() => {});
-    }
+    // Also deferred (was causing perceived hangs on prod after deal edits / notes).
+    setTimeout(() => {
+      const previewEl = $("#opp-preview-modal");
+      const previewId = oppPreviewContext && oppPreviewContext.oppId;
+      if (previewEl && !previewEl.classList.contains("hidden") && previewId != null && Number(previewId) === Number(ctx.oppId)) {
+        openOpportunityPreviewModal(previewId, ctx.oppTitle || "", group || ctx.group).catch(() => {});
+      }
+    }, 30);
   } catch (err) {
     clearTimeout(closeTimer);
     const msg = err instanceof Error ? err.message : String(err);
@@ -8143,6 +8419,10 @@ function closeQuickNoteModal() {
   setQuickNoteError("");
   const ne = $("#quick-note-note-body");
   if (ne) ne.innerHTML = "";
+  const sel = $("#quick-note-selected-attachments");
+  if (sel) sel.innerHTML = "";
+  const inp = $("#quick-note-note-attachments");
+  if (inp) inp.value = "";
 }
 
 function clearQuickNoteOpportunitySelection() {
@@ -8203,6 +8483,7 @@ async function applyQuickNoteOpportunity(oppSummary) {
     tags: [...tags],
     initialDue: dueDateToInputValue(opportunityDueDateRaw(opp)),
     group: state.groups.find((g) => (g.opportunities || []).some((o) => Number(o.id ?? o.ID) === oppId)) || null,
+    selectedAttachments: [],
   };
 
   const dueInput = $("#quick-note-due");
@@ -8210,6 +8491,7 @@ async function applyQuickNoteOpportunity(oppSummary) {
 
   updateQuickNoteOpportunitySelectedUi();
   renderQuickNoteTagChips();
+  renderSelectedAttachments("quickNote");
   $("#quick-note-note-body")?.focus();
 }
 
@@ -8222,6 +8504,9 @@ async function openQuickNoteModal() {
   form.reset();
   clearQuickNoteOpportunitySelection();
   state.quickNote = null;
+  // Always clear the contenteditable note body (form.reset does not affect divs)
+  const noteBodyEl = $("#quick-note-note-body");
+  if (noteBodyEl) noteBodyEl.innerHTML = "";
 
   await loadHistoryCategories();
   populateQuickNoteCategorySelect();
@@ -8233,6 +8518,9 @@ async function openQuickNoteModal() {
   if (results) results.classList.add("hidden");
 
   modal.classList.remove("hidden");
+
+  attachNoteAttachmentsListeners();
+  renderSelectedAttachments("quickNote");
 
   // If opp preview is open, snap this quick note modal side-by-side (left on desktop, top on mobile) with the preview.
   setTimeout(() => {
@@ -8305,10 +8593,31 @@ async function submitQuickNoteForm(e) {
     }
 
     try {
+      if (!state.currentUserId) {
+        try { await loadCurrentUser(); } catch {}
+      }
+      const files = Array.isArray(ctx.selectedAttachments) ? ctx.selectedAttachments : [];
+      const successfulIds = [];
+      const successfulNames = [];
+      const failedNames = [];
+      for (const f of files) {
+        try {
+          const up = await uploadAttachmentForNote(f);
+          successfulIds.push(up.id);
+          successfulNames.push(up.title || f.name);
+        } catch (e) {
+          failedNames.push(f.name);
+          showToast(`Failed to upload ${f.name}: ${e && e.message ? e.message : e}`, true);
+        }
+      }
+
       await createOpportunityHistoryEvent(oppId, {
         content: noteBody,
         categoryId,
         notifyUserList,
+        fileIds: successfulIds,
+        attachmentNames: successfulNames,
+        failedAttachmentNames: failedNames,
       });
     } catch (err) {
       throw dealEditStepError("Event note", err);
@@ -8326,18 +8635,28 @@ async function submitQuickNoteForm(e) {
       hideCRMSyncStatus();
     }, 1500);
     showToast("Note saved");
-    if (group) await refreshGroup(group);
-    else await refreshAll();
 
-    // If the preview deal modal is open for this same opp (side quick note case), refresh it
-    // so the new history note appears immediately in the preview's history list.
+    // Defer all post-submit refreshes to keep the UI responsive (prevents the "hangs, nothing clickable, then full re-render"
+    // after quick notes and similar pushes). Quick notes only affect history (in preview) or due/tags (board).
+    // Never do heavy refreshAll synchronously right after the note create.
+    const needsBoardUpdate = dueChanged || dealTagsChanged(ctx.initialTags, ctx.tags);
     const previewEl = $("#opp-preview-modal");
-    if (previewEl && !previewEl.classList.contains("hidden") && ctx && ctx.oppId != null) {
-      const previewId = oppPreviewContext && oppPreviewContext.oppId;
-      if (previewId != null && Number(previewId) === Number(ctx.oppId)) {
+    const isSidePreviewCase = previewEl && !previewEl.classList.contains("hidden") && ctx && ctx.oppId != null &&
+      (oppPreviewContext && Number(oppPreviewContext.oppId) === Number(ctx.oppId));
+
+    if (isSidePreviewCase) {
+      // Targeted: just refresh the open preview so new note appears (and any due/tag changes reflected)
+      setTimeout(() => {
         const titleHint = ctx.oppTitle || "";
         openOpportunityPreviewModal(ctx.oppId, titleHint, ctx.group || null).catch(() => {});
-      }
+      }, 20);
+    }
+    if (needsBoardUpdate && !isSidePreviewCase) {
+      // Only for non-preview quick notes that actually changed due/tags (affects kanban board)
+      setTimeout(() => {
+        if (group) refreshGroup(group).catch(() => {});
+        else refreshAll().catch(() => {});
+      }, 60);
     }
   } catch (err) {
     clearTimeout(closeTimer);
@@ -10093,10 +10412,13 @@ function renderPresenceInbox(container, recentDms, cache, snap) {
     const row = document.createElement('div');
     row.className = 'presence-recent-row';
 
-    // Compute if this thread has unread messages (latest msg ts > last read for this other)
+    // Compute if this thread has unread messages from the other party since we last read it.
+    // Only count as unread if the *latest* message is incoming (from other) and newer than our last-read time.
+    // This prevents threads where we sent the last message (e.g. after responding) from appearing unread on other devices.
     const otherLastRead = presenceLastRead[otherId] || 0;
     const msgTsNum = m.ts ? new Date(m.ts).getTime() : 0;
-    let isUnread = msgTsNum > otherLastRead;
+    const isIncomingLatest = String(m.from) !== meIdStr;
+    let isUnread = isIncomingLatest && msgTsNum > otherLastRead;
     if (isUnread) {
       row.classList.add('unread');
     } else {
@@ -10454,6 +10776,8 @@ async function sendPresenceDM() {
     }
     ta.value = "";
     clearPresenceReplyTo();
+    // Acknowledge the thread up to now (so other devices see it as read; latest will be from self)
+    markPresenceDMRead(state.presenceSelectedUserId);
     // Refresh the thread (re-render modal + explicitly refresh DM log with rich features)
     const snap = await fetchPresenceSnapshot();
     const users = state.presenceUsersCache ? state.presenceUsersCache.users : [];
@@ -12962,6 +13286,16 @@ function formatPreviewDateTime(raw) {
   return d.toLocaleString();
 }
 
+// Date-only formatter for deal due dates (Expected close) so preview matches native CRM display
+// (avoids time component and potential TZ off-by-one from datetime parsing on read).
+function formatPreviewDueDate(raw) {
+  if (raw == null || raw === "") return "";
+  const iso = crmDateTimeFromApi(raw) || raw;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(raw);
+  return d.toLocaleDateString();
+}
+
 function formatResponsibleLabel(opp) {
   const r = opp.responsible || opp.Responsible;
   if (r && typeof r === "object") {
@@ -13033,7 +13367,7 @@ function buildOpportunityPreviewStandardFields(opp, tags) {
     "Success probability",
     opp.successProbability ?? opp.SuccessProbability ?? opp.stage?.successProbability ?? ""
   );
-  push("Expected close", formatPreviewDateTime(opportunityDueDateRaw(opp)));
+  push("Expected close", formatPreviewDueDate(opportunityDueDateRaw(opp)));
   push("Actual close", formatPreviewDateTime(opp.actualCloseDate ?? opp.ActualCloseDate));
   push("Created", formatPreviewDateTime(opp.createOn ?? opp.created ?? opp.Created));
   push("Tags", tags.length ? tags.join(", ") : "");
@@ -13475,7 +13809,7 @@ function layoutSideBySideDealEditAndPreview() {
     sideLeft = 12;
     previewLeft = 12;
     sideTop = baseTop;
-    previewTop = baseTop + 260 + gap;  // side ~ top section, preview below
+    previewTop = baseTop + 180 + gap;  // lower initial guess; dynamic adjust will snap
   } else {
     // Desktop: side (left) + preview (right) side-by-side
     sideW = Math.min(440, Math.floor(window.innerWidth * 0.38));
@@ -13488,8 +13822,36 @@ function layoutSideBySideDealEditAndPreview() {
     previewTop = 36;
   }
 
-  sCard.style.cssText = `position:fixed!important; left:${sideLeft}px!important; top:${sideTop}px!important; width:${sideW}px!important; max-height:${isMobile ? "38vh" : "92vh"}!important; overflow:auto!important; z-index:2100!important; margin:0!important; box-shadow:var(--shadow); pointer-events:auto!important;`;
-  pCard.style.cssText = `position:fixed!important; left:${previewLeft}px!important; top:${previewTop}px!important; width:${previewW}px!important; max-height:${isMobile ? "52vh" : "92vh"}!important; overflow:auto!important; z-index:2005!important; margin:0!important; box-shadow:var(--shadow);`;
+  sCard.style.cssText = `position:fixed!important; left:${sideLeft}px!important; top:${sideTop}px!important; width:${sideW}px!important; max-height:${isMobile ? "40vh" : "92vh"}!important; overflow:auto!important; z-index:2100!important; margin:0!important; box-shadow:var(--shadow); pointer-events:auto!important;`;
+  pCard.style.cssText = `position:fixed!important; left:${previewLeft}px!important; top:${previewTop}px!important; width:${previewW}px!important; max-height:${isMobile ? "55vh" : "92vh"}!important; overflow:auto!important; z-index:2005!important; margin:0!important; box-shadow:var(--shadow);`;
+
+  if (isMobile) {
+    // Improved mobile vertical stacking: side (edit/quick) fixed near top, preview pushed below it
+    // with ~4px gap. Uses longer delay + rAF + ResizeObserver so dynamic content (note body, selects, tags)
+    // doesn't cause the side to grow over the preview after initial measure. Constrains side max-height too.
+    const adjustMobileVerticalStack = () => {
+      if (!sCard || !pCard || sideModal.classList.contains("hidden") || previewModal.classList.contains("hidden")) return;
+      const sRect = sCard.getBoundingClientRect();
+      const desiredPTop = Math.max(baseTop + 80, sRect.bottom + 4);
+      pCard.style.top = `${desiredPTop}px`;
+      pCard.style.maxHeight = `calc(100vh - ${desiredPTop + 20}px)`;
+      // keep side from growing infinitely over the preview area
+      sCard.style.maxHeight = `min(45vh, calc(100vh - ${baseTop + 30}px))`;
+    };
+
+    // First paint adjust (longer than 25ms to let rich note, categories, tags fully layout)
+    setTimeout(adjustMobileVerticalStack, 120);
+    requestAnimationFrame(adjustMobileVerticalStack);
+
+    // Live re-adjust if side resizes (user typing note, adding tags, etc.)
+    if (!sCard._stackObserver) {
+      sCard._stackObserver = new ResizeObserver(() => {
+        clearTimeout(sCard._adjustT || 0);
+        sCard._adjustT = setTimeout(adjustMobileVerticalStack, 40);
+      });
+      sCard._stackObserver.observe(sCard);
+    }
+  }
 
   // Hide side backdrop (preview's remains for dim)
   const sBack = sideModal.querySelector(".modal-backdrop");
@@ -14613,6 +14975,10 @@ async function init() {
     try { clearPresenceUsersCache(); } catch {}
     showLogin();
   });
+
+  // Version next to sign out (from release)
+  const verEl = $("#app-version");
+  if (verEl) verEl.textContent = "v1.6.0";
 
   // Mutation queue lifecycle wiring (client-side only, per plan)
   window.addEventListener("online", () => {

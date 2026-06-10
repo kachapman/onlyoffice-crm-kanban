@@ -225,6 +225,16 @@ body {
   z-index: 3;
 }
 
+.app-version {
+  margin-left: 0.6rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  opacity: 0.65;
+  vertical-align: middle;
+  user-select: none;
+  pointer-events: none;
+}
+
 .hero-inner {
   max-width: 1820px;
   margin: 0 auto;
@@ -931,6 +941,61 @@ body {
   color: #92400e;
   border: 1px solid #f59e0b;
 }
+
+/* Note attachments queue list (right side of header meta, near mutation status) */
+.note-queue-list {
+  margin-left: auto;
+  font-size: 0.68rem;
+  line-height: 1.2;
+  color: var(--muted);
+  max-width: 320px;
+  text-align: right;
+}
+.note-queue-list:empty {
+  display: none;
+}
+.note-queue-item {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.note-queue-item.success { color: #166534; }
+.note-queue-item.fail { color: #9f1239; }
+.note-queue-item .q-attach { opacity: 0.8; font-size: 0.9em; }
+.note-queue-item .q-check { margin-left: 0.25em; }
+.note-queue-item .q-fail { margin-left: 0.25em; color: #9f1239; }
+
+/* Attachments field in note editors (deal-edit + quick-note) */
+.note-attachments-field {
+  margin-top: 0.25rem;
+}
+.note-attachments-field label {
+  font-size: 0.75rem;
+  display: block;
+  margin-bottom: 0.1rem;
+}
+.note-attachments-input {
+  font-size: 0.75rem;
+}
+.selected-attachments {
+  margin-top: 0.15rem;
+  font-size: 0.7rem;
+  line-height: 1.25;
+}
+.selected-attachments .sel-item {
+  display: inline-block;
+  margin-right: 0.5em;
+  background: var(--surface-2);
+  padding: 0 0.3em;
+  border-radius: 2px;
+}
+.selected-attachments .sel-remove {
+  cursor: pointer;
+  margin-left: 0.2em;
+  opacity: 0.7;
+}
+.selected-attachments .sel-remove:hover { opacity: 1; }
 
 /* Compact scrolling marquee indicator pinned to the underside of the header (inside .global-meta), on the right side.
    Width stays compact/narrow (like previous small version). Height larger via bigger font + padding (user: "font needed to be larger" for height).
