@@ -1,7 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
-**Current version:** 1.4.5 (see CHANGELOG.md, docs/RELEASE_v1.4.5.md)  
-**Last session summary (for next resume):** Side-by-side preview note editor (left/top + delete + manual refresh btn), presence AFD (tab-away vs signed-out), today feed white left lines, crash banner + full tile render on 5xx (no raw errors), quick note auto preview refresh. All tiles render on crash; CRM ones empty. Deployed as v1.4.5.  
+**Current version:** 1.6.0 (see CHANGELOG.md, docs/RELEASE_v1.6.md)  
+**Last session summary (for next resume):** Post-1.4.5 bug fixes released as v1.6.0: DM "of the day" unread state now correctly cross-device (incoming-only latest-msg logic in renderPresenceInbox + mark on send); random UI hangs after quick notes/pushes eliminated (deferred non-blocking refreshGroup/refreshAll in submitQuickNoteForm + queue processor); status + lastReadDms persistence reinforced; mobile quick-edit now snaps cleanly above preview with 4px gap (dynamic measure). Also shipped quick note prefill from notes tile (markdown → rich HTML + explicit editor clear). v1.4.5 features (side editor, AFD, crash banner, etc.) remain. Attachments (FEAT-003) planning complete; implementation paused until after this release.   
 **Production:** https://dashboard.vanguardadj.com  
 **Repo:** https://github.com/kachapman/onlyoffice-crm-kanban (or local)
 

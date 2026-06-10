@@ -8,6 +8,7 @@ Tags are pushed to [onlyoffice-crm-kanban](https://github.com/kachapman/onlyoffi
 | `v1.1.0` | [RELEASE_v1.1.md](./RELEASE_v1.1.md) — fixes, features, upgrade, rollback |
 | `v1.2.0` | [RELEASE_v1.2.md](./RELEASE_v1.2.md) — collapse/minimize, tasks list modal, template delete, AND keywords, crash banner, AGENTS.md, polish |
 | `v1.4.5` | [RELEASE_v1.4.5.md](./RELEASE_v1.4.5.md) — Side-by-side preview note editor (left/top + delete + manual refresh btn), presence AFD (tab-away vs offline), today feed white left lines, crash banner (amber right, persistent, 30s/admin text) + full tile render (CRM sections empty), quick note side auto-refresh. All prior presence/kanban/rich notes foundations. |
+| `v1.6.0` | [RELEASE_v1.6.md](./RELEASE_v1.6.md) — Post-1.4.5 bug fixes (DM cross-device unread, no hangs after notes/pushes, persistence, mobile quick-edit) + quick note prefill from notes tile (rich HTML). |
 | `v1.4.0` | [RELEASE_v1.4.md](./RELEASE_v1.4.md) — Local kanban title bar edit + column color + slide via edit (scrapped drag) + add-task blur crash fix; Presence demo indicator stable (no flash, session flag) + inbox unread/read shading (blue border/dot, demo special) + update on close (v1.4.0) |
 | `v1.3.0` | [RELEASE_v1.3.md](./RELEASE_v1.3.md) — Team/Presence (DMs+replies+reads+emojis+colors+inbox+admin+indicators), resizable+taller modal, instant button, routing fixes (v1.3.0) |
 
