@@ -8006,10 +8006,14 @@ async function uploadAttachmentForNote(file) {
   const fd = new FormData();
   fd.append("file", file);
 
+  const uploadHeaders = {};
+  if (state.portalUrl) uploadHeaders["X-OnlyOffice-Portal"] = state.portalUrl;
+
   const res = await fetch(url, {
     method: "POST",
     body: fd,
     credentials: "same-origin",
+    headers: uploadHeaders,
   });
   if (!res.ok) throw new Error(`Upload failed for ${file.name} (${res.status})`);
   const text = await res.text();
