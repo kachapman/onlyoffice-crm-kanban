@@ -2,6 +2,25 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [1.6.1] — 2026-06-11
+
+### FEAT-003: Attachments on event notes
+- Full support for attaching files (≤25 MB each) when creating event notes from Deal Edit and Quick Note (including side-by-side from preview and prefill from notes tile).
+- Native CRM upload flow: client uploads via proxied UploadProgress.ashx (multipart, using current UserID), then history create uses form-urlencoded with repeated `fileId[]`.
+- Text is always priority (note sent even if some/all uploads fail; per-fail error toast).
+- Pre-submit selected files: plain filename (size) list with × remove (no icons).
+- Right-side status list in header (near mutation-sync-status): shows pending + all completed note actions; success = checkmark, fail = ✕; completed items auto-clear after exactly 10 seconds.
+- Reuses existing preview attachment rendering, queue resilience (history items), rich note editor, and currentUserId.
+- Server proxy updated to correctly forward form-urlencoded (for history) and multipart (for uploads) so attachments work through the deployed dashboard (extra hop).
+
+### Additional fixes
+- Mobile vertical stacking of deal preview + deal/quick-note editor: improved dynamic measurement, ResizeObserver, and constraints in `layoutSideBySideDealEditAndPreview` to prevent overlap at top when stacked.
+- Hanging after deal edits and event notes (prod): deferred the preview re-open in `submitDealEditForm` (was immediate heavy fetch+render); board refreshes already deferred. (Does not happen on local test server.)
+- Added version number (v1.6.1) next to "Sign out" button (in header meta, to the right of portal URL, properly spaced).
+- Rolled back "show empty stages" checkbox visibility for tag-sorted groups (the change had broken group tiles rendering); now only shown for stage groupBy as before.
+
+See AGENTS.md for implementation details. These (plus proxy support for attachments on server) are released as v1.6.1.
+
 ## [1.6.0] — 2026-06-10
 
 ### Post-1.4.5 bug fixes (cross-device reliability + no-UI-hang resilience)

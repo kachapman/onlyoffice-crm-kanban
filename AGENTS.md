@@ -1,7 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
-**Current version:** 1.6.0 (see CHANGELOG.md, docs/RELEASE_v1.6.md)  
-**Last session summary (for next resume):** Post-1.4.5 bug fixes released as v1.6.0: DM "of the day" unread state now correctly cross-device (incoming-only latest-msg logic in renderPresenceInbox + mark on send); random UI hangs after quick notes/pushes eliminated (deferred non-blocking refreshGroup/refreshAll in submitQuickNoteForm + queue processor); status + lastReadDms persistence reinforced; mobile quick-edit now snaps cleanly above preview with 4px gap (dynamic measure). Also shipped quick note prefill from notes tile (markdown → rich HTML + explicit editor clear). v1.4.5 features (side editor, AFD, crash banner, etc.) remain. Attachments (FEAT-003) planning complete; implementation paused until after this release.   
+**Current version:** 1.6.1 (see CHANGELOG.md, docs/RELEASE_v1.6.1.md)  
+**Last session summary (for next resume):** v1.6.1: FEAT-003 attachments on event notes shipped (native upload via UploadProgress.ashx + fileId[] history form, text priority, 25MB, plain no-icon selected list, right-side queue list near mutation-sync-status with 10s clear, ✓/✕, all paths including side/notes-tile; server.py proxy fix for form-urlencoded/multipart so it works through droplet). Additional: mobile preview+editor vertical stack no longer overlaps (dynamic + ResizeObserver + constraints in layoutSideBySide...); deferred preview re-open in deal-edit submit to fix hangs after notes/edits (prod only); version "v1.6.1" added next to Sign out (right of portal URL in meta); rolled back show-empty-stages for tag groups (had broken tiles). v1.6.0 bug fixes remain. Update docs on ship.   
 **Production:** https://dashboard.vanguardadj.com  
 **Repo:** https://github.com/kachapman/onlyoffice-crm-kanban (or local)
 
