@@ -8,7 +8,7 @@
 
 v1.6.1 ships FEAT-003 (attachments on event notes) with full native CRM support (UploadProgress.ashx multipart uploads + form-urlencoded history.json with fileId[]), text priority, 25MB limit, plain no-icon pre-submit selected file list, and a right-side status queue list in the header (near mutation-sync-status) showing pending + completed note actions with success checks / X fails, auto-clear after exactly 10s. All note paths supported (deal-edit, quick-note, side-by-side, notes-tile prefill).
 
-Also includes: mobile preview+editor vertical stack no longer overlaps (dynamic measurement + ResizeObserver + constraints); deferred preview re-open in deal-edit submit to eliminate hangs after notes/edits (only on prod); version "v1.6.1" added next to Sign out (to the right of portal URL in meta, properly spaced); server.py proxy fix to forward form-urlencoded/multipart so attachments work when going through the deployed dashboard droplet; rolled back "show empty stages" checkbox visibility for tag-sorted groups (the prior change had broken group tile rendering).
+Also includes: mobile preview+editor vertical stack no longer overlaps (dynamic measurement + ResizeObserver + constraints); deferred preview re-open in deal-edit submit to eliminate hangs after notes/edits (only on prod); version "v1.6.1" added next to Sign out (to the right of portal URL in meta, properly spaced); server.py proxy fix to forward form-urlencoded/multipart so attachments work when going through the deployed dashboard droplet; hotfix for prod upload (X-OnlyOffice-Portal header + nginx body size config); rolled back "show empty stages" checkbox visibility for tag-sorted groups (the prior change had broken group tile rendering).
 
 No breaking changes. All changes are additive and backward-compatible with prior 1.6.0 / 1.4.x releases.
 
@@ -31,6 +31,7 @@ No breaking changes. All changes are additive and backward-compatible with prior
 - Added version number ("v1.6.1") next to "Sign out" button (positioned in header meta, to the right of the portal URL, with spacing so it is not confused with the URL).
 - Rolled back "show empty stages" checkbox visibility for tag-sorted groups (the change to expose it for `groupBy=tag` had completely broken group tile rendering); now only shown for `groupBy=stage` as before.
 - Server proxy fix for form-urlencoded + multipart (see FEAT-003) ensures attachments (and any future form posts) work when the dashboard is accessed via the deployed droplet.
+- Hotfix: added `X-OnlyOffice-Portal` header to the direct `UploadProgress.ashx` fetch (was missing and caused uploads to fail through the droplet proxy while text notes succeeded). Confirmed working on droplet after also setting `client_max_body_size 50m;` and `proxy_request_buffering off;` in the dashboard location of `/opt/estimate-enhancer/nginx.conf`.
 
 ## Documentation & Housekeeping
 
