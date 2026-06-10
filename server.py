@@ -20,6 +20,15 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from ics_calendar import _MAX_ICS_BYTES, is_allowed_calendar_url, parse_ics_calendar
+
+# Load app version from VERSION file (for display in UI, updates automatically on release)
+APP_VERSION = "dev"
+try:
+    version_path = Path(__file__).parent / "VERSION"
+    if version_path.exists():
+        APP_VERSION = version_path.read_text().strip()
+except Exception:
+    pass
 from user_profile_store import load_user_profile, save_user_profile
 from presence_store import (
     append_dm,
@@ -756,6 +765,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 {
                     "portalUrl": PORTAL_URL or DEFAULT_PORTAL,
                     "defaultPortalConfigured": bool(PORTAL_URL or DEFAULT_PORTAL),
+                    "version": APP_VERSION,
                 },
             )
             return

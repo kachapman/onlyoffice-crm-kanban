@@ -14938,6 +14938,9 @@ async function init() {
     state.portalUrl = config.portalUrl;
     localStorage.setItem("oo_portal_url", state.portalUrl);
   }
+  // Version next to sign out (loaded from server /VERSION so it auto-updates on release)
+  const verEl = $("#app-version");
+  if (verEl) verEl.textContent = config.version ? "v" + config.version : "v1.6.1";
 
   state.groups = [];
   state.calendarTiles = [];
@@ -14975,10 +14978,6 @@ async function init() {
     try { clearPresenceUsersCache(); } catch {}
     showLogin();
   });
-
-  // Version next to sign out (from release)
-  const verEl = $("#app-version");
-  if (verEl) verEl.textContent = "v1.6.0";
 
   // Mutation queue lifecycle wiring (client-side only, per plan)
   window.addEventListener("online", () => {
