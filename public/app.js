@@ -26,7 +26,7 @@ const HIDDEN_FEED_RETENTION_MS = HIDDEN_FEED_RETENTION_DAYS * 24 * 60 * 60 * 100
 const PANEL_TILE_AUTO_REFRESH_MS = 60 * 60 * 1000;
 const DASHBOARD_IDLE_STOP_MS = 3 * 60 * 60 * 1000;
 /** Set true when create-opportunity custom user field save is fixed (see ISSUES.md). */
-const CREATE_OPP_USER_FIELDS_ENABLED = false;
+const CREATE_OPP_USER_FIELDS_ENABLED = true;
 
 /** Mutation queue for offline / transient CRM write resilience (client-side only). Completed. */
 const MUTATION_QUEUE_KEY = "oo_board_mutation_queue_v1";
@@ -9102,7 +9102,10 @@ function collectCreateOppCustomFieldValues() {
     if (isCreateOppExcludedUserField(def)) continue;
     if (createOppCustomFieldInputKind(def) === "heading") continue;
 
-    const input = wrap.querySelector(`[data-custom-field-id="${String(fieldId)}"]`);
+    const fieldEl = wrap.querySelector(`[data-custom-field-id="${String(fieldId)}"]`);
+    if (!fieldEl) continue;
+
+    const input = fieldEl.querySelector("input, select, textarea");
     if (!input) continue;
 
     let raw;
@@ -9121,8 +9124,8 @@ function collectCreateOppCustomFieldValues() {
 /** OnlyOffice ItemKeyValuePair<int,string> on create/update opportunity bodies. */
 function buildCustomFieldListForApi(fieldValues) {
   return fieldValues.map(({ fieldId, value }) => ({
-    Key: Number(fieldId),
-    Value: String(value ?? ""),
+    key: Number(fieldId),
+    value: String(value ?? ""),
   }));
 }
 
@@ -9342,9 +9345,9 @@ function buildOpportunityCreateBody(form) {
     body.accessList = [];
   }
 
-  // NOTE: customFieldList intentionally omitted from create body (see ISSUE-001).
-  // Per-field POSTs after create (in applyCreateOpportunityCustomFields) are used instead.
-  // Sending on create has been observed to be silently ignored in past tests.
+  if (form.customFields?.length) {
+    body.customFieldList = buildCustomFieldListForApi(form.customFields);
+  }
 
   return body;
 }
@@ -14944,7 +14947,7 @@ async function init() {
   }
   // Version next to sign out (loaded from server /VERSION so it auto-updates on release)
   const verEl = $("#app-version");
-  if (verEl) verEl.textContent = config.version ? "v" + config.version : "v1.6.1";
+  if (verEl) verEl.textContent = config.version ? "v" + config.version : "v1.7.0";
 
   state.groups = [];
   state.calendarTiles = [];

@@ -1,7 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
-**Current version:** 1.6.1 (see CHANGELOG.md, docs/RELEASE_v1.6.1.md)  
-**Last session summary (for next resume):** v1.6.1: FEAT-003 attachments on event notes shipped (native upload via UploadProgress.ashx + fileId[] history form, text priority, 25MB, plain no-icon selected list, right-side queue list near mutation-sync-status with 10s clear, ✓/✕, all paths including side/notes-tile; server.py proxy fix for form-urlencoded/multipart so it works through droplet). Hotfix: added X-OnlyOffice-Portal header to upload fetch for prod proxy compatibility (confirmed working on droplet after nginx body size fix). Additional: mobile preview+editor vertical stack no longer overlaps (dynamic + ResizeObserver + constraints in layoutSideBySide...); deferred preview re-open in deal-edit submit to fix hangs after notes/edits (prod only); version "v1.6.1" added next to Sign out (right of portal URL in meta); rolled back show-empty-stages for tag groups (had broken tiles). v1.6.0 bug fixes remain. Update docs on ship.   
+**Current version:** 1.7.0 (see CHANGELOG.md, docs/RELEASE_v1.7.0.md)  
+**Last session summary (for next resume):** v1.7.0: FEAT-002 completed — custom user fields on opportunity create now work end-to-end. Root cause: `collectCreateOppCustomFieldValues()` querying `[data-custom-field-id]` matched the wrapper `<div>` instead of the actual `<input>`, so fields were silently skipped. Now finds input/select/textarea inside the wrapper. Also corrected `buildCustomFieldListForApi` to `{key, value}` format and added `customFieldList` to create body alongside per-field POST fallback. `CREATE_OPP_USER_FIELDS_ENABLED=true`. Tested and confirmed. v1.6.1 + v1.6.0 features ship as-is.   
 **Production:** https://dashboard.vanguardadj.com  
 **Repo:** https://github.com/kachapman/onlyoffice-crm-kanban (or local)
 

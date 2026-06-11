@@ -95,55 +95,13 @@ Actions in the modal:
 
 ---
 
-## FEAT-002 — Fix New Opportunity custom user fields (ISSUE-001)
+## FEAT-002 — Fix New Opportunity custom user fields (ISSUE-001) (COMPLETED in v1.7.0)
 
-**Status:** In progress — omit-on-create + delay strategy applied; UI still blocked pending portal verification. (`CREATE_OPP_USER_FIELDS_ENABLED = false` in `public/app.js`).
+**Status:** ✅ Completed 2026-06-11. `CREATE_OPP_USER_FIELDS_ENABLED=true`. All acceptance criteria met.
 
-### Problem
+**Root cause:** Two bugs — (1) `collectCreateOppCustomFieldValues()` DOM selector matched the wrapper `<div>` instead of the actual `<input>`, so every field was silently skipped; (2) `buildCustomFieldListForApi()` returned `{Key, Value}` (PascalCase) format which, combined with flat `customField_{id}` fields, caused 400 errors.
 
-User fields on **New Opportunity** do not persist in CRM although the deal is created. Documented in **[ISSUES.md](./ISSUES.md)**.
-
-### Research / fix plan
-
-1. **Capture golden path from native CRM**
-   - Browser DevTools → Network on **office.vanguardadj.com**.
-   - Create one opportunity with one text field, one select, one date, one checkbox filled.
-   - Record: create `POST` body, any follow-up `POST .../customfield/{id}`, query params (`fieldValue`), content-type.
-
-2. **Compare to this app**
-   - `buildOpportunityCreateBody`, `applyCreateOpportunityCustomFields`, `postOpportunityCustomFieldValue` in `app.js`.
-   - Ensure `server.py` does not send `{}` on custom-field POST when value is in query string (fix already applied; verify).
-
-3. **Run probe script on desktop**
-
-   ```bash
-   cd ~/crm-kanban
-   # .env with ONLYOFFICE_USER, ONLYOFFICE_PASSWORD, ONLYOFFICE_PORTAL_URL
-   python3 scripts/probe_custom_fields.py
-   ```
-
-4. **Type-specific encoding**
-   - Select / multi-select: CRM may expect option id, not display text.
-   - Dates: app uses `MM/DD/YYYY`; confirm tenant locale.
-   - Checkbox: `"true"` / `"false"` strings per `formatCustomFieldValueForApi`.
-
-5. **Order of operations**
-   - Try: create deal **without** `customFieldList`, then only per-field `POST .../customfield/{fieldId}?fieldValue=...` after id is known (with 200ms delay if needed).
-   - **Tried (post v1.1):** `buildOpportunityCreateBody` omits `customFieldList` entirely; 300ms delay + per-field POSTs only in submit path. Updated probe tests Variant A (no-list create) vs B.
-
-6. **Re-enable UI**
-   - Set `CREATE_OPP_USER_FIELDS_ENABLED = true`.
-   - Remove “not available yet” hint in create modal.
-   - Verify in native CRM; no “user fields not saved” toast.
-
-### Files
-
-| File | Role |
-|------|------|
-| `public/app.js` | Create modal, collect/apply custom fields |
-| `server.py` | Proxy POST body rules |
-| `scripts/probe_custom_fields.py` | API experiments |
-| `ISSUES.md` | Close when acceptance criteria pass |
+**Fix:** Query `input, select, textarea` inside the wrapper div; use only `{key, value}` camelCase in `customFieldList`; include `customFieldList` in create body alongside per-field POST fallback. See CHANGELOG.md and [ISSUES.md](./ISSUES.md) for full details.
 
 ---
 

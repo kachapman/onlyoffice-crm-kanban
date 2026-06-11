@@ -22,6 +22,14 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 See AGENTS.md for implementation details. These (plus proxy support for attachments on server) are released as v1.6.1.
 
+## [1.7.0] — 2026-06-11
+
+### FEAT-002: Custom user fields on opportunity create (ISSUE-001 — FIXED)
+- Custom fields on new opportunity create now actually persist in CRM. Root cause: `collectCreateOppCustomFieldValues()` used `[data-custom-field-id]` which matched the wrapper `<div>` (set by `renderCreateOppCustomFields`) instead of the actual `<input>`/`<select>`/`<textarea>`, so `.value` was always `undefined` and every field was silently skipped.
+- Fix: finds the wrapper div by data attribute, then queries `input, select, textarea` inside it to get the real user-entered value.
+- Also corrected `buildCustomFieldListForApi` to `{key, value}` format (camelCase, no duplicate `Key`/`Value` props) and added `customFieldList` to create body alongside per-field POST fallback.
+- `CREATE_OPP_USER_FIELDS_ENABLED=true`. Tested and confirmed end-to-end (dashboard → proxy → CRM).
+
 ## [1.6.0] — 2026-06-10
 
 ### Post-1.4.5 bug fixes (cross-device reliability + no-UI-hang resilience)
