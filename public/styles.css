@@ -1117,54 +1117,67 @@ body {
 
 .daily-focus {
   max-width: 1820px;
-  margin: 0 auto 1.25rem;
-  padding: 0.5rem 1rem;
+  margin: 0 auto 0.5rem;
+  padding: 0.25rem 1rem;
+  max-height: 1.8rem;
+  overflow: hidden;
   text-align: center;
   font-family: var(--serif);
-  font-size: 1.1rem;
+  font-size: clamp(0.75rem, 1vw, 0.95rem);
   font-style: italic;
-  line-height: 1.5;
+  line-height: 1.4;
   color: var(--muted);
   letter-spacing: 0.02em;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
+  gap: 0.4rem;
+  flex-wrap: nowrap;
+  white-space: nowrap;
 }
 
 .daily-focus-quote {
   color: var(--text);
   font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 70vw;
+  flex-shrink: 1;
+  min-width: 0;
 }
 
 .daily-focus-author {
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   font-style: normal;
   color: var(--muted);
   font-family: var(--font);
   letter-spacing: normal;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
-.daily-focus-selector {
-  font-size: 0.65rem;
+.daily-focus-refresh {
+  font-size: 0.75rem;
   font-family: var(--font);
   font-style: normal;
   background: transparent;
   border: none;
   color: var(--muted);
   cursor: pointer;
-  padding: 0.15rem 0.3rem;
-  margin-left: 0.5rem;
+  padding: 0.1rem 0.25rem;
   border-radius: 4px;
-  transition: background 0.15s;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+  line-height: 1;
 }
 
-.daily-focus-selector:hover {
+.daily-focus-refresh:hover {
   background: var(--surface-2);
+  color: var(--text);
 }
 
-.daily-focus-selector:focus {
+.daily-focus-refresh:focus {
   outline: none;
   background: var(--surface-2);
 }

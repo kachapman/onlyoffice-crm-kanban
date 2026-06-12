@@ -48,12 +48,13 @@ const PRESENCE_CUSTOM_MAX = 120; // modest char limit for custom status (emojis 
 
 /** Daily Focus quote — rotating daily inspiration banner */
 const DAILY_FOCUS_KEY = "oo_daily_focus_author";
+const DAILY_FOCUS_RANDOM_KEY = "oo_daily_focus_random";
 const DAILY_QUOTES = [
-  // Dune (12)
-  { text: "Fear is the mind-killer. Fear is the little-death that brings total obliteration.", author: "Frank Herbert" },
+  // Dune (30)
+  { text: "Fear is the mind-killer.", author: "Frank Herbert" },
   { text: "I must not fear. I will face my fear and let it pass through me.", author: "Frank Herbert" },
   { text: "The mystery of life isn't a problem to solve, but a reality to experience.", author: "Frank Herbert" },
-  { text: "A process cannot be understood by stopping it. Understanding must move with the flow of the process.", author: "Frank Herbert" },
+  { text: "A process cannot be understood by stopping it.", author: "Frank Herbert" },
   { text: "He who controls the spice controls the universe.", author: "Frank Herbert" },
   { text: "Without change, something sleeps inside us, and seldom awakens.", author: "Frank Herbert" },
   { text: "There is no escape—we pay for the violence of our ancestors.", author: "Frank Herbert" },
@@ -62,47 +63,146 @@ const DAILY_QUOTES = [
   { text: "What do you despise? By this you are truly known.", author: "Frank Herbert" },
   { text: "Wealth is a tool of freedom, but the pursuit of wealth is the road to slavery.", author: "Frank Herbert" },
   { text: "The beginning of knowledge is the discovery of something we do not understand.", author: "Frank Herbert" },
-  // Tolkien (13)
+  { text: "The people who can destroy a thing, they control it.", author: "Frank Herbert" },
+  { text: "Deep in the human unconscious is a pervasive need for a logical universe.", author: "Frank Herbert" },
+  { text: "Do not be deceived by the fact that you are used to something.", author: "Frank Herbert" },
+  { text: "Humans are born with a desire to control their environment.", author: "Frank Herbert" },
+  { text: "The highest function of ecology is understanding consequences.", author: "Frank Herbert" },
+  { text: "The power to destroy a thing is the absolute control over it.", author: "Frank Herbert" },
+  { text: "Hope clouds observation.", author: "Frank Herbert" },
+  { text: "The thing we call technology is the art of arranging life so you don't have to work.", author: "Frank Herbert" },
+  { text: "There is no real ending. It's just the place where you stop the story.", author: "Frank Herbert" },
+  { text: "The gift of words is the gift of deception.", author: "Frank Herbert" },
+  { text: "You cannot back into the future.", author: "Frank Herbert" },
+  { text: "A man is a fool not to put everything he has into whatever he is doing.", author: "Frank Herbert" },
+  { text: "The most persistent principles of the universe are accident and error.", author: "Frank Herbert" },
+  { text: "To attempt an understanding of the Creator is to attempt the impossible.", author: "Frank Herbert" },
+  { text: "I must not fear. Fear is the little-death.", author: "Frank Herbert" },
+  { text: "The people who are the most dangerous are those who think they are doing right.", author: "Frank Herbert" },
+  { text: "The only lasting truth is Change.", author: "Frank Herbert" },
+  { text: "God is not separate from the universe; He is the universe.", author: "Frank Herbert" },
+  // Tolkien (30)
   { text: "Not all those who wander are lost.", author: "J.R.R. Tolkien" },
   { text: "Even the smallest person can change the course of the future.", author: "J.R.R. Tolkien" },
   { text: "There is some good in this world, and it's worth fighting for.", author: "J.R.R. Tolkien" },
   { text: "All we have to decide is what to do with the time that is given us.", author: "J.R.R. Tolkien" },
-  { text: "The road goes ever on and on, down from the door where it began.", author: "J.R.R. Tolkien" },
+  { text: "The road goes ever on and on.", author: "J.R.R. Tolkien" },
   { text: "A single dream is more powerful than a thousand realities.", author: "J.R.R. Tolkien" },
   { text: "Courage is found in unlikely places.", author: "J.R.R. Tolkien" },
   { text: "If more of us valued food and cheer above hoarded gold, it would be a merrier world.", author: "J.R.R. Tolkien" },
   { text: "I will not say: do not weep; for not all tears are an evil.", author: "J.R.R. Tolkien" },
-  { text: "It's a dangerous business going out your door. You step onto the road, and if you don't keep your feet, there is no knowing where you might be swept off to.", author: "J.R.R. Tolkien" },
+  { text: "It's a dangerous business going out your door.", author: "J.R.R. Tolkien" },
   { text: "Faithless is he that says farewell when the road darkens.", author: "J.R.R. Tolkien" },
-  { text: "The world is indeed full of peril, and in it there are many dark places; but still there is much that is fair.", author: "J.R.R. Tolkien" },
+  { text: "The world is indeed full of peril, but still there is much that is fair.", author: "J.R.R. Tolkien" },
   { text: "A man that flies from his fear may find that he has only taken a shortcut to meet it.", author: "J.R.R. Tolkien" },
-  // G.K. Chesterton (12)
-  { text: "Fairy tales are more than true: not because they tell us that dragons exist, but because they tell us dragons can be beaten.", author: "G.K. Chesterton" },
+  { text: "I would rather spend one lifetime with you than face all the ages of this world alone.", author: "J.R.R. Tolkien" },
+  { text: "The leaves were long, the grass was green, the hemlock-umbels tall and fair.", author: "J.R.R. Tolkien" },
+  { text: "I have claimed that Escape is one of the main functions of fairy-stories.", author: "J.R.R. Tolkien" },
+  { text: "It is not the strength of the body, but the will of the heart that matters.", author: "J.R.R. Tolkien" },
+  { text: "Short cuts make long delays.", author: "J.R.R. Tolkien" },
+  { text: "There is nothing like looking, if you want to find something.", author: "J.R.R. Tolkien" },
+  { text: "Do not meddle in the affairs of wizards, for they are subtle and quick to anger.", author: "J.R.R. Tolkien" },
+  { text: "The wise speak only of what they know.", author: "J.R.R. Tolkien" },
+  { text: "Many that live deserve death. And some that die deserve life.", author: "J.R.R. Tolkien" },
+  { text: "Oft hope is born when all is forlorn.", author: "J.R.R. Tolkien" },
+  { text: "The darkness is passing, but the light has not yet come.", author: "J.R.R. Tolkien" },
+  { text: "It is a strange thing to be so spoken of by a dragon.", author: "J.R.R. Tolkien" },
+  { text: "The greatest adventure is what lies ahead.", author: "J.R.R. Tolkien" },
+  { text: "May the wind under your wings bear you where the sun sails and the moon walks.", author: "J.R.R. Tolkien" },
+  { text: "Laughter is the music of the heart, the voice of the soul.", author: "J.R.R. Tolkien" },
+  { text: "The old that is strong does not wither, deep roots are not reached by the frost.", author: "J.R.R. Tolkien" },
+  // Chesterton (30)
+  { text: "Fairy tales are more than true: not because they tell us dragons exist, but because they tell us dragons can be beaten.", author: "G.K. Chesterton" },
   { text: "An adventure is only an inconvenience rightly considered.", author: "G.K. Chesterton" },
-  { text: "The true soldier fights not because he hates what is in front of him, but because he loves what is behind him.", author: "G.K. Chesterton" },
+  { text: "The true soldier fights because he loves what is behind him.", author: "G.K. Chesterton" },
   { text: "There are no uninteresting things, only uninterested people.", author: "G.K. Chesterton" },
   { text: "The Christian ideal has not been tried and found wanting. It has been found difficult; and left untried.", author: "G.K. Chesterton" },
   { text: "A good novel tells us the truth about its hero; but a bad novel tells us the truth about its author.", author: "G.K. Chesterton" },
   { text: "The traveller sees what he sees. The tourist sees what he has come to see.", author: "G.K. Chesterton" },
-  { text: "When men choose not to believe in God, they do not thereafter believe in nothing; they then become capable of believing in anything.", author: "G.K. Chesterton" },
+  { text: "When men choose not to believe in God, they become capable of believing in anything.", author: "G.K. Chesterton" },
   { text: "Art, like morality, consists of drawing the line somewhere.", author: "G.K. Chesterton" },
-  { text: "Courage is almost a contradiction in terms. It means a strong desire to live taking the form of a readiness to die.", author: "G.K. Chesterton" },
-  { text: "The most extraordinary thing in the world is an ordinary man and an ordinary woman and their ordinary children.", author: "G.K. Chesterton" },
+  { text: "Courage is a strong desire to live taking the form of a readiness to die.", author: "G.K. Chesterton" },
+  { text: "The most extraordinary thing is an ordinary man and an ordinary woman and their ordinary children.", author: "G.K. Chesterton" },
   { text: "Fallacies do not cease to be fallacies because they become fashions.", author: "G.K. Chesterton" },
-  // C.S. Lewis (13)
+  { text: "The way to love anything is to realize that it may be lost.", author: "G.K. Chesterton" },
+  { text: "A dead thing can go with the stream, but only a living thing can go against it.", author: "G.K. Chesterton" },
+  { text: "The whole object of travel is not to set foot on foreign land; it is to set foot on one's own country.", author: "G.K. Chesterton" },
+  { text: "There are two ways to get enough: one is to continue to accumulate more and more. The other is to desire less.", author: "G.K. Chesterton" },
+  { text: "Education is simply the soul of a society as it passes from one generation to another.", author: "G.K. Chesterton" },
+  { text: "The poet only asks to get his head into the heavens. The logician seeks to get the heavens into his head.", author: "G.K. Chesterton" },
+  { text: "Angels can fly because they can take themselves lightly.", author: "G.K. Chesterton" },
+  { text: "The man who never alters his opinion is like standing water, and breeds reptiles of the mind.", author: "G.K. Chesterton" },
+  { text: "To have a right to do a thing is not at all the same as to be right in doing it.", author: "G.K. Chesterton" },
+  { text: "The purpose of an open mind is to close it on something solid.", author: "G.K. Chesterton" },
+  { text: "I owe my success to having listened respectfully to the very best advice.", author: "G.K. Chesterton" },
+  { text: "The Bible tells us to love our neighbors, and also to love our enemies.", author: "G.K. Chesterton" },
+  { text: "The truth is, of course, that the rich are the only people who can afford to be poor.", author: "G.K. Chesterton" },
+  { text: "A yawn is a silent shout.", author: "G.K. Chesterton" },
+  { text: "The first effect of not believing in God is to believe in anything.", author: "G.K. Chesterton" },
+  { text: "The shortest way to do many things is to do only one thing at a time.", author: "G.K. Chesterton" },
+  { text: "Impartiality is a pompous name for indifference, which is an elegant name for ignorance.", author: "G.K. Chesterton" },
+  // C.S. Lewis (30)
   { text: "Courage, dear heart.", author: "C.S. Lewis" },
   { text: "Hardships often prepare ordinary people for an extraordinary destiny.", author: "C.S. Lewis" },
   { text: "You are never too old to set another goal or to dream a new dream.", author: "C.S. Lewis" },
   { text: "Friendship is born at the moment when one person says to another: 'What! You too?'", author: "C.S. Lewis" },
   { text: "We meet no ordinary people in our lives.", author: "C.S. Lewis" },
-  { text: "The future is something which everyone reaches at the rate of sixty minutes an hour, whatever he does, whoever he is.", author: "C.S. Lewis" },
+  { text: "The future is something which everyone reaches at the rate of sixty minutes an hour.", author: "C.S. Lewis" },
   { text: "No one ever told me that grief felt so like fear.", author: "C.S. Lewis" },
   { text: "Humility is not thinking less of yourself, but thinking of yourself less.", author: "C.S. Lewis" },
-  { text: "I believe in Christianity as I believe that the sun has risen: not only because I see it, but because by it I see everything else.", author: "C.S. Lewis" },
+  { text: "I believe in Christianity as I believe the sun has risen: not only because I see it, but because by it I see everything else.", author: "C.S. Lewis" },
   { text: "To love is to be vulnerable.", author: "C.S. Lewis" },
   { text: "There are far, far better things ahead than any we leave behind.", author: "C.S. Lewis" },
   { text: "The pain now is part of the happiness then. That's the deal.", author: "C.S. Lewis" },
-  { text: "Children have one kind of silliness, as you know, and grown-ups have another kind.", author: "C.S. Lewis" },
+  { text: "Children have one kind of silliness, and grown-ups have another kind.", author: "C.S. Lewis" },
+  { text: "We are what we believe we are.", author: "C.S. Lewis" },
+  { text: "You can't go back and change the beginning, but you can start where you are and change the ending.", author: "C.S. Lewis" },
+  { text: "Miracles are a retelling in small letters of the very same story which is written across the whole world.", author: "C.S. Lewis" },
+  { text: "The task of the modern educator is not to cut down jungles, but to irrigate deserts.", author: "C.S. Lewis" },
+  { text: "What draws people to be friends is that they see the same truth.", author: "C.S. Lewis" },
+  { text: "If I find in myself desires which nothing in this world can satisfy, the only logical explanation is that I was made for another world.", author: "C.S. Lewis" },
+  { text: "I have been trying to make the best of a bad job. It is not the best that is the best; it is the trying that is the best.", author: "C.S. Lewis" },
+  { text: "A children's story that can only be enjoyed by children is not a good children's story.", author: "C.S. Lewis" },
+  { text: "The safest road to hell is the gradual one—the gentle slope, soft underfoot, without sudden turnings.", author: "C.S. Lewis" },
+  { text: "Though our feelings come and go, His love for us does not.", author: "C.S. Lewis" },
+  { text: "It is not your business to succeed, but to do right.", author: "C.S. Lewis" },
+  { text: "The great thing is to be found at one's post as a child of God.", author: "C.S. Lewis" },
+  { text: "We are not necessarily doubting that God will do the best for us; we are wondering how painful the best will turn out to be.", author: "C.S. Lewis" },
+  { text: "Isn't it funny how day by day nothing changes, but when you look back, everything is different.", author: "C.S. Lewis" },
+  { text: "Love is not affectionate feeling, but a steady wish for the loved person's ultimate good.", author: "C.S. Lewis" },
+  { text: "He died not for men, but for each man.", author: "C.S. Lewis" },
+  { text: "You can make anything by writing.", author: "C.S. Lewis" },
+  // Terry Pratchett (30)
+  { text: "It's still magic even if you know how it's done.", author: "Terry Pratchett" },
+  { text: "The presence of those seeking the truth is infinitely to be preferred to the presence of those who think they've found it.", author: "Terry Pratchett" },
+  { text: "Give a man a fire and he's warm for a day, but set fire to him and he's warm for the rest of his life.", author: "Terry Pratchett" },
+  { text: "In ancient times cats were worshipped as gods; they have not forgotten this.", author: "Terry Pratchett" },
+  { text: "Wisdom comes from experience. Experience is often a result of lack of wisdom.", author: "Terry Pratchett" },
+  { text: "The truth may be out there, but the lies are inside your head.", author: "Terry Pratchett" },
+  { text: "Real stupidity beats artificial intelligence every time.", author: "Terry Pratchett" },
+  { text: "Build a man a fire, and he'll be warm for a day. Set a man on fire, and he'll be warm for the rest of his life.", author: "Terry Pratchett" },
+  { text: "If you trust in yourself and believe in your dreams and follow your star, you'll still get beaten by people who spent their time working hard and learning things.", author: "Terry Pratchett" },
+  { text: "The pen is mightier than the sword if the sword is very short, and the pen is very sharp.", author: "Terry Pratchett" },
+  { text: "Time is a drug. Too much of it kills you.", author: "Terry Pratchett" },
+  { text: "Light thinks it travels faster than anything but it is wrong. No matter how fast light travels, it finds the darkness has always got there first.", author: "Terry Pratchett" },
+  { text: "Coming back to where you started is not the same as never leaving.", author: "Terry Pratchett" },
+  { text: "It's not worth doing something unless someone, somewhere, would much rather you weren't doing it.", author: "Terry Pratchett" },
+  { text: "Evil begins when you begin to treat people as things.", author: "Terry Pratchett" },
+  { text: "The trouble with having an open mind, of course, is that people will insist on coming along and trying to put things in it.", author: "Terry Pratchett" },
+  { text: "Freedom is having the right to be wrong, not the right to do wrong.", author: "Terry Pratchett" },
+  { text: "Inside every old person is a young person wondering what happened.", author: "Terry Pratchett" },
+  { text: "Stories of imagination tend to upset those without one.", author: "Terry Pratchett" },
+  { text: "I'd rather be a rising ape than a falling angel.", author: "Terry Pratchett" },
+  { text: "The whole of life is just like watching a film. Only it's as though you always get in ten minutes after the big picture has started.", author: "Terry Pratchett" },
+  { text: "Sometimes the only way to deal with a madman is to take him seriously.", author: "Terry Pratchett" },
+  { text: "The world is made up of stories, not atoms.", author: "Terry Pratchett" },
+  { text: "There is a rumour going around that I have found God. I think this is unlikely because I have enough difficulty finding my keys.", author: "Terry Pratchett" },
+  { text: "Five exclamation marks, the sure sign of an insane mind.", author: "Terry Pratchett" },
+  { text: "Granny Weatherwax was not lost. She wasn't the kind of person who ever became lost.", author: "Terry Pratchett" },
+  { text: "The presence of a seeker may be preferred, but not at the expense of the sought.", author: "Terry Pratchett" },
+  { text: "People don't like change. But make the change fast enough and you go from one type of normal to another.", author: "Terry Pratchett" },
+  { text: "What kind of man would put a known criminal in charge of a major branch of government?", author: "Terry Pratchett" },
+  { text: "The best you can do is the best you can do.", author: "Terry Pratchett" },
 ];
 
 /** Create a TTL-backed cache map for filter results. Keyed by string, entries expire after `ttl` ms. */
@@ -15423,24 +15523,23 @@ function showLogin() {
   $("#portal-url").value = state.portalUrl || DEFAULT_PORTAL;
 }
 
-function loadDailyFocusAuthor() {
-  try {
-    return localStorage.getItem(DAILY_FOCUS_KEY) || "";
-  } catch { return ""; }
-}
-
-function saveDailyFocusAuthor(author) {
-  try { localStorage.setItem(DAILY_FOCUS_KEY, author || ""); } catch {}
-}
-
 function getDailyQuote() {
-  const author = loadDailyFocusAuthor();
-  const pool = author
-    ? DAILY_QUOTES.filter((q) => q.author === author)
-    : DAILY_QUOTES;
-  if (!pool.length) return DAILY_QUOTES[0];
   const day = Math.floor(Date.now() / 86400000);
-  return pool[day % pool.length];
+  try {
+    const saved = localStorage.getItem(DAILY_FOCUS_RANDOM_KEY);
+    if (saved) {
+      const { day: savedDay, index } = JSON.parse(saved);
+      if (savedDay === day) return DAILY_QUOTES[index % DAILY_QUOTES.length];
+    }
+  } catch {}
+  return DAILY_QUOTES[day % DAILY_QUOTES.length];
+}
+
+function refreshDailyQuote() {
+  const day = Math.floor(Date.now() / 86400000);
+  const index = Math.floor(Math.random() * DAILY_QUOTES.length);
+  try { localStorage.setItem(DAILY_FOCUS_RANDOM_KEY, JSON.stringify({ day, index })); } catch {}
+  renderDailyFocus();
 }
 
 function renderDailyFocus() {
@@ -15454,28 +15553,17 @@ function renderDailyFocus() {
   const author = document.createElement("span");
   author.className = "daily-focus-author";
   author.textContent = `— ${q.author}`;
-  const selector = document.createElement("select");
-  selector.className = "daily-focus-selector";
-  selector.title = "Filter by author";
-  const authors = ["", "Frank Herbert", "J.R.R. Tolkien", "G.K. Chesterton", "C.S. Lewis"];
-  const labels = ["All", "Dune", "Tolkien", "Chesterton", "Lewis"];
-  const current = loadDailyFocusAuthor();
-  for (let i = 0; i < authors.length; i++) {
-    const opt = document.createElement("option");
-    opt.value = authors[i];
-    opt.textContent = labels[i];
-    if (authors[i] === current) opt.selected = true;
-    selector.appendChild(opt);
-  }
-  selector.addEventListener("change", () => {
-    saveDailyFocusAuthor(selector.value);
-    renderDailyFocus();
-  });
+  const refreshBtn = document.createElement("button");
+  refreshBtn.type = "button";
+  refreshBtn.className = "daily-focus-refresh";
+  refreshBtn.title = "New quote";
+  refreshBtn.textContent = "↻";
+  refreshBtn.addEventListener("click", () => refreshDailyQuote());
   container.appendChild(quote);
   container.appendChild(document.createTextNode(" "));
   container.appendChild(author);
   container.appendChild(document.createTextNode(" "));
-  container.appendChild(selector);
+  container.appendChild(refreshBtn);
 }
 
 async function checkSession() {
