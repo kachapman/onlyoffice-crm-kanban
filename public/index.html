@@ -144,13 +144,15 @@
       <span id="status-text">Ready</span>
       <span id="portal-label" class="portal-label"></span>
       <span id="app-version" class="app-version"></span>
-      <span id="daily-focus" class="daily-focus" aria-label="Daily inspiration"></span>
       <!-- Minimal mutation queue sync status (added for offline resilience). Hidden when empty. -->
       <span id="mutation-sync-status" class="mutation-sync-status hidden" title="Actions waiting to sync with CRM"></span>
       <!-- Note attachments queue: right-side list of recent note sends (with attachments). Shows pending + completed (clears 10s after done). -->
       <div id="note-queue-list" class="note-queue-list" aria-live="polite" aria-label="Recent note attachments status"></div>
-      <!-- CRM unreachable marquee: pinned under header on the right side, matching the font/size of the left meta text (larger than old tiny version for better height/visibility). Compact width, scrolls. -->
-      <div id="crm-header-marquee" class="crm-header-marquee hidden" aria-live="polite" role="status"></div>
+      <!-- Right-side column: daily quote + CRM warning stacked vertically -->
+      <div class="global-meta-right">
+        <span id="daily-focus" class="daily-focus" aria-label="Daily inspiration"></span>
+        <div id="crm-header-marquee" class="crm-header-marquee hidden" aria-live="polite" role="status"></div>
+      </div>
       <!-- CRM crash banner: subtle amber, right side, persistent until successful CRM responses after refresh. -->
       <div id="crm-crash-banner" class="crm-crash-banner hidden" role="alert" aria-live="polite"></div>
     </section>

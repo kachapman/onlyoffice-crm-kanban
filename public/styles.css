@@ -965,6 +965,15 @@ body {
   color: var(--muted);
 }
 
+.global-meta-right {
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
 #mutation-sync-status {
   font-size: 0.75rem;
   padding: 0.15rem 0.4rem;
