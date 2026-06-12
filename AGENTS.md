@@ -1,7 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
-**Current version:** 1.7.5 (see CHANGELOG.md)  
-**Last session summary (for next resume):** v1.7.5 (committed + pushed): Tag/custom field/filter caches, DM linkify, feed cap, batch tag enrichment, CRM loading indicator, mail fixes, user fields, tile isolation. Post-commit implementation (uncommitted): server.py gzip compression (app.js 553KB→134KB, 75% reduction), Cache-Control `public max-age=86400` for static files, proxy-side response cache (60s for tag/stage/customfield, 15s for filter/history), IndexedDB persistence for all three client-side caches (survives page reloads, hydrated on init, fire-and-forget writes).
+**Current version:** 1.7.6 (see CHANGELOG.md)  
+**Last session summary (for next resume):** v1.7.6 (committed): Feed: [Notified:] auto-inject experiment tried and reverted (user reported formatting issues — scrapped; manual @ken keyword filter remains). Mail events removed from feed entirely. FEED_MAX_EVENTS settled at 150. Preview modal fields now card-style with `<field-value-tag>` pills for Yes/No. Tasks rendered as cards (border+radius+shadow). Full-width layout toggle removed from tasks tile and CRM notifications tile. Success probability removed from preview. Server: gzip compression (app.js 553KB→134KB), Cache-Control `public max-age=86400`, proxy-side response cache (60s tag/stage/customfield, 15s filter/history). scroll-padding-bottom fix for deal edit modal.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 

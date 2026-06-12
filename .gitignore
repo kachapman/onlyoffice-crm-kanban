@@ -21,3 +21,9 @@ onlyoffice-module/**/bin/
 onlyoffice-module/**/obj/
 *.user
 *.suo
+
+# Test artifacts
+*.lighthouse.json
+127.0.0.1_*
+curl *.txt
+scripts/

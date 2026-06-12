@@ -1,5 +1,24 @@
 # Known issues
 
+## ISSUE-003 — Feed notification notify-user search: auto-inject [Notified:] attempted and scrapped
+
+**Status:** ❌ Abandoned 2026-06-12 — reverted in v1.7.6
+**Area:** Feed notifications / event creation (`public/app.js`)
+
+### What was tried
+
+We wanted to make "My notifications" (events where the current user was in notifyUserList) searchable via the keyword filter using `@username`. Since the CRM's GET `/api/2.0/crm/history/filter` does not return notifyUserList in its response, we couldn't filter client-side by user.
+
+**Attempt A (v1.7.6-dev, reverted):** Auto-inject a `[Notified: Name1, Name2]` suffix into the event content inside `createOpportunityHistoryEvent`, right before the HTML conversion. Then detect the suffix in `renderFeedNotificationItem` and style it separately. Users would search `@ken` as a keyword and find events where they were notified.
+
+**Why it was reverted:**
+- User reported the [Notified:] text appeared "squished against the note" and was the same font size despite CSS rules — possibly a browser-cache issue, but the styling approach was unreliable.
+- The user preferred the existing manual `@ken` keyword filter which already worked for events where their name appeared in the text.
+
+**Alternative considered:** A dedicated "My notifications only" checkbox that would try to check `notifyRecipients` — but the API doesn't return this data in GET responses, so it hid everything. Also reverted.
+
+**Current state:** Only the manual keyword filter (comma-separated AND) is used for feed filtering. Mail events removed from feed (noise reduction). FEED_MAX_EVENTS=150.
+
 ## ISSUE-001 — New Opportunity: custom user fields do not persist (RESOLVED v1.7.0)
 
 **Status:** ✅ Fixed 2026-06-11 — `CREATE_OPP_USER_FIELDS_ENABLED=true`, see **Root cause** below.  

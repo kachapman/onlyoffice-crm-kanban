@@ -2,6 +2,36 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [1.7.6] — 2026-06-12
+
+### Feed: notify auto-inject experiment (tried and reverted)
+- Attempted Part A: auto-inject `[Notified: Name1, Name2]` text into event content when creating history events with notify users, so the keyword filter could find them.
+- Added `renderFeedNotificationItem` detection of `[Notified: ...]` suffix with `.feed-notified-suffix` CSS (smaller/italic/muted).
+- **Reverted**: User reported text was "squished against the note" and same font size. Feature scrapped — manual `@ken` keyword filter works fine.
+
+### Feed: mail events removed
+- Removed `fetchFeedMailInitial` call, mail batch branch in `loadMoreNotificationFeed`, and `mailExhausted` from `feedCanLoadMore`. Mail events (CRM. New event added to...) no longer appear in the feed.
+
+### FEED_MAX_EVENTS: 200→150→100→150
+- Settled at 150 (mail removal already reduces noise sufficiently).
+
+### UI: Preview modal fields styled as cards
+- Each `.opp-preview-field` now has `border`, `border-radius: 8px`, `box-shadow`, and `background: var(--surface-2)` — like edit modal fields.
+- Checkbox values ("Yes"/"No") render as small pill `.field-value-tag`.
+- Success probability field removed from preview.
+
+### UI: Tasks rendered as cards (not rows)
+- `.task-row` now has `border-radius: 8px`, `border: 1px solid var(--border)`, `box-shadow`, and `margin-bottom` instead of `border-bottom`.
+- Full-width layout toggle button removed from tasks tile and CRM notifications tile toolbars.
+
+### Server: gzip + caching
+- Static files served with `Cache-Control: public, max-age=86400`.
+- Gzip compression for all responses (`Content-Encoding: gzip`; app.js 553KB→134KB, 75% reduction).
+- Proxy-side response cache: 60s TTL for tag/stage/customfield, 15s for filter/history.
+
+### Other
+- `modal-card-deal-edit .modal-form` now has `scroll-padding-bottom: 4rem` so content doesn't hide behind sticky action bar.
+
 ## [1.6.1] — 2026-06-11
 
 ### FEAT-003: Attachments on event notes

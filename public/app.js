@@ -13,7 +13,7 @@ const FEED_KEYWORD_STORAGE_KEY = "oo_board_feed_keyword_v1";
 const GROUP_TEMPLATES_STORAGE_KEY = "oo_board_group_templates_v1";
 const FEED_DAYS = 30;
 const FEED_CACHE_TTL_MS = 5 * 60 * 1000;
-const FEED_MAX_EVENTS = 100;
+const FEED_MAX_EVENTS = 150;
 const FEED_HISTORY_PAGE_SIZE = 100;
 const FEED_MAIL_SEARCH = "CRM. New event added to";
 const FEED_MAIL_SEARCHES = [FEED_MAIL_SEARCH, "CRM New event added to"];
@@ -1000,7 +1000,7 @@ function createTileMenu({ label, className = "", items }) {
   return wrap;
 }
 
-function createLayoutButtons({ showDoubleHeight = true, showQuarterWidth = false } = {}) {
+function createLayoutButtons({ showDoubleHeight = true, showQuarterWidth = false, showFullWidth = true } = {}) {
   const wrap = document.createElement("div");
   wrap.className = "tile-layout-btns";
 
@@ -1018,10 +1018,13 @@ function createLayoutButtons({ showDoubleHeight = true, showQuarterWidth = false
 
   const fullBtn = document.createElement("button");
   fullBtn.type = "button";
+  fullBtn.dataset.layout = "full";
   setTileLayoutIconButton(fullBtn, TILE_ICON_WINDOW_MAXIMIZE, "Full width");
 
   wrap.appendChild(halfBtn);
-  wrap.appendChild(fullBtn);
+  if (showFullWidth) {
+    wrap.appendChild(fullBtn);
+  }
 
   let tallBtn = null;
   if (showDoubleHeight) {
@@ -1030,7 +1033,7 @@ function createLayoutButtons({ showDoubleHeight = true, showQuarterWidth = false
     setTileLayoutIconButton(tallBtn, TILE_ICON_HEIGHT_EXPAND, "Double tile height (two grid rows)");
     wrap.appendChild(tallBtn);
   }
-  return { wrap, quarterBtn, halfBtn, fullBtn, tallBtn };
+  return { wrap, quarterBtn, halfBtn, fullBtn: showFullWidth ? fullBtn : null, tallBtn };
 }
 
 function bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn, quarterBtn = null) {
@@ -1039,7 +1042,7 @@ function bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn, quarte
     const h = tileHeight(tileId);
     if (quarterBtn) quarterBtn.classList.toggle("tile-btn-active", w === "quarter");
     halfBtn.classList.toggle("tile-btn-active", w === "half");
-    fullBtn.classList.toggle("tile-btn-active", w === "full");
+    if (fullBtn) fullBtn.classList.toggle("tile-btn-active", w === "full");
     if (tallBtn) tallBtn.classList.toggle("tile-btn-active", h === "double");
     applyTileLayoutClasses(tileEl, tileId);
     if (tileId === "tile-tasks") renderTasksByUser();
@@ -1055,7 +1058,7 @@ function bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn, quarte
     setTileWidth(tileId, "half");
     syncTileLayout();
   });
-  fullBtn.addEventListener("click", (e) => {
+  fullBtn?.addEventListener("click", (e) => {
     e.stopPropagation();
     setTileWidth(tileId, "full");
     syncTileLayout();
@@ -1189,8 +1192,14 @@ function ensurePanelToolbarCount(tileEl, tileId) {
 function ensurePanelLayoutButtons(tileEl, tileId) {
   if (!PANEL_TILE_IDS.has(tileId)) return;
   const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
-  if (!toolbar || toolbar.querySelector(".tile-layout-btns")) return;
-  const { wrap, quarterBtn, halfBtn, fullBtn, tallBtn } = createLayoutButtons({ showDoubleHeight: false, showQuarterWidth: true });
+  if (!toolbar) return;
+  const existingWrap = toolbar.querySelector(".tile-layout-btns");
+  if (existingWrap) {
+    const fullBtn = existingWrap.querySelector('[data-layout="full"]');
+    if (fullBtn) fullBtn.remove();
+    return;
+  }
+  const { wrap, quarterBtn, halfBtn, fullBtn, tallBtn } = createLayoutButtons({ showDoubleHeight: false, showQuarterWidth: true, showFullWidth: false });
   toolbar.appendChild(wrap);
   bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn, quarterBtn);
 }
@@ -7633,14 +7642,7 @@ function renderFeedNotificationItem(it) {
   const meta = document.createElement("span");
   meta.className = "feed-meta";
   const when = it.date ? new Date(it.date).toLocaleString() : "";
-  const text = it.text || "";
-  const notifiedMatch = text.match(/\n?(\[Notified: .*?\])$/);
-  if (notifiedMatch) {
-    const mainText = text.slice(0, -notifiedMatch[0].length);
-    meta.innerHTML = `${escapeHtml(it.author)}${when ? escapeHtml(" · " + when) : ""} — ${escapeHtml(mainText)}<span class="feed-notified-suffix">${escapeHtml(notifiedMatch[1])}</span>`;
-  } else {
-    meta.textContent = `${it.author}${when ? " · " + when : ""} — ${text}`;
-  }
+  meta.textContent = `${it.author}${when ? " · " + when : ""} — ${it.text || ""}`;
   body.appendChild(a);
   body.appendChild(meta);
 
@@ -8259,19 +8261,6 @@ async function uploadAttachmentForNote(file) {
 }
 
 async function createOpportunityHistoryEvent(oppId, { content, categoryId, notifyUserList, fileIds = [], attachmentNames = [], failedAttachmentNames = [] }) {
-  // Append notified user names to content so they're searchable in the feed
-  if (notifyUserList?.length) {
-    const names = notifyUserList
-      .map((uid) => {
-        const found = state.portalUsers.find((u) => String(u.id) === String(uid));
-        return found ? found.displayName : null;
-      })
-      .filter(Boolean);
-    if (names.length) {
-      const suffix = `\n[Notified: ${names.join(", ")}]`;
-      content = (content || "") + suffix;
-    }
-  }
   const html = noteContentToHtml(content);
   if (!html) throw new Error("Note text is required");
 
@@ -13748,10 +13737,6 @@ function buildOpportunityPreviewStandardFields(opp, tags) {
   push("Responsible", formatResponsibleLabel(opp));
   push("Members", formatMembersLabel(opp));
   push("Value", formatMoney(opp));
-  push(
-    "Success probability",
-    opp.successProbability ?? opp.SuccessProbability ?? opp.stage?.successProbability ?? ""
-  );
   push("Expected close", formatPreviewDueDate(opportunityDueDateRaw(opp)));
   // Actual close hidden per user request (showActualClose field removed from preview)
   push("Created", formatPreviewDateTime(opp.createOn ?? opp.created ?? opp.Created));
@@ -13889,7 +13874,14 @@ function renderPreviewFieldGrid(parent, rows) {
     const dt = document.createElement("dt");
     dt.textContent = label;
     const dd = document.createElement("dd");
-    dd.textContent = value;
+    if (value === "Yes" || value === "No") {
+      const tag = document.createElement("span");
+      tag.className = "field-value-tag";
+      tag.textContent = value;
+      dd.appendChild(tag);
+    } else {
+      dd.textContent = value;
+    }
     row.appendChild(dt);
     row.appendChild(dd);
     dl.appendChild(row);
