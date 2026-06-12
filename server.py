@@ -174,8 +174,10 @@ def _proxy_request(
     if query:
         url = f"{url}?{query}"
 
+    # Use the incoming request's Accept header so binary downloads (attachments) work
+    incoming_accept = handler.headers.get("Accept", "application/json")
     headers = {
-        "Accept": "application/json",
+        "Accept": incoming_accept,
         "Authorization": token.value,
     }
     body_empty = body is None or body.strip() in (b"", b"{}", b"null")
@@ -222,7 +224,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def end_headers(self) -> None:
         path = urlparse(self.path).path
-        if re.search(r"/favicon\.(ico|png)$", path, re.I):
+        if not path.startswith("/api/"):
             self.send_header("Cache-Control", "no-cache, must-revalidate")
         super().end_headers()
 

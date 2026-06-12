@@ -1,9 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
-**Current version:** 1.7.0 (see CHANGELOG.md, docs/RELEASE_v1.7.0.md)  
-**Last session summary (for next resume):** v1.7.0: FEAT-002 completed — custom user fields on opportunity create now work end-to-end. Root cause: `collectCreateOppCustomFieldValues()` querying `[data-custom-field-id]` matched the wrapper `<div>` instead of the actual `<input>`, so fields were silently skipped. Now finds input/select/textarea inside the wrapper. Also corrected `buildCustomFieldListForApi` to `{key, value}` format and added `customFieldList` to create body alongside per-field POST fallback. `CREATE_OPP_USER_FIELDS_ENABLED=true`. Tested and confirmed. v1.6.1 + v1.6.0 features ship as-is.   
-**Production:** https://dashboard.vanguardadj.com  
-**Repo:** https://github.com/kachapman/onlyoffice-crm-kanban (or local)
+**Current version:** 1.7.5 (see CHANGELOG.md)  
+**Last session summary (for next resume):** v1.7.5: Tag cache (5-min TTL), custom field cache (5-min TTL), filter result cache (30-sec TTL) — all checked before API calls, stored on fetch, cleared/invalidated on mutations. Filter result caches raw API response keyed by `groupId+baseQs` only (tag/red filters excluded) so toggling tag checkboxes hits cache. New helpers: `createTtlCache`, `createOppCache`. 200ms debounced tile loading indicator ("Refreshing deals…"). DM linkifyUrls for bare URLs in `.presence-msg-text`. Feed cap: 200→150 events, 90→30 days. Prior work: batch tag enrichment (Promise.allSettled), CRM loading indicator, mail inbox fixes + UX polish, user fields in deal edit, CRM tile isolation. Uncommitted: server.py gzip + Cache-Control, proxy response cache, IndexedDB persistence.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 
@@ -35,7 +33,7 @@ This file is auto-loaded by Grok into the system prompt for every session in thi
   - History/feed: unwrapHistoryEvents, /api/2.0/crm/history/filter (entityType=opportunity), applyFeedKeywordFilter.
   - Groups: fetchOpportunitiesForGroup + buildFilterQuery, renderCard, setupGroupToolbar (templates, remove, filters).
    - After mutations (incl. note create/delete from side editor): renderXXX() + scheduleUserProfileSave() + optional openOpportunityPreviewModal refresh for side context.
-- **Custom fields on create (ISSUE-001/FEAT-002):** Partial changes landed (CREATE_OPP_USER_FIELDS_ENABLED=false; create omits customFieldList; 300ms delay before per-field POSTs; probe script has variants A/B). UI disabled. Do **not** enable or change without explicit user request + live verification (native capture + probe + end-to-end in CRM). See ISSUES.md + FUTURE_FEATURES.md.
+- **Custom fields on create (ISSUE-001/FEAT-002):** Fully implemented and enabled (CREATE_OPP_USER_FIELDS_ENABLED=true). customFieldList with {key,value} camelCase added to create body. See ISSUES.md for root cause.
 - **Do not:** Duplicate docs (link to FUTURE_FEATURES.md, ISSUES.md, Toaster_Features, docs/UPDATE_AND_DEPLOY.txt, README). No new abstractions unless the task requires. Prefer minimal changes following existing.
 
 ## Post-v1.2 shipped items (for reference)
@@ -61,11 +59,11 @@ All items from the explicit post-1.1 testing list + live feedback were completed
 - Quick note side submit now reliably refreshes preview.
 - All changes in v1.4.5 release notes + full deploy checklist followed (local close, git tag/push, prod docker + VERIFY blocks). Update AGENTS on every release.
 
-See CHANGELOG.md and docs/RELEASE_v1.2.md. Custom fields research remains disabled. AccuLynx research stays in FUTURE_FEATURES under Other ideas (not implemented). 
+See CHANGELOG.md and docs/RELEASE_v1.2.md. AccuLynx research stays in FUTURE_FEATURES under Other ideas (not implemented). 
 
 For the previous post-v1.1 list and implementation notes, consult the git history / session artifacts around the v1.2 commits.
 
-Legacy open items (lower priority unless asked): complete custom fields (verify + enable), FEAT-003 attachments, new toasters (stale deals, closing this week, etc.), FEAT-022 docs tile.
+Legacy open items (lower priority unless asked): FEAT-003 attachments, new toasters (stale deals, closing this week, etc.), FEAT-022 docs tile.
 
 ## Architecture & Deployment Context
 - The **dashboard** (this entire project) runs on its own DigitalOcean Ubuntu droplet (production: https://dashboard.vanguardadj.com, currently 159.89.229.126). It serves the vanilla JS UI from `public/` and acts as an API proxy (`server.py`) that forwards CRM calls to the OnlyOffice server while handling user profiles, notes, calendars, and auth.

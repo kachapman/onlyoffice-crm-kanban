@@ -332,6 +332,16 @@ body {
   flex-shrink: 0;
 }
 
+/* Refresh button spin animation during CRM data load */
+.refresh-btn-loading .btn-inline-icon {
+  animation: crm-refresh-spin 0.8s linear infinite;
+}
+
+@keyframes crm-refresh-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .field-required {
   font-weight: 500;
   color: var(--muted);
@@ -832,6 +842,28 @@ body {
 
 .board-error {
   color: var(--danger);
+}
+
+/* Tile-level loading indicator */
+.tile-loading {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.tile-loading-spinner {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid var(--muted);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: tile-loading-spin 0.6s linear infinite;
+  margin-right: 0.5rem;
+  vertical-align: middle;
+}
+@keyframes tile-loading-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* Toast */
@@ -1871,9 +1903,9 @@ body {
   color: var(--text);
 }
 
-.task-row label a,
-.tasks-list-row label a {
-  color: var(--accent);
+.task-row label a:first-of-type,
+.tasks-list-row label a:first-of-type {
+  color: #d4942b;
   text-decoration: none;
   font-weight: 500;
 }
@@ -2526,6 +2558,39 @@ body {
   max-width: 28rem;
 }
 
+.modal-card-deal-edit .modal-actions {
+  position: sticky;
+  bottom: 0;
+  background: var(--surface);
+  z-index: 1;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+  margin-top: 0.5rem;
+}
+
+.modal-card-deal-edit .note-editor {
+  max-height: 6rem;
+  resize: none;
+}
+
+.deal-edit-user-fields-bar {
+  margin: 0.5rem 0 0.25rem;
+}
+
+.deal-edit-user-fields {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+  background: var(--surface-2);
+  max-height: 30vh;
+  overflow-y: auto;
+}
+
+.modal-card-deal-edit .modal-actions {
+  z-index: 2;
+}
+
 .modal-card-create-opp {
   width: min(520px, 94vw);
   max-height: min(92vh, 800px);
@@ -2631,27 +2696,6 @@ body {
   display: none;
 }
 
-.mail-badge {
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  border-radius: 999px;
-  background: #dc2626; /* red for unread */
-  color: #fff;
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 14px;
-  text-align: center;
-  border: 1px solid var(--surface);
-  pointer-events: none;
-}
-
-.mail-badge.hidden {
-  display: none;
-}
 
 .presence-header {
   display: flex;
@@ -3138,6 +3182,29 @@ body {
   color: #666;
   font-size: 0.8rem;
 }
+.mail-sidebar-toggle {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 18px;
+  min-width: 18px;
+  padding: 0;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: var(--surface-2);
+  cursor: pointer;
+  font-size: 10px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  writing-mode: vertical-lr;
+  text-orientation: mixed;
+  user-select: none;
+}
+.mail-sidebar-toggle:hover {
+  background: var(--hover);
+  color: var(--text);
+}
 .mail-right-sidebar {
   flex: 0 0 auto;
   width: 210px;
@@ -3149,6 +3216,7 @@ body {
   overflow: auto;
   font-size: 0.75rem;
   color: var(--text);
+  transition: width 0.15s, min-width 0.15s, padding 0.15s;
 }
 .mail-right-sidebar.mail-viewer-warning {
   background: var(--surface-2);
@@ -3156,6 +3224,14 @@ body {
 }
 .mail-right-sidebar.hidden {
   display: none;
+}
+.mail-right-sidebar.mail-sidebar-collapsed {
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
+  padding: 0 !important;
+  overflow: hidden;
+  border-left: none;
 }
 .mail-viewer-warning-content {
   position: relative;
@@ -3227,44 +3303,17 @@ body {
   font-size: 0.8rem;
   color: #555;
 }
-.mail-pagination {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  padding: 0.5rem 1rem;
-  border-top: 1px solid var(--border);
-  flex-shrink: 0;
-  background: var(--surface);
-  font-size: 0.9rem;
-}
-.mail-pagination button {
-  min-width: 60px;
-}
 
 #mail-inbox-btn {
   position: relative;
 }
 
-.mail-badge {
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  border-radius: 999px;
-  background: #6b7280; /* passive grey, not red */
-  color: #fff;
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 14px;
-  text-align: center;
-  border: 1px solid var(--surface);
-  pointer-events: none;
-}
-
-.mail-badge.hidden {
-  display: none;
+.mail-today-count {
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 /* Dark mode / theme fixes for mail modal (use CSS vars, avoid hard light colors) */
@@ -3402,6 +3451,11 @@ body {
 .presence-msg-text {
   white-space: pre-wrap;
   word-break: break-word;
+}
+.presence-msg-text a {
+  color: var(--accent);
+  text-decoration: underline;
+  word-break: break-all;
 }
 
 /* Small button variant used inside the modal */
@@ -4975,4 +5029,28 @@ body {
   .column {
     flex: 0 0 260px;
   }
+}
+
+/* Mail attachments shown inside expanded email panel */
+.mail-attachments-panel {
+  padding: 6px 8px;
+  font-size: 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.mail-attachments-panel .mail-attachment-link {
+  padding: 1px 4px;
+  margin: 0 2px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  white-space: nowrap;
+  display: inline-block;
+}
+.mail-attachments-panel .mail-attachment-link a {
+  color: var(--accent);
+  text-decoration: underline;
+  font-size: 11px;
+}
+.mail-attachments-panel .mail-attachment-link a:hover {
+  text-decoration: underline;
 }

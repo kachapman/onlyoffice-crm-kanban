@@ -22,6 +22,78 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 See AGENTS.md for implementation details. These (plus proxy support for attachments on server) are released as v1.6.1.
 
+## [1.7.5] — 2026-06-11
+
+### Performance: tag cache, custom field cache, filter result cache
+- **Tag cache** (`state.oppTagCache`, 5-min TTL): checked in `enrichOpportunitiesTags` before per-opp `tag/{oppId}` API calls; stored on fetch success; cleared on `refreshAll`; invalidated per-opp after tag mutations in `submitDealEditForm`, `submitQuickNoteForm`, and mutation queue handler.
+- **Custom field cache** (`state.oppCustomFieldCache`, 5-min TTL): checked in `enqueueOpportunityCustomFieldEnrich` (cached → immediate `updateOpportunityCardDom`, no queue); stored in `fetchOpportunityCustomFields`; cleared on `refreshAll`; invalidated per-opp after `updateOpportunityCustomFieldsViaPut`.
+- **Filter result cache** (`state.filterResultCache`, 30-sec TTL): caches raw API response from `/api/2.0/crm/opportunity/filter` before client-side filtering. Keyed by `groupId + baseQs` only (tagTitles/red filters excluded since they're client-side). Moved store *before* client-side filtering so adding/removing tag filters still hits the same cache entry.
+- New helpers: `createTtlCache(ttl)` for filter result cache, `createOppCache(ttl)` for opp-specific caches.
+- Cache invalidation in mutation handlers, deal edit, quick note.
+
+### UX: tile loading indicator (200ms debounce)
+- `refreshGroup` shows "Refreshing deals…" with spinner in tile board area after 200ms debounce; cleared on both success and error paths.
+
+### DM linkify
+- New `linkifyUrls(container)` function (TreeWalker pattern) converts bare `https?://` URLs to `<a>` tags inside `.presence-msg-text`; called at end of `renderDMLog`.
+
+### Feed cap reduction
+- `FEED_MAX_EVENTS` 200→150, `FEED_DAYS` 90→30 to reduce feed API payload on every refresh.
+
+### Performance: batch tag enrichment
+- **Replaced serial 12-at-a-time per-opportunity tag fetches with fully concurrent `Promise.allSettled`.** Previously, `enrichOpportunitiesTags` batched 12 concurrent requests in a `for` loop with `await`, creating N/12 serial rounds of network waterfall (e.g., ~13 rounds for 150 opps). Now all per-opportunity tag requests fire concurrently — the browser manages its 6-per-domain connection pool naturally, and the function returns once all responses settle. Eliminates the serial blocking gap between batches and reduces wall-clock time for tag resolution by ~10x (from 13+ round-trips to 1 effective round-trip).
+- No change to `state.allTags` loading (tag definitions are still fetched in one batch via `loadAllTags()`).
+
+### UX: CRM loading indicator
+- **Bottom progress bar** now shows "Loading CRM data…" during `refreshAll` and stays visible until ALL CRM tile data (groups, feed, tasks) finishes loading in the background. The dashboard renders immediately; the indicator tracks completion via a promise callback, not by blocking.
+- Calendar tiles (3rd‑party Proton Calendar) fire independently and don't affect the indicator.
+- **Refresh button spins** while CRM data is loading (CSS animation on the SVG icon), stops when background CRM loads complete.
+- `loadExpandedDashboardTiles` separates CRM-origin tiles from calendar tiles; only CRM promises are tracked for the indicator. The function always returns a promise for completion observation without blocking.
+- `isCrmOnlyTileId` helper distinguishes CRM-origin tiles (groups, feed, tasks) from non-CRM tiles (calendar).
+- `hideCRMSyncStatus` respects `_crmRefreshing` flag: mutation status messages can briefly override the text, but `hideCRMSyncStatus` restores "Loading CRM data…" when a global refresh is in progress.
+
+### Mail inbox fixes and enhancements
+- Restored pagination: added `&page=` param back to conversations API (server supports it).
+- Added "Mark all loaded as read" toolbar button for bulk marking.
+- Restored account selector pulldown: unhidden, functional change listener, filters by `&accountId=`.
+- Restored unread badge on mail header button: removed `style="display:none"` and early return guard.
+- Link debug: added `console.warn` for primary link failure + `console.warn` for fallback failure so root cause is visible in DevTools.
+- Updated link toast to "Linked as note (primary link failed)" when falling back.
+- Cache-Control: all static files now served with `no-cache, must-revalidate` (not just favicons).
+- Updated button title from "CRM Mail Inbox (viewer only)" to "CRM Mail Inbox".
+- Added `console.debug` of conversation object keys on load to diagnose missing read flag fields.
+
+### Mail quick view UX polish
+- Made close button larger (removed `btn-small`, added explicit padding/font-size).
+- Moved limitations note from footer to right sidebar as a bullet list under "Quick View Limitations".
+- Attachments now pre-render "Open in Mail" link immediately when expanding an email (no download attempt cascade).
+- Added today counter `N (Today)` in toolbar showing how many of the loaded conversations are from today.
+- Search now passes `&search=` param to conversation API so it actually filters server-side.
+- Query param `search` added to `loadMailMessagesForModal`.
+- Attachment filenames are plain text (no click handler) to avoid noisy 404/403 console errors; only "Open in Mail" link is actionable.
+
+### Bug fixes
+- Feed notifications: filtered out raw JSON/mail-metadata dumps (`{from "...", ...}`) that appeared as broken text in the feed.
+- Quick edit modal: sticky save/cancel buttons at bottom of card; note editor max-height reduced to 6rem with resize disabled, preventing buttons from being pushed off-screen on smaller screens.
+- Deal preview: hid "Actual close" field per request.
+
+### User fields in deal edit
+- Added "Show User Fields" toggle button to deal edit modal that reveals editable custom user fields (reuses create-opp field rendering).
+- Fields are pre-populated with the deal's current saved values; text, textarea, select, checkbox, and date types supported.
+- Changes are submitted via `updateOpportunityCustomFieldsViaPut` on save.
+- User fields container has `max-height: 30vh` with internal scroll so it doesn't push save/cancel buttons off-screen.
+
+### Dashboard performance: CRM tile isolation
+- CRM-dependent tile loads (groups, feed, tasks, calendars) are now fired as background promises — they no longer block `refreshAll()` or the initial dashboard render.
+- `loadExpandedDashboardTiles` no longer `await`s CRM tile data; tiles update asynchronously when their data arrives.
+- `refreshGroup` defers DOM rendering via `setTimeout` so deal edits and other mutations don't freeze the UI during group board re-render.
+- Status text updates immediately instead of waiting for all CRM tiles to finish.
+- Local-only features (notes, calendars from cache, profile, layout) are fully isolated from CRM server latency.
+
+### Other
+- Created `docs/DEPLOY.md` with correct production path `/opt/vanguard/onlyoffice-crm-kanban`.
+- Updated reference in `UPDATE_AND_DEPLOY.txt` to point to `docs/DEPLOY.md`.
+
 ## [1.7.0] — 2026-06-11
 
 ### FEAT-002: Custom user fields on opportunity create (ISSUE-001 — FIXED)

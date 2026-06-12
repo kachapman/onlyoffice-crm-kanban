@@ -159,7 +159,7 @@ The CRM container must be on the same network as estimate-nginx.
    docker network connect estimate-enhancer_estimate-network vanguard-crm-dashboard
    docker exec estimate-nginx wget -qO- http://vanguard-crm-dashboard:8765/api/config
 
-   Permanent fix: add external network to docker-compose.yml (see DEPLOY.md).
+   Permanent fix: add external network to docker-compose.yml (see docs/DEPLOY.md).
 
 
 --------------------------------------------------------------------------------

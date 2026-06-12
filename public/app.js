@@ -11,9 +11,9 @@ const LAYOUT_STORAGE_KEY = "oo_board_layout_v2";
 const HIDDEN_FEED_STORAGE_KEY = "oo_board_hidden_feed_v1";
 const FEED_KEYWORD_STORAGE_KEY = "oo_board_feed_keyword_v1";
 const GROUP_TEMPLATES_STORAGE_KEY = "oo_board_group_templates_v1";
-const FEED_DAYS = 90;
+const FEED_DAYS = 30;
 const FEED_CACHE_TTL_MS = 5 * 60 * 1000;
-const FEED_MAX_EVENTS = 200;
+const FEED_MAX_EVENTS = 150;
 const FEED_HISTORY_PAGE_SIZE = 100;
 const FEED_MAIL_SEARCH = "CRM. New event added to";
 const FEED_MAIL_SEARCHES = [FEED_MAIL_SEARCH, "CRM New event added to"];
@@ -25,6 +25,9 @@ const HIDDEN_FEED_RETENTION_DAYS = 30;
 const HIDDEN_FEED_RETENTION_MS = HIDDEN_FEED_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 const PANEL_TILE_AUTO_REFRESH_MS = 60 * 60 * 1000;
 const DASHBOARD_IDLE_STOP_MS = 3 * 60 * 60 * 1000;
+const OPP_TAG_CACHE_TTL_MS = 5 * 60 * 1000;
+const OPP_CUSTOM_FIELD_CACHE_TTL_MS = 5 * 60 * 1000;
+const FILTER_RESULT_CACHE_TTL_MS = 30 * 1000;
 /** Set true when create-opportunity custom user field save is fixed (see ISSUES.md). */
 const CREATE_OPP_USER_FIELDS_ENABLED = true;
 
@@ -42,6 +45,38 @@ const PRESENCE_HEARTBEAT_MS = 60000; // when tab visible
 const PRESENCE_IDLE_2H_MS = 2 * 60 * 60 * 1000;
 const PRESENCE_AUTO_LOGOUT_3H_MS = 3 * 60 * 60 * 1000;
 const PRESENCE_CUSTOM_MAX = 120; // modest char limit for custom status (emojis allowed)
+
+/** Create a TTL-backed cache map for filter results. Keyed by string, entries expire after `ttl` ms. */
+function createTtlCache(ttl) {
+  const data = new Map();
+  return {
+    clear() { data.clear(); },
+    get(key) {
+      const entry = data.get(key);
+      if (entry && Date.now() - entry.ts < ttl) return entry.val;
+      data.delete(key);
+      return undefined;
+    },
+    set(key, val) { data.set(String(key), { val, ts: Date.now() }); },
+    delete(key) { data.delete(String(key)); },
+  };
+}
+
+/** Create a TTL-backed cache map. Each entry expires `ttl` ms after insertion. */
+function createOppCache(ttl) {
+  const data = new Map();
+  return {
+    clear() { data.clear(); },
+    get(id) {
+      const entry = data.get(String(id));
+      if (entry && Date.now() - entry.ts < ttl) return entry.val;
+      data.delete(String(id));
+      return undefined;
+    },
+    set(id, val) { data.set(String(id), { val, ts: Date.now() }); },
+    invalidate(id) { data.delete(String(id)); },
+  };
+}
 
 let userProfileReady = false;
 let profileSaveTimer = null;
@@ -457,6 +492,14 @@ function isCrmDataTileId(tileId) {
   return false;
 }
 
+/** CRM‑origin tiles only (excludes 3rd‑party calendar). Used by the loading indicator. */
+function isCrmOnlyTileId(tileId) {
+  if (!tileId) return false;
+  if (tileId === "tile-feed" || tileId === "tile-tasks") return true;
+  if (tileId.startsWith("group-")) return true;
+  return false;
+}
+
 function shouldFetchTileCrmData(tileId) {
   return isCrmDataTileId(tileId) && !tileBodyCollapsed(tileId);
 }
@@ -536,20 +579,45 @@ async function loadTileCrmData(tileId, { quiet = false, force = false } = {}) {
 }
 
 async function loadExpandedDashboardTiles({ quiet = false } = {}) {
-  const jobs = dashboardTileIdsForLoad()
-    .filter((tileId) => shouldFetchTileCrmData(tileId))
-    .map((tileId) => loadTileCrmData(tileId, { quiet }));
-  if (!jobs.length) {
-    for (const tileId of dashboardTileIdsForLoad()) {
-      if (isCrmDataTileId(tileId) && tileBodyCollapsed(tileId)) {
-        showTileCollapsedHint(tileId, "Minimized — expand to load");
-      }
+  const allIds = dashboardTileIdsForLoad();
+  const crmJobs = [];
+  const collapsibleIds = [];
+  for (const tileId of allIds) {
+    if (shouldFetchTileCrmData(tileId)) {
+      crmJobs.push(tileId);
+    } else if (isCrmDataTileId(tileId) && tileBodyCollapsed(tileId)) {
+      collapsibleIds.push(tileId);
     }
-    updateDashboardStatusText();
-    return;
   }
-  await Promise.all(jobs);
+
+  for (const tileId of collapsibleIds) {
+    showTileCollapsedHint(tileId, "Minimized — expand to load");
+  }
+
+  // Fire tile loads in background — never block the dashboard for these.
+  // Each handles its own errors via try/catch and shows error state inline.
+  // CRM‑origin tiles (groups, feed, tasks) are tracked for the loading indicator;
+  // calendar (3rd‑party) loads independently and doesn't block the indicator.
+  // Both fire as background promises; refreshAll can observe CRM completion
+  // via the returned promise without blocking.
+  const crmPromises = [];
+  const calendarPromises = [];
+  for (const tileId of crmJobs) {
+    (isCrmOnlyTileId(tileId) ? crmPromises : calendarPromises).push(
+      loadTileCrmData(tileId, { quiet }).catch(() => {})
+    );
+  }
+  if (calendarPromises.length) {
+    Promise.allSettled(calendarPromises).catch(() => {});
+  }
+  // Always return a promise so callers can observe completion without blocking.
+  if (crmPromises.length) {
+    return Promise.allSettled(crmPromises).then(() => {
+      updateDashboardStatusText();
+    }).catch(() => {});
+  }
   updateDashboardStatusText();
+  return Promise.resolve();
 }
 
 const PINNED_TILE_IDS = ["tile-feed", "tile-tasks"];
@@ -1724,6 +1792,9 @@ async function processMutationQueue() {
         // and the full refreshAll (profile + renders) was causing perceived UI hang shortly after send.
         // Defer to avoid blocking clicks / main thread during/after pushes.
         if (item.opType === 'stage' || item.opType === 'due' || item.opType === 'tag') {
+          if (item.opType === 'tag' && item.oppId != null) {
+            state.oppTagCache?.invalidate(item.oppId);
+          }
           setTimeout(() => { refreshAll().catch(() => {}); }, 50);
         }
       } catch (err) {
@@ -1901,11 +1972,17 @@ function showCRMSyncStatus(text, isWarning = false) {
 }
 
 function hideCRMSyncStatus() {
+  if (_crmRefreshing) {
+    // Don't hide the bar during a global CRM refresh — restore the refresh message
+    // so the user still sees progress. Individual mutations (deal edit, notes, etc.)
+    // may have temporarily overridden it with their own status text.
+    showCRMSyncStatus("Loading CRM data…");
+    return;
+  }
   if (_syncStatusEl) {
     _syncStatusEl.style.display = "none";
     _syncStatusEl.classList.remove("warning");
   }
-  // Also ensure marquee (if any stale but we are hiding status) is re-evaluated by caller via update
 }
 
 function clearConnectingTimer() {
@@ -4934,30 +5011,65 @@ function oppMatchesSelectedTags(opp, selectedTags, catalog = buildTagCatalog()) 
 
 async function enrichOpportunitiesTags(items) {
   const needTags = items.filter((o) => getOppTagsFromRecord(o).length === 0);
-  const concurrency = 12;
-  for (let i = 0; i < needTags.length; i += concurrency) {
-    const chunk = needTags.slice(i, i + concurrency);
-    await Promise.all(
-      chunk.map(async (opp) => {
-        const id = opp.id ?? opp.ID;
-        if (id == null) return;
-        try {
-          const tags = unwrapEntityTags(await api(`/api/2.0/crm/opportunity/tag/${id}`));
-          if (tags.length) opp.tags = tags;
-        } catch {
-          /* no tags on this deal */
-        }
-      })
-    );
+  if (!needTags.length) return items;
+  // Check cache first
+  const uncached = [];
+  for (const opp of needTags) {
+    const id = opp.id ?? opp.ID;
+    if (id != null) {
+      const cached = state.oppTagCache?.get(id);
+      if (cached) {
+        opp.tags = cached;
+        continue;
+      }
+    }
+    uncached.push(opp);
   }
+  if (!uncached.length) return items;
+  await Promise.allSettled(
+    uncached.map(async (opp) => {
+      const id = opp.id ?? opp.ID;
+      if (id == null) return;
+      try {
+        const tags = unwrapEntityTags(await api(`/api/2.0/crm/opportunity/tag/${id}`));
+        if (tags.length) {
+          opp.tags = tags;
+          state.oppTagCache?.set(id, tags);
+        }
+      } catch {
+        /* no tags on this deal */
+      }
+    })
+  );
   return items;
 }
 
 async function fetchOpportunitiesForGroup(group) {
   const baseQs = buildFilterQuery(group);
   const catalog = buildTagCatalog();
+  // Filter result cache (30s TTL): keyed only by server-side params (groupId + baseQs).
+  // TagTitles and showOnlyRed are client-side filters that don't affect the API response.
+  const cacheKey = `${group.id}::${baseQs}`;
+  const cached = state.filterResultCache?.get(cacheKey);
+  if (cached) {
+    // Cache hit: raw opps from cache, re-apply tag enrichment (from tag cache) + client-side filters
+    let items = cached;
+    if (group.tagTitles?.length || group.groupBy === "tag") {
+      items = await enrichOpportunitiesTags(items);
+    }
+    if (group.tagTitles?.length) {
+      items = items.filter((o) => oppMatchesSelectedTags(o, group.tagTitles, catalog));
+    }
+    if (group.showOnlyRedOpportunities) {
+      items = items.filter(isRedOpportunity);
+    }
+    return items;
+  }
   const data = await api(`/api/2.0/crm/opportunity/filter?${baseQs}`);
-  let items = unwrap(data);
+  const rawItems = unwrap(data);
+  // Cache the raw API response before any client-side filtering (so tag/filter changes don't miss the cache)
+  state.filterResultCache?.set(cacheKey, rawItems);
+  let items = rawItems;
 
   if (group.tagTitles?.length || group.groupBy === "tag") {
     items = await enrichOpportunitiesTags(items);
@@ -7168,6 +7280,9 @@ function toPlainDisplayText(raw, maxLen = 220) {
   s = s.replace(/Products\/CRM\/\S+/gi, " ");
   s = s.replace(/\s+/g, " ").trim();
 
+  // Skip raw JSON/mail metadata dumps like {from "Name" ,to "email", ...}
+  if (/^\{\s*(from|to|subject|cc|bcc|chain_id)\s+"/i.test(s)) return "";
+
   const added = s.match(/has added a new event[^:]*:\s*(.+)$/i);
   if (added) {
     const inner = added[1].replace(/\s+/g, " ").trim();
@@ -7946,6 +8061,11 @@ async function openDealEditModal(opp, group) {
   populateDealEditNoteCategorySelect();
 
   const tags = await loadDealEditTags(opp);
+  await loadOpportunityCustomFieldDefs();
+  let dealEditCustomFieldValues = [];
+  try {
+    dealEditCustomFieldValues = await fetchOpportunityCustomFieldValues(id);
+  } catch { /* non-fatal */ }
   state.dealEdit = {
     oppId: Number(id),
     group,
@@ -7955,7 +8075,28 @@ async function openDealEditModal(opp, group) {
     initialStageId: String(resolveOppStageId(opp)),
     initialDue: dueDateToInputValue(opportunityDueDateRaw(opp)),
     selectedAttachments: [],
+    customFieldValues: dealEditCustomFieldValues,
   };
+
+  // Toggle user fields button
+  const toggleBtn = $("#deal-edit-toggle-fields");
+  const ufWrap = $("#deal-edit-user-fields");
+  if (toggleBtn && ufWrap) {
+    if (toggleBtn._listener) toggleBtn.removeEventListener("click", toggleBtn._listener);
+    ufWrap.classList.add("hidden");
+    delete ufWrap.dataset.rendered;
+    toggleBtn.textContent = "Show User Fields";
+    const handler = () => {
+      const hidden = ufWrap.classList.toggle("hidden");
+      toggleBtn.textContent = hidden ? "Show User Fields" : "Hide User Fields";
+      if (!hidden && !ufWrap.dataset.rendered) {
+        renderDealEditUserFields(opp, state.dealEdit.customFieldValues);
+        ufWrap.dataset.rendered = "1";
+      }
+    };
+    toggleBtn._listener = handler;
+    toggleBtn.addEventListener("click", handler);
+  }
 
   const titleEl = $("#deal-edit-modal-title");
   if (titleEl) titleEl.textContent = state.dealEdit.oppTitle;
@@ -8289,6 +8430,7 @@ async function submitDealEditForm(e) {
     if (dealTagsChanged(ctx.initialTags, ctx.tags)) {
       try {
         await applyDealTagChanges(oppId, ctx.initialTags, ctx.tags);
+        state.oppTagCache?.invalidate(oppId);
       } catch (err) {
         throw dealEditStepError("Tags", err);
       }
@@ -8327,6 +8469,17 @@ async function submitDealEditForm(e) {
         });
       } catch (err) {
         throw dealEditStepError("Event note", err);
+      }
+    }
+
+    // Custom user fields
+    const dealEditFieldValues = collectDealEditCustomFieldValues();
+    if (dealEditFieldValues.length) {
+      try {
+        await updateOpportunityCustomFieldsViaPut(oppId, dealEditFieldValues);
+        state.oppCustomFieldCache?.invalidate(oppId);
+      } catch (err) {
+        showToast("User fields not saved: " + (err.message || err).slice(0, 100), true);
       }
     }
 
@@ -8591,6 +8744,7 @@ async function submitQuickNoteForm(e) {
     if (dealTagsChanged(ctx.initialTags, ctx.tags)) {
       try {
         await applyDealTagChanges(oppId, ctx.initialTags, ctx.tags);
+        state.oppTagCache?.invalidate(oppId);
       } catch (err) {
         throw dealEditStepError("Tags", err);
       }
@@ -9255,6 +9409,98 @@ async function verifyOpportunityCustomFieldsSaved(oppId, fieldValues) {
   if (missing.length) {
     throw new Error(`CRM did not store: ${missing.join(", ")}`);
   }
+}
+
+function renderDealEditUserFields(opp, customFieldValues) {
+  const wrap = $("#deal-edit-user-fields");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+
+  const defs = state.customFieldDefs;
+  if (!defs.length) {
+    wrap.innerHTML = '<p class="field-hint">No user fields configured.</p>';
+    return;
+  }
+
+  const valuesByFieldId = new Map();
+  for (const item of customFieldValues) {
+    const fieldId = item.id ?? item.ID ?? item.fieldId ?? item.FieldId;
+    if (fieldId != null) valuesByFieldId.set(String(fieldId), item);
+  }
+
+  for (const def of defs) {
+    const fieldId = customFieldDefinitionId(def);
+    if (fieldId == null) continue;
+    if (isCreateOppExcludedUserField(def)) continue;
+
+    const label = customFieldLabel(def) || `Field ${fieldId}`;
+    const kind = createOppCustomFieldInputKind(def);
+    if (kind === "heading") continue;
+
+    const savedItem = valuesByFieldId.get(String(fieldId));
+    const savedRaw = savedItem ? readSavedCustomFieldValue(savedItem) : "";
+    let currentValue = savedRaw;
+
+    const field = document.createElement("div");
+    field.className = "field";
+    field.dataset.customFieldId = String(fieldId);
+
+    const input = buildCreateOppCustomFieldInput(def, fieldId);
+    const inputId = `deal-edit-cf-${fieldId}`;
+    input.id = inputId;
+    if (input.dataset) input.dataset.customFieldId = String(fieldId);
+
+    if (kind === "checkbox") {
+      if (currentValue === "true" || currentValue === "1" || currentValue.toLowerCase() === "yes") {
+        input.checked = true;
+      }
+      const lbl = document.createElement("label");
+      lbl.className = "checkbox-filter";
+      lbl.appendChild(input);
+      lbl.appendChild(document.createTextNode(` ${label}`));
+      field.appendChild(lbl);
+    } else {
+      input.value = currentValue;
+      const lbl = document.createElement("label");
+      lbl.setAttribute("for", inputId);
+      lbl.textContent = label;
+      field.appendChild(lbl);
+      field.appendChild(input);
+    }
+    wrap.appendChild(field);
+  }
+}
+
+function collectDealEditCustomFieldValues() {
+  const wrap = $("#deal-edit-user-fields");
+  if (!wrap || wrap.classList.contains("hidden")) return [];
+
+  const values = [];
+  if (!state.customFieldDefs) return values;
+
+  for (const def of state.customFieldDefs) {
+    const fieldId = customFieldDefinitionId(def);
+    if (fieldId == null) continue;
+    if (isCreateOppExcludedUserField(def)) continue;
+    if (createOppCustomFieldInputKind(def) === "heading") continue;
+
+    const fieldEl = wrap.querySelector(`[data-custom-field-id="${String(fieldId)}"]`);
+    if (!fieldEl) continue;
+
+    const input = fieldEl.querySelector("input, select, textarea");
+    if (!input) continue;
+
+    let raw;
+    if (input.type === "checkbox") {
+      if (!input.checked) continue;
+      raw = "true";
+    } else {
+      raw = String(input.value ?? "").trim();
+      if (!raw) continue;
+    }
+    values.push({ fieldId, value: formatCustomFieldValueForApi(def, raw), def });
+  }
+  return values;
 }
 
 async function applyCreateOpportunityCustomFields(oppId, fieldValues) {
@@ -10544,6 +10790,39 @@ function renderDMLog(logEl, msgs) {
     logEl.appendChild(div);
   });
   logEl.scrollTop = logEl.scrollHeight;
+  linkifyUrls(logEl);
+}
+
+/** Turn bare http/https URLs in text nodes into clickable links. */
+function linkifyUrls(container) {
+  if (!container) return;
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
+  const textNodes = [];
+  let node;
+  while ((node = walker.nextNode())) textNodes.push(node);
+  for (const tnode of textNodes) {
+    const txt = tnode.textContent || "";
+    if (!txt || !/https?:\/\//i.test(txt)) continue;
+    const parent = tnode.parentNode;
+    if (parent && (parent.tagName === 'A' || parent.closest('a'))) continue;
+    const frag = document.createDocumentFragment();
+    let remaining = txt;
+    const re = /(https?:\/\/[^\s<]+[^\s<,.!?:;)\]}>])/gi;
+    let lastIdx = 0;
+    let m;
+    while ((m = re.exec(remaining)) !== null) {
+      if (m.index > lastIdx) frag.appendChild(document.createTextNode(remaining.slice(lastIdx, m.index)));
+      const a = document.createElement('a');
+      a.href = m[1];
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = m[1];
+      frag.appendChild(a);
+      lastIdx = re.lastIndex;
+    }
+    if (lastIdx < remaining.length) frag.appendChild(document.createTextNode(remaining.slice(lastIdx)));
+    if (frag.childNodes.length) parent.replaceChild(frag, tnode);
+  }
 }
 
 function setPresenceReplyTo(msg) {
@@ -11181,9 +11460,7 @@ function ensurePresenceOnLogin() {
   }, 30000);
   // Idle / auto-logout safety net
   setupPresenceIdleAndAutoLogout();
-  // Mail unread badge on header icon
-  loadMailDashboardReadIds();
-  updateMailUnreadBadge().catch(() => {});
+  // Load mail dashboard read IDs from localStorage for session survival
 }
 
 // Expose a tiny helper so other code (e.g. after a successful login) can kick the feature
@@ -11194,6 +11471,7 @@ let mailState = {
   accounts: [],
   currentAccountId: '',
   messages: [],
+  pages: {},           // cache: { 1: {items, nextCursor, prevCursor}, ... }
   page: 1,
   pageSize: 50,
   search: '',
@@ -11208,7 +11486,6 @@ let mailState = {
 // in the native CRM mail UI later.
 // Stored in localStorage (portal-keyed) so it survives reloads; also lives in-memory for the session.
 let mailDashboardReadIds = new Set();
-let lastMailUnreadBadge = 0;
 
 function loadMailDashboardReadIds() {
   try {
@@ -11230,19 +11507,6 @@ function saveMailDashboardReadIds() {
   } catch (e) { /* non-fatal */ }
 }
 
-function decrementMailUnreadBadge(count) {
-  if (!count || count <= 0) return;
-  lastMailUnreadBadge = Math.max(0, lastMailUnreadBadge - count);
-  const badge = $("#mail-unread-badge");
-  if (!badge) return;
-  if (lastMailUnreadBadge <= 0) {
-    badge.textContent = '';
-    badge.classList.add('hidden');
-  } else {
-    badge.textContent = lastMailUnreadBadge > 99 ? '99+' : String(lastMailUnreadBadge);
-    badge.classList.remove('hidden');
-  }
-}
 
 // Tolerant read/unread detector for mail message objects (list summaries or full detail).
 // OnlyOffice/Community Server mail responses use wildly inconsistent casing and structures
@@ -11289,93 +11553,23 @@ function bindMailInboxButton() {
   });
 }
 
-async function updateMailUnreadBadge() {
-  const badge = $("#mail-unread-badge");
-  // Viewer-only: if badge is hidden (current mode), skip entirely to avoid any /mail/accounts or
-  // /folders status calls to the server. The indicator is disabled for now.
-  if (!badge || badge.style.display === 'none' || getComputedStyle(badge).display === 'none') return;
-  loadMailDashboardReadIds(); // ensure overrides are ready even for early badge kicks
-  if (!badge) return;
-  try {
-    let total = 0;
-    const adata = await api("/api/2.0/mail/accounts");
-    const accts = unwrap(adata) || [];
-    for (const a of accts) {
-      const aid = a.id || a.accountId || a.email;
-      if (!aid) continue;
-      // Some account records carry aggregate unread directly
-      total += (a.unreadCount || a.unread || a.unreadMessages || a.newMessages || 0) | 0;
-      try {
-        const fdata = await api(`/api/2.0/mail/folders?accountId=${encodeURIComponent(aid)}`);
-        const flds = unwrap(fdata) || [];
-        flds.forEach(f => {
-          const n = String(f.name || f.Name || '').toLowerCase().trim();
-          if (n === 'inbox' || n === 'inbox (current)' || n.includes('inbox')) {
-            total += (f.unreadCount || f.unread || f.unreadMessages || f.unseenCount || f.unseen || f.newMessages || 0) | 0;
-          }
-        });
-      } catch (e) {}
-    }
-    // Fallback / aggregate: try folders without an accountId (some mail setups return global or default inboxes here)
-    if (total === 0) {
-      try {
-        const fdata = await api(`/api/2.0/mail/folders`);
-        const flds = unwrap(fdata) || [];
-        flds.forEach(f => {
-          const n = String(f.name || f.Name || '').toLowerCase().trim();
-          if (n === 'inbox' || n === 'inbox (current)' || n.includes('inbox')) {
-            total += (f.unreadCount || f.unread || f.unreadMessages || f.unseenCount || f.unseen || f.newMessages || 0) | 0;
-          }
-        });
-      } catch (e) {}
-    }
-    lastMailUnreadBadge = total;
-    // Debug sample to help diagnose why the header indicator may stay at 0/hidden.
-    // If folders or unread* fields have different names or the responses are HTML error pages,
-    // total will be 0 and we fall into the preserve-or-hide path.
-    console.debug('[mail-inbox] unread badge total from mail folders:', total, 'lastKnown:', lastMailUnreadBadge);
-    if (total > 0) {
-      badge.textContent = total > 99 ? "99+" : String(total);
-      badge.classList.remove("hidden");
-    } else {
-      badge.textContent = "";
-      badge.classList.add("hidden");
-    }
-  } catch {
-    // Preserve last known count on transient errors (e.g. HTML error pages from mail endpoints)
-    // so the indicator doesn't disappear after it has successfully loaded once.
-    if (lastMailUnreadBadge > 0) {
-      badge.textContent = lastMailUnreadBadge > 99 ? "99+" : String(lastMailUnreadBadge);
-      badge.classList.remove("hidden");
-    } else {
-      badge.classList.add("hidden");
-    }
-  }
+function resetQuickLinkSidebar() {
+  const ds = $("#mail-deal-search"); if (ds) ds.value = "";
+  const dr = $("#mail-deal-results"); if (dr) dr.innerHTML = "";
+  if (dr) dr.dataset.selectedDealId = "";
+  const lb = $("#mail-link-btn"); if (lb) lb.disabled = true;
+  const si = $("#mail-selected-info"); if (si) si.textContent = "";
 }
 
 async function openMailInboxModal() {
   const modal = $("#mail-inbox-modal");
   if (!modal) return;
   modal.classList.remove("hidden");
-  // Load any persisted dashboard read overrides (from localStorage) so marks survive close/reopen.
-  // Do NOT clear mailDashboardReadIds here — that is the persistence mechanism.
   loadMailDashboardReadIds();
-  // Apply persisted hide for the viewer warning sidebar (per-browser preference)
-  const warningSidebar = modal.querySelector(".mail-right-sidebar.mail-viewer-warning");
-  if (warningSidebar && localStorage.getItem("hideMailViewerWarning") === "1") {
-    warningSidebar.classList.add("hidden");
-  }
-  // reset only volatile per-open state (keep dashboard read overrides)
-  mailState = { accounts: [], currentAccountId: '', messages: [], page: 1, pageSize: 50, search: '', selected: new Set() };
+  resetQuickLinkSidebar();
+  mailState = { accounts: [], messages: [], pageSize: 50, search: '', selected: new Set() };
   $("#mail-search-input").value = "";
-  // Guarded clears for old deal/link elements (sidebar is now viewer warning; elements removed)
-  const _ds = $("#mail-deal-search"); if (_ds) _ds.value = "";
-  const _dr = $("#mail-deal-results"); if (_dr) _dr.innerHTML = "";
-  const _lb = $("#mail-link-btn"); if (_lb) _lb.disabled = true;
-  const _si = $("#mail-selected-info"); if (_si) _si.textContent = "";
-  // loadMailAccountsForModal() skipped: pulldown selector disabled/hidden; always use unified inbox (no account/folder targeting)
-  await loadMailMessagesForModal(1, "");
-  // No badge/status updates (indicator hidden; viewer-only, no server status polling from mail paths)
+  await loadMailMessagesForModal();
   attachMailModalListeners();
 }
 
@@ -11389,21 +11583,6 @@ function attachMailModalListeners() {
     el.addEventListener("click", () => modal.classList.add("hidden"));
   });
 
-  // dismiss for the viewer warning sidebar (hides it and remembers in localStorage)
-  const warnDismiss = modal.querySelector(".mail-warning-dismiss");
-  if (warnDismiss && !warnDismiss.dataset.bound) {
-    warnDismiss.dataset.bound = "1";
-    warnDismiss.addEventListener("click", () => {
-      const ws = modal.querySelector(".mail-right-sidebar.mail-viewer-warning");
-      if (ws) {
-        ws.classList.add("hidden");
-        try { localStorage.setItem("hideMailViewerWarning", "1"); } catch {}
-      }
-    });
-  }
-
-  // account/inbox selector change listener removed (pulldown disabled + hidden; default unified inbox, see loadMailMessagesForModal)
-
   // search
   const searchIn = $("#mail-search-input");
   let searchT = null;
@@ -11411,7 +11590,7 @@ function attachMailModalListeners() {
     searchIn.addEventListener("input", () => {
       clearTimeout(searchT);
       searchT = setTimeout(() => {
-        loadMailMessagesForModal(1, searchIn.value || "");
+        loadMailMessagesForModal();
       }, 350);
     });
   }
@@ -11432,77 +11611,148 @@ function attachMailModalListeners() {
     });
   }
 
-  // mark read (viewer-only local visual; no server push at all per current instructions)
+  // clear selection
+  const clearSelBtn = $("#mail-clear-selection");
+  if (clearSelBtn) {
+    clearSelBtn.addEventListener("click", () => {
+      mailState.selected.clear();
+      renderMailList(mailState.messages);
+      updateMailSelectedInfo();
+    });
+  }
+
+  // mark read // uses PUT /api/2.0/mail/conversations/mark.json (conversation-level, matching native CRM)
   const markBtn = $("#mail-mark-read");
   if (markBtn) {
     markBtn.addEventListener("click", async () => {
       if (!mailState.selected.size) return;
-      const ids = Array.from(mailState.selected).map(Number);
+      const ids = Array.from(mailState.selected);
       const idsStr = ids.map(String);
       try {
-        // Local only for viewer: immediate darker styling + persistence in this session
+        const params = new URLSearchParams();
+        ids.forEach(id => params.append('ids[]', id));
+        params.append('status', 'read');
+        await api('/api/2.0/mail/conversations/mark.json', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: params.toString()
+        });
+        // Local visual update
         idsStr.forEach(sid => mailDashboardReadIds.add(sid));
         saveMailDashboardReadIds();
         mailState.messages.forEach(m => {
           const mid = String(m.id || m.ID);
           if (idsStr.includes(mid)) m.read = true;
         });
-        renderMailList(mailState.messages);
         mailState.selected.clear();
+        renderMailList(mailState.messages);
         updateMailSelectedInfo();
-
-        showToast("Marked as read (viewer)");
-        await loadMailMessagesForModal(mailState.page, $("#mail-search-input").value || "");
-        updateMailSelectedInfo();
+        showToast(`Marked ${ids.length} conversation(s) as read`);
       } catch (e) {
-        showToast("Failed to mark read (viewer): " + String(e.message || e).slice(0, 120), true);
+        // Fallback: local only
+        idsStr.forEach(sid => mailDashboardReadIds.add(sid));
+        saveMailDashboardReadIds();
+        mailState.messages.forEach(m => {
+          const mid = String(m.id || m.ID);
+          if (idsStr.includes(mid)) m.read = true;
+        });
+        mailState.selected.clear();
+        renderMailList(mailState.messages);
+        updateMailSelectedInfo();
+        showToast("Marked as read (local; server push failed: " + String(e.message || e).slice(0, 80) + ")", true);
       }
     });
   }
 
-  // mark unread (viewer-only local visual; no server push at all per current instructions)
+  // mark unread // uses PUT /api/2.0/mail/conversations/mark.json with status=unread
   const markUnreadBtn = $("#mail-mark-unread");
   if (markUnreadBtn) {
     markUnreadBtn.addEventListener("click", async () => {
       if (!mailState.selected.size) return;
-      const ids = Array.from(mailState.selected).map(Number);
+      const ids = Array.from(mailState.selected);
       const idsStr = ids.map(String);
       try {
+        const params = new URLSearchParams();
+        ids.forEach(id => params.append('ids[]', id));
+        params.append('status', 'unread');
+        await api('/api/2.0/mail/conversations/mark.json', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: params.toString()
+        });
         idsStr.forEach(sid => mailDashboardReadIds.delete(sid));
         saveMailDashboardReadIds();
         mailState.messages.forEach(m => {
           const mid = String(m.id || m.ID);
           if (idsStr.includes(mid)) m.read = false;
         });
-        renderMailList(mailState.messages);
         mailState.selected.clear();
+        renderMailList(mailState.messages);
         updateMailSelectedInfo();
-
-        showToast("Marked as unread (viewer)");
-        await loadMailMessagesForModal(mailState.page, $("#mail-search-input").value || "");
-        updateMailSelectedInfo();
+        showToast(`Marked ${ids.length} conversation(s) as unread`);
       } catch (e) {
-        showToast("Failed to mark unread (viewer): " + String(e.message || e).slice(0, 120), true);
+        // Fallback: local only
+        idsStr.forEach(sid => mailDashboardReadIds.delete(sid));
+        saveMailDashboardReadIds();
+        mailState.messages.forEach(m => {
+          const mid = String(m.id || m.ID);
+          if (idsStr.includes(mid)) m.read = false;
+        });
+        mailState.selected.clear();
+        renderMailList(mailState.messages);
+        updateMailSelectedInfo();
+        showToast("Marked as unread (local; server push failed: " + String(e.message || e).slice(0, 80) + ")", true);
       }
     });
   }
 
-  // delete
+  // delete // uses PUT /api/2.0/mail/conversations/move.json with folder=4 (trash)
   const delBtn = $("#mail-delete");
   if (delBtn) {
     delBtn.addEventListener("click", async () => {
       if (!mailState.selected.size) return;
-      if (!confirm(`Delete ${mailState.selected.size} message(s)?`)) return;
+      if (!confirm(`Delete ${mailState.selected.size} conversation(s)?`)) return;
       try {
         const ids = Array.from(mailState.selected);
-        // (Delete button is hidden in viewer-only mode; no server calls performed.
-        // If re-enabled later, real DELETEs would go here.)
-        // for (const id of ids) { try { await api... } catch {} }
-        showToast("Delete is disabled (viewer only)");
+        const params = new URLSearchParams();
+        ids.forEach(id => params.append('ids[]', id));
+        params.append('folder', '4');
+        await api('/api/2.0/mail/conversations/move.json', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: params.toString()
+        });
+        showToast(`Deleted ${ids.length} conversation(s)`);
         mailState.selected.clear();
-        await loadMailMessagesForModal(mailState.page, $("#mail-search-input").value || "");
+        await loadMailMessagesForModal();
       } catch (e) {
-        showToast("Delete failed for some: " + (e.message || e), true);
+        showToast("Delete failed: " + (e.message || e), true);
+      }
+    });
+  }
+
+  // mark all loaded as read
+  const markAllBtn = $("#mail-mark-all-read");
+  if (markAllBtn) {
+    markAllBtn.addEventListener("click", async () => {
+      const ids = mailState.messages.map(m => String(m.id || m.ID)).filter(Boolean);
+      if (!ids.length) return;
+      try {
+        const params = new URLSearchParams();
+        ids.forEach(id => params.append('ids[]', id));
+        params.append('status', 'read');
+        await api('/api/2.0/mail/conversations/mark.json', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: params.toString()
+        });
+        ids.forEach(sid => mailDashboardReadIds.add(sid));
+        saveMailDashboardReadIds();
+        mailState.messages.forEach(m => { m.read = true; });
+        renderMailList(mailState.messages);
+        showToast(`Marked all ${ids.length} loaded as read`);
+      } catch (e) {
+        showToast("Mark all read failed: " + String(e.message || e).slice(0, 60), true);
       }
     });
   }
@@ -11510,18 +11760,8 @@ function attachMailModalListeners() {
   // refresh
   const refBtn = $("#mail-refresh");
   if (refBtn) {
-    refBtn.addEventListener("click", () => loadMailMessagesForModal(mailState.page, $("#mail-search-input").value || ""));
+    refBtn.addEventListener("click", () => loadMailMessagesForModal());
   }
-
-  // pagination
-  const prev = $("#mail-prev-page");
-  if (prev) prev.addEventListener("click", () => {
-    if (mailState.page > 1) loadMailMessagesForModal(mailState.page - 1, $("#mail-search-input").value || "");
-  });
-  const next = $("#mail-next-page");
-  if (next) next.addEventListener("click", () => {
-    loadMailMessagesForModal(mailState.page + 1, $("#mail-search-input").value || "");
-  });
 
   // quick link search
   const dealSearch = $("#mail-deal-search");
@@ -11543,47 +11783,29 @@ function attachMailModalListeners() {
       let ok = 0;
       for (const mid of ids) {
         try {
-          await api('/api/2.0/mail/crm/link', {
-            method: "POST",
-            body: JSON.stringify({
-              messageIds: [Number(mid)],
-              crmEntityId: Number(dealId),
-              crmEntityType: 2  // opportunity (mirrors mail module link to CRM, scoped to deals only)
-            })
+          // Native CRM endpoint: PUT /api/2.0/mail/conversations/crm/link.json
+          // form-urlencoded: id_message=<convId>&crm_contact_ids[0][Id]=<dealId>&crm_contact_ids[0][Type]=3
+          const params = new URLSearchParams();
+          params.append('id_message', String(Number(mid)));
+          params.append('crm_contact_ids[0][Id]', String(Number(dealId)));
+          params.append('crm_contact_ids[0][Type]', '3');
+          await api('/api/2.0/mail/conversations/crm/link.json', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+            body: params.toString()
           });
           ok++;
         } catch (e) {
-          // fallback: create history event on the deal so it appears as linked email in preview (like existing linked mails)
-          // this mirrors how linked emails show in deal history/preview
-          try {
-            if (!state.historyCategories || !state.historyCategories.length) {
-              await loadHistoryCategories().catch(() => {});
-            }
-            const cat = (state.historyCategories || []).find(c => /note|email|mail/i.test(String(c.title || c.Title || ""))) || (state.historyCategories || [])[0];
-            const categoryId = cat ? Number(cat.id ?? cat.ID ?? 1) : 1;
-            const m = mailState.messages.find(mm => String(mm.id || mm.ID) === mid) || {};
-            const subj = m.subject || "email";
-            const fromAddr = (typeof m.from === "string" ? m.from : (m.from && (m.from.email || m.from.name)) || m.fromEmail || "") || "";
-            await api("/api/2.0/crm/history", {
-              method: "POST",
-              body: JSON.stringify({
-                entityType: "opportunity",
-                entityId: dealId,
-                contactId: 0,
-                content: `The email "${subj}" has been received`,
-                categoryId: categoryId,
-                additionalData: JSON.stringify({
-                  mailMessageId: Number(mid),
-                  from: fromAddr,
-                  subject: subj
-                })
-              })
-            });
+          const msg = (e.message || e || "").toString().toLowerCase();
+          if (msg.includes("duplicate entry") || msg.includes("duplicate") || msg.includes("already linked")) {
+            console.warn('[mail-inbox] link: conv', mid, 'already linked to deal', dealId);
             ok++;
-          } catch {}
+          } else {
+            console.warn('[mail-inbox] link endpoint failed for conv', mid, e);
+          }
         }
       }
-      showToast(ok ? `Linked ${ok} email(s) to deal` : "Link failed");
+      showToast(ok ? `Linked ${ok} email(s) to deal` : "Link failed (see console)");
       // also mark linked as read
       const idsToMark = Array.from(mailState.selected);
       for (const mid of idsToMark) {
@@ -11594,8 +11816,17 @@ function attachMailModalListeners() {
       $("#mail-deal-results").dataset.selectedDealId = "";
       linkBtn.disabled = true;
       $("#mail-selected-info").textContent = "";
-      await loadMailMessagesForModal(mailState.page, $("#mail-search-input").value || "");
-      // (old link handler - inert now; no badge/status server calls)
+      await loadMailMessagesForModal();
+    });
+  }
+
+  // sidebar toggle
+  const toggleBtn = $("#mail-sidebar-toggle");
+  const sideBar = $(".mail-right-sidebar", modal);
+  if (toggleBtn && sideBar) {
+    toggleBtn.addEventListener("click", () => {
+      const collapsed = sideBar.classList.toggle("mail-sidebar-collapsed");
+      toggleBtn.textContent = collapsed ? "◀" : "▶";
     });
   }
 }
@@ -11624,60 +11855,42 @@ async function loadMailAccountsForModal() {
   }
 }
 
-async function loadMailMessagesForModal(page = 1, search = "") {
+async function loadMailMessagesForModal() {
   const list = $("#mail-list");
   if (!list) return;
   list.innerHTML = '<div class="mail-loading">Loading emails…</div>';
-  mailState.page = page;
-  mailState.search = search || "";
-  // NOTE: account/folder targeting removed entirely. Pulldown disabled (hidden), always load unified inbox (no &accountId / &folderId). See ISSUES.md ISSUE-002.
-  // const acctSel = $("#mail-account-select");
-  // let accountId = ... (disabled)
 
-  let q = `page=${page}&page_size=${mailState.pageSize}&sortorder=descending`;
-  if (search) q += `&search=${encodeURIComponent(search)}`;
+  const searchVal = ($("#mail-search-input")?.value || "").trim();
+  let q = `folder=1&page_size=50&sort=date&sortorder=descending`;
+  if (searchVal) q += `&search=${encodeURIComponent(searchVal)}`;
 
-  let rows = [];
   try {
-    rows = unwrap(await api(`/api/2.0/mail/messages?${q}`)) || [];
+    const data = unwrap(await api(`/api/2.0/mail/conversations.json?${q}`));
+    const items = Array.isArray(data) ? data : (data?.conversations ?? data?.items ?? []);
+    if (items.length) {
+      console.debug('[mail-inbox] conversation keys:', Object.keys(items[0]).join(', '));
+    }
+
+    // Apply read status
+    items.forEach(m => {
+      const mid = String(m.id || m.ID);
+      if (getMailMessageIsRead(m)) mailDashboardReadIds.add(mid);
+      if (mailDashboardReadIds.has(mid)) m.read = true;
+    });
+
+    mailState.messages = items;
+    renderMailList(items);
+    // Update today counter
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayCount = items.filter(m => {
+      const d = m.date || m.receivedDate || m.Date;
+      return d && new Date(d) >= todayStart;
+    }).length;
+    const tc = $("#mail-today-count");
+    if (tc) tc.textContent = `${todayCount} (Today)`;
   } catch (e) {
     list.innerHTML = `<div class="mail-empty">Could not load mail: ${escapeHtml(e.message || e)}</div>`;
-    return;
-  }
-
-  // Lightweight debug output (console.debug) so you can inspect the *actual* shape of items
-  // returned by the mail module list API. This directly answers "are we able to pull read/unread
-  // status from the mail module?" — look at these objects for read / isRead / seen / IsNew / flags etc.
-  console.debug('[mail-inbox] raw /mail/messages list sample (first 3):', rows.slice(0, 3));
-
-  // Apply server-provided read status (via tolerant getter) and promote those ids into the
-  // dashboard read Set so they survive re-fetches / close+reopen (the list summary often omits
-  // Apply any server-provided read flag (via tolerant getter, if the list summary includes it)
-  // and/or our local viewer marks (from toolbar or expand). Local marks power the darker
-  // row styling inside the viewer only (no server push).
-  rows.forEach(m => {
-    const mid = String(m.id || m.ID);
-    if (getMailMessageIsRead(m)) {
-      mailDashboardReadIds.add(mid);
-    }
-    if (mailDashboardReadIds.has(mid)) m.read = true;
-  });
-
-  mailState.messages = rows;
-  renderMailList(rows);
-
-  // (No badge/status refresh here — indicator hidden; viewer-only mode avoids extra server status calls)
-
-  // pagination
-  const prev = $("#mail-prev-page");
-  const next = $("#mail-next-page");
-  const info = $("#mail-page-info");
-  if (prev) prev.disabled = page <= 1;
-  if (next) next.disabled = rows.length < mailState.pageSize;
-  if (info) {
-    const start = (page - 1) * mailState.pageSize + 1;
-    const end = start + rows.length - 1;
-    info.textContent = `Page ${page} (${start}-${end})`;
   }
   updateMailSelectedInfo();
 }
@@ -11777,7 +11990,8 @@ function renderMailList(msgs) {
       updateMailSelectedInfo();
     });
 
-    // Expand logic: lazy fetch only on press, render like opp preview mail
+    // Note: attachments display handled inside renderMailEmbedPanel (expanded view)
+
     const detail = document.createElement("div");
     detail.className = "mail-detail hidden";
     item.appendChild(row);
@@ -11794,24 +12008,18 @@ function renderMailList(msgs) {
       try {
         const fullMail = await fetchMailMessage(id);
         detail.innerHTML = "";
-        // Reuse the embed panel renderer from deal preview (copies the functionality: headers, body, open link)
         const embed = document.createElement("div");
         embed.className = "mail-expanded-embed";
         detail.appendChild(embed);
         renderMailEmbedPanel(embed, fullMail, id, {
           openUrl: portalMailMessageUrl(id)
         });
-        // Learn server read status from the *full* mail detail (the list summary often lacks or hides
-        // the flag under different keys). Promote into our dashboard Set so the read state survives
-        // any later list re-render or modal close/reopen. (markMailMessageRead also adds for the auto-mark.)
         if (getMailMessageIsRead(fullMail)) {
           mailDashboardReadIds.add(id);
           saveMailDashboardReadIds();
         }
-        // auto "mark" locally in viewer for visual (darker row) + persistence in session
         markMailMessageRead(id).catch(() => {});
         row.classList.add('mail-row-read');
-        // no badge/status server call (indicator hidden for now)
       } catch (e) {
         detail.innerHTML = `<div class="mail-empty">Failed to load full email: ${escapeHtml(e.message || e)}</div>`;
       }
@@ -11829,11 +12037,12 @@ function updateMailSelectedInfo() {
   const markReadBtn = $("#mail-mark-read");
   const markUnreadBtn = $("#mail-mark-unread");
   const delBtn = $("#mail-delete");
+  const clearSelBtn = $("#mail-clear-selection");
   if (markReadBtn) markReadBtn.disabled = !hasSel;
   if (markUnreadBtn) markUnreadBtn.disabled = !hasSel;
   if (delBtn) delBtn.disabled = !hasSel;
+  if (clearSelBtn) clearSelBtn.disabled = !hasSel;
 
-  // Old link/info elements may be absent (sidebar is now viewer warning)
   const info = $("#mail-selected-info");
   const linkBtn = $("#mail-link-btn");
   if (!info) return;
@@ -11843,14 +12052,26 @@ function updateMailSelectedInfo() {
 
 async function markMailMessageRead(messageId) {
   const id = String(messageId);
-  // Pure local for viewer: marks "read" only inside this dashboard session for visual styling
-  // (darker rows). No attempt to push to server (viewer-only mode per current instructions).
   mailDashboardReadIds.add(id);
   saveMailDashboardReadIds();
   if (mailState && mailState.messages) {
     mailState.messages.forEach(m => {
       if (String(m.id || m.ID) === id) m.read = true;
     });
+  }
+  // Push to server (best-effort, non-blocking)
+  try {
+    const params = new URLSearchParams();
+    params.append('ids[]', id);
+    params.append('status', 'read');
+    await api('/api/2.0/mail/conversations/mark.json', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString(),
+      showCrashBanner: false
+    });
+  } catch {
+    // non-fatal
   }
 }
 
@@ -13110,6 +13331,34 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
     bodyWrap.innerHTML = '<p class="opp-preview-empty">No readable message body. Open in Mail for the full message.</p>';
   }
 
+  panel.appendChild(head);
+  panel.appendChild(bodyWrap);
+
+  // Attachments from the mail object (rendered at bottom, after body)
+  const atts = Array.isArray(mail.attachments) ? mail.attachments : [];
+  if (atts.length) {
+    const attBar = document.createElement("div");
+    attBar.className = "mail-attachments-panel";
+    const mailUrl = portalMailMessageUrl(messageId) || `${state.portalUrl}/addons/mail/Default.aspx#conversation/${messageId}`;
+    attBar.innerHTML = "<strong>Attachments:</strong> ";
+    atts.forEach((a) => {
+      const fileName = a.fileName || a.title || a.storedFileName || "file";
+      const wrap = document.createElement("span");
+      wrap.className = "mail-attachment-link";
+      wrap.textContent = fileName + " (";
+      const openLink = document.createElement("a");
+      openLink.href = mailUrl;
+      openLink.target = "_blank";
+      openLink.rel = "noopener noreferrer";
+      openLink.textContent = "Open in Mail";
+      wrap.appendChild(openLink);
+      wrap.appendChild(document.createTextNode(")"));
+      attBar.appendChild(document.createTextNode(" "));
+      attBar.appendChild(wrap);
+    });
+    panel.appendChild(attBar);
+  }
+
   const foot = document.createElement("div");
   foot.className = "opp-preview-mail-foot";
   const open = document.createElement("a");
@@ -13118,9 +13367,6 @@ function renderMailEmbedPanel(panel, mail, messageId, { crmPayload = null, openU
   open.rel = "noopener noreferrer";
   open.textContent = "Open in Mail";
   foot.appendChild(open);
-
-  panel.appendChild(head);
-  panel.appendChild(bodyWrap);
   panel.appendChild(foot);
 }
 
@@ -13375,7 +13621,7 @@ function buildOpportunityPreviewStandardFields(opp, tags) {
     opp.successProbability ?? opp.SuccessProbability ?? opp.stage?.successProbability ?? ""
   );
   push("Expected close", formatPreviewDueDate(opportunityDueDateRaw(opp)));
-  push("Actual close", formatPreviewDateTime(opp.actualCloseDate ?? opp.ActualCloseDate));
+  // Actual close hidden per user request (showActualClose field removed from preview)
   push("Created", formatPreviewDateTime(opp.createOn ?? opp.created ?? opp.Created));
   push("Tags", tags.length ? tags.join(", ") : "");
   if (opp.isPrivate ?? opp.IsPrivate) push("Private", "Yes");
@@ -14733,6 +14979,7 @@ async function fetchOpportunityCustomFields(opp) {
       const fields = unwrap(await api(path));
       if (fields.length) {
         opp.customFields = fields;
+        state.oppCustomFieldCache?.set(id, fields);
         indexOpportunity(opp);
         return true;
       }
@@ -14788,6 +15035,13 @@ function enqueueOpportunityCustomFieldEnrich(opp, group) {
   if (!id || !group) return;
   if (opportunityHasCustomFieldLists(opp)) return;
   if (oppCustomFieldEnrich.pending.has(id) || oppCustomFieldEnrich.inFlight.has(id)) return;
+  // Check cache before queueing
+  const cached = state.oppCustomFieldCache?.get(id);
+  if (cached) {
+    opp.customFields = cached;
+    updateOpportunityCardDom(opp, group);
+    return;
+  }
   oppCustomFieldEnrich.pending.add(id);
   oppCustomFieldEnrich.queue.push({ opp, group });
   drainOppCustomFieldEnrichQueue();
@@ -14841,70 +15095,104 @@ async function refreshGroup(group, { force = false } = {}) {
     showTileCollapsedHint(tileId, "Minimized — expand to load deals");
     return;
   }
+  // Show tile-level loading indicator after 200ms (avoids flash on fast/cached refreshes)
+  let loadingTimer;
+  const boardEl = (() => {
+    const e = groupDomEl(group);
+    return e ? $(".board", e) : null;
+  })();
+  if (boardEl) {
+    loadingTimer = setTimeout(() => {
+      boardEl.innerHTML = '<div class="tile-loading"><span class="tile-loading-spinner"></span> Refreshing deals\u2026</div>';
+    }, 200);
+  }
   try {
     let items = await fetchOpportunitiesForGroup(group);
+    clearTimeout(loadingTimer);
     if (group.dealStatus !== "all" && !group.stageType) {
       items = applyClientDealStatus(items, group.dealStatus);
     }
     group.opportunities = items;
     for (const o of items) indexOpportunity(o);
 
-    const el = groupDomEl(group);
-    if (el) {
-      updateGroupFilterSummary(group);
-      renderGroupBoard(group, $(".board", el));
-      $(".board-group-count", el).textContent = `${items.length} deals`;
-    }
+    // Defer DOM render so it doesn't block caller or freeze the UI
+    setTimeout(() => {
+      const el = groupDomEl(group);
+      if (el) {
+        updateGroupFilterSummary(group);
+        renderGroupBoard(group, $(".board", el));
+        $(".board-group-count", el).textContent = `${items.length} deals`;
+      }
+    }, 0);
   } catch (err) {
+    clearTimeout(loadingTimer);
     const el = groupDomEl(group);
     if (el) {
       $(".board", el).innerHTML = `<p class="board-error">${escapeHtml(err.message)}</p>`;
     }
-    throw err;
   }
 }
 
+let _crmRefreshing = false;
+
 async function refreshAll() {
-  noteDashboardActivity();
-  $("#status-text").textContent = "Loading…";
-  state.opportunityById = new Map();
-  state.tileLayout = loadLayoutFromStorage();
-  // Use allSettled so tiles can still render even if some CRM loads fail (e.g. during crash).
-  // CRM-dependent loads will have empty state; banner will be shown by api/presence catches.
-  const settled = await Promise.allSettled([
-    loadCurrentUser(),
-    loadPortalUsers(),
-    loadUserProfileFromServer(),
-    loadStages(),
-    loadAllTags(),
-    loadOpportunityCustomFieldDefs(),
-  ]);
-  let hadNonTransientError = false;
-  for (const r of settled) {
-    if (r.status === "rejected") {
-      if (!isTransientError(r.reason)) {
-        hadNonTransientError = true;
-        try { showToast(r.reason && r.reason.message ? r.reason.message : "Load error", true); } catch {}
-      } else {
-        showCrmCrashBanner();
+  _crmRefreshing = true;
+  const refreshBtn = $("#refresh-btn");
+  if (refreshBtn) refreshBtn.classList.add("refresh-btn-loading");
+  try {
+    noteDashboardActivity();
+    $("#status-text").textContent = "Refreshing…";
+    showCRMSyncStatus("Loading CRM data…");
+    state.opportunityById = new Map();
+    state.oppTagCache = state.oppTagCache || createOppCache(OPP_TAG_CACHE_TTL_MS);
+    state.oppTagCache.clear();
+    state.oppCustomFieldCache = state.oppCustomFieldCache || createOppCache(OPP_CUSTOM_FIELD_CACHE_TTL_MS);
+    state.oppCustomFieldCache.clear();
+    state.filterResultCache = state.filterResultCache || createTtlCache(FILTER_RESULT_CACHE_TTL_MS);
+    state.filterResultCache.clear();
+    state.tileLayout = loadLayoutFromStorage();
+    // Use allSettled so tiles can still render even if some CRM loads fail (e.g. during crash).
+    // CRM-dependent loads will have empty state; banner will be shown by api/presence catches.
+    const settled = await Promise.allSettled([
+      loadCurrentUser(),
+      loadPortalUsers(),
+      loadUserProfileFromServer(),
+      loadStages(),
+      loadAllTags(),
+      loadOpportunityCustomFieldDefs(),
+    ]);
+    let hadNonTransientError = false;
+    for (const r of settled) {
+      if (r.status === "rejected") {
+        if (!isTransientError(r.reason)) {
+          hadNonTransientError = true;
+          try { showToast(r.reason && r.reason.message ? r.reason.message : "Load error", true); } catch {}
+        } else {
+          showCrmCrashBanner();
+        }
       }
     }
-  }
-  syncFeedFilterPlaceholder();
-  renderBoardGroups();
-  refreshDashboardTileLayouts();
-  populateTasksUserFilter();
-  await loadExpandedDashboardTiles({ quiet: true }).catch((err) => {
-    if (isTransientError(err)) {
-      showCrmCrashBanner();
-    } else {
-      try { showToast(err.message, true); } catch {}
+    syncFeedFilterPlaceholder();
+    renderBoardGroups();
+    refreshDashboardTileLayouts();
+    populateTasksUserFilter();
+    // Fire CRM tile loads as background — the loading indicator stays visible
+    // until they complete, but the dashboard renders immediately.
+    const done = () => {
+      _crmRefreshing = false;
+      if (refreshBtn) refreshBtn.classList.remove("refresh-btn-loading");
+      hideCRMSyncStatus();
+    };
+    loadExpandedDashboardTiles({ quiet: true }).then(done, done);
+    if (hadNonTransientError) {
+      $("#status-text").textContent = "Error";
     }
-  });
-  if (hadNonTransientError) {
-    $("#status-text").textContent = "Error";
-  } else {
-    $("#status-text").textContent = "Ready";
+  } catch (e) {
+    // Ensure refreshing state is cleared on unexpected errors in the config-load phase
+    _crmRefreshing = false;
+    if (refreshBtn) refreshBtn.classList.remove("refresh-btn-loading");
+    hideCRMSyncStatus();
+    throw e;
   }
 }
 
@@ -14914,10 +15202,7 @@ function showApp() {
   $("#portal-label").textContent = state.portalUrl;
   noteDashboardActivity();
   startPanelTileAutoRefresh();
-  // Kick mail unread badge (in addition to ensurePresenceOnLogin which also does it post-login).
-  // Helps ensure the header indicator is present immediately on app show / session restore.
-  loadMailDashboardReadIds();
-  updateMailUnreadBadge().catch(() => {});
+  // Load mail dashboard read IDs from localStorage for session survival
   // No periodic global unreachable poller (removed per request to avoid spurious "unreachable" indicators during normal use).
   // The marquee / status only appears for actual queued/stale push failures.
 }
@@ -14947,7 +15232,7 @@ async function init() {
   }
   // Version next to sign out (loaded from server /VERSION so it auto-updates on release)
   const verEl = $("#app-version");
-  if (verEl) verEl.textContent = config.version ? "v" + config.version : "v1.7.0";
+  if (verEl) verEl.textContent = config.version ? "v" + config.version : "v1.7.5";
 
   state.groups = [];
   state.calendarTiles = [];
