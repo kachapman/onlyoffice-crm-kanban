@@ -3708,6 +3708,13 @@ body {
   border: 1px solid var(--border);
   color: var(--text);
   line-height: 1.4;
+  width: fit-content;
+}
+
+.field-value-tag.tag-amber {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: rgba(240, 180, 41, 0.12);
 }
 
 .opp-preview-fields {

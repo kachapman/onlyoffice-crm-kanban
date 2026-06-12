@@ -13879,6 +13879,16 @@ function renderPreviewFieldGrid(parent, rows) {
       tag.className = "field-value-tag";
       tag.textContent = value;
       dd.appendChild(tag);
+    } else if (label === "Tags") {
+      const tags = value.split(",").map((t) => t.trim()).filter(Boolean);
+      const AMBER_TAGS = new Set(["High Priority", "Needs Reconciliation", "Ready for carrier invoice", "Needs Rebuttal"]);
+      for (const tagText of tags) {
+        const tag = document.createElement("span");
+        tag.className = "field-value-tag" + (AMBER_TAGS.has(tagText) ? " tag-amber" : "");
+        tag.textContent = tagText;
+        dd.appendChild(tag);
+        dd.appendChild(document.createTextNode(" "));
+      }
     } else {
       dd.textContent = value;
     }
