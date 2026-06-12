@@ -2561,15 +2561,21 @@ body {
   max-width: 28rem;
 }
 
-.modal-actions-spacer {
-  height: 4rem;
+.modal-card-deal-edit.modal-card-form {
+  display: flex;
+  flex-direction: column;
+  overflow-y: hidden;
+}
+
+.modal-card-deal-edit .modal-form {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .modal-card-deal-edit .modal-actions {
-  position: sticky;
-  bottom: 0;
+  flex-shrink: 0;
   background: var(--surface);
-  z-index: 1;
   padding-top: 0.5rem;
   border-top: 1px solid var(--border);
   margin-top: 0.5rem;
