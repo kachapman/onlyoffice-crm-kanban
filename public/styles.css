@@ -1115,6 +1115,60 @@ body {
   order: 1;
 }
 
+.daily-focus {
+  max-width: 1820px;
+  margin: 0 auto 1.25rem;
+  padding: 0.5rem 1rem;
+  text-align: center;
+  font-family: var(--serif);
+  font-size: 1.1rem;
+  font-style: italic;
+  line-height: 1.5;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.daily-focus-quote {
+  color: var(--text);
+  font-style: italic;
+}
+
+.daily-focus-author {
+  font-size: 0.8rem;
+  font-style: normal;
+  color: var(--muted);
+  font-family: var(--font);
+  letter-spacing: normal;
+}
+
+.daily-focus-selector {
+  font-size: 0.65rem;
+  font-family: var(--font);
+  font-style: normal;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0.15rem 0.3rem;
+  margin-left: 0.5rem;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+
+.daily-focus-selector:hover {
+  background: var(--surface-2);
+}
+
+.daily-focus-selector:focus {
+  outline: none;
+  background: var(--surface-2);
+}
+
 .dashboard-panel-row .panel-slot-right {
   order: 2;
 }

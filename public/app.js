@@ -46,6 +46,65 @@ const PRESENCE_IDLE_2H_MS = 2 * 60 * 60 * 1000;
 const PRESENCE_AUTO_LOGOUT_3H_MS = 3 * 60 * 60 * 1000;
 const PRESENCE_CUSTOM_MAX = 120; // modest char limit for custom status (emojis allowed)
 
+/** Daily Focus quote — rotating daily inspiration banner */
+const DAILY_FOCUS_KEY = "oo_daily_focus_author";
+const DAILY_QUOTES = [
+  // Dune (12)
+  { text: "Fear is the mind-killer. Fear is the little-death that brings total obliteration.", author: "Frank Herbert" },
+  { text: "I must not fear. I will face my fear and let it pass through me.", author: "Frank Herbert" },
+  { text: "The mystery of life isn't a problem to solve, but a reality to experience.", author: "Frank Herbert" },
+  { text: "A process cannot be understood by stopping it. Understanding must move with the flow of the process.", author: "Frank Herbert" },
+  { text: "He who controls the spice controls the universe.", author: "Frank Herbert" },
+  { text: "Without change, something sleeps inside us, and seldom awakens.", author: "Frank Herbert" },
+  { text: "There is no escape—we pay for the violence of our ancestors.", author: "Frank Herbert" },
+  { text: "The mind can make a heaven of hell, or a hell of heaven.", author: "Frank Herbert" },
+  { text: "Survival is the ability to swim in strange water.", author: "Frank Herbert" },
+  { text: "What do you despise? By this you are truly known.", author: "Frank Herbert" },
+  { text: "Wealth is a tool of freedom, but the pursuit of wealth is the road to slavery.", author: "Frank Herbert" },
+  { text: "The beginning of knowledge is the discovery of something we do not understand.", author: "Frank Herbert" },
+  // Tolkien (13)
+  { text: "Not all those who wander are lost.", author: "J.R.R. Tolkien" },
+  { text: "Even the smallest person can change the course of the future.", author: "J.R.R. Tolkien" },
+  { text: "There is some good in this world, and it's worth fighting for.", author: "J.R.R. Tolkien" },
+  { text: "All we have to decide is what to do with the time that is given us.", author: "J.R.R. Tolkien" },
+  { text: "The road goes ever on and on, down from the door where it began.", author: "J.R.R. Tolkien" },
+  { text: "A single dream is more powerful than a thousand realities.", author: "J.R.R. Tolkien" },
+  { text: "Courage is found in unlikely places.", author: "J.R.R. Tolkien" },
+  { text: "If more of us valued food and cheer above hoarded gold, it would be a merrier world.", author: "J.R.R. Tolkien" },
+  { text: "I will not say: do not weep; for not all tears are an evil.", author: "J.R.R. Tolkien" },
+  { text: "It's a dangerous business going out your door. You step onto the road, and if you don't keep your feet, there is no knowing where you might be swept off to.", author: "J.R.R. Tolkien" },
+  { text: "Faithless is he that says farewell when the road darkens.", author: "J.R.R. Tolkien" },
+  { text: "The world is indeed full of peril, and in it there are many dark places; but still there is much that is fair.", author: "J.R.R. Tolkien" },
+  { text: "A man that flies from his fear may find that he has only taken a shortcut to meet it.", author: "J.R.R. Tolkien" },
+  // G.K. Chesterton (12)
+  { text: "Fairy tales are more than true: not because they tell us that dragons exist, but because they tell us dragons can be beaten.", author: "G.K. Chesterton" },
+  { text: "An adventure is only an inconvenience rightly considered.", author: "G.K. Chesterton" },
+  { text: "The true soldier fights not because he hates what is in front of him, but because he loves what is behind him.", author: "G.K. Chesterton" },
+  { text: "There are no uninteresting things, only uninterested people.", author: "G.K. Chesterton" },
+  { text: "The Christian ideal has not been tried and found wanting. It has been found difficult; and left untried.", author: "G.K. Chesterton" },
+  { text: "A good novel tells us the truth about its hero; but a bad novel tells us the truth about its author.", author: "G.K. Chesterton" },
+  { text: "The traveller sees what he sees. The tourist sees what he has come to see.", author: "G.K. Chesterton" },
+  { text: "When men choose not to believe in God, they do not thereafter believe in nothing; they then become capable of believing in anything.", author: "G.K. Chesterton" },
+  { text: "Art, like morality, consists of drawing the line somewhere.", author: "G.K. Chesterton" },
+  { text: "Courage is almost a contradiction in terms. It means a strong desire to live taking the form of a readiness to die.", author: "G.K. Chesterton" },
+  { text: "The most extraordinary thing in the world is an ordinary man and an ordinary woman and their ordinary children.", author: "G.K. Chesterton" },
+  { text: "Fallacies do not cease to be fallacies because they become fashions.", author: "G.K. Chesterton" },
+  // C.S. Lewis (13)
+  { text: "Courage, dear heart.", author: "C.S. Lewis" },
+  { text: "Hardships often prepare ordinary people for an extraordinary destiny.", author: "C.S. Lewis" },
+  { text: "You are never too old to set another goal or to dream a new dream.", author: "C.S. Lewis" },
+  { text: "Friendship is born at the moment when one person says to another: 'What! You too?'", author: "C.S. Lewis" },
+  { text: "We meet no ordinary people in our lives.", author: "C.S. Lewis" },
+  { text: "The future is something which everyone reaches at the rate of sixty minutes an hour, whatever he does, whoever he is.", author: "C.S. Lewis" },
+  { text: "No one ever told me that grief felt so like fear.", author: "C.S. Lewis" },
+  { text: "Humility is not thinking less of yourself, but thinking of yourself less.", author: "C.S. Lewis" },
+  { text: "I believe in Christianity as I believe that the sun has risen: not only because I see it, but because by it I see everything else.", author: "C.S. Lewis" },
+  { text: "To love is to be vulnerable.", author: "C.S. Lewis" },
+  { text: "There are far, far better things ahead than any we leave behind.", author: "C.S. Lewis" },
+  { text: "The pain now is part of the happiness then. That's the deal.", author: "C.S. Lewis" },
+  { text: "Children have one kind of silliness, as you know, and grown-ups have another kind.", author: "C.S. Lewis" },
+];
+
 /** Create a TTL-backed cache map for filter results. Keyed by string, entries expire after `ttl` ms. */
 function createTtlCache(ttl) {
   const data = new Map();
@@ -15347,6 +15406,7 @@ function showApp() {
   $("#login-screen").classList.add("hidden");
   $("#app").classList.remove("hidden");
   $("#portal-label").textContent = state.portalUrl;
+  renderDailyFocus();
   noteDashboardActivity();
   startPanelTileAutoRefresh();
   // Load mail dashboard read IDs from localStorage for session survival
@@ -15361,6 +15421,61 @@ function showLogin() {
   $("#app").classList.add("hidden");
   $("#login-screen").classList.remove("hidden");
   $("#portal-url").value = state.portalUrl || DEFAULT_PORTAL;
+}
+
+function loadDailyFocusAuthor() {
+  try {
+    return localStorage.getItem(DAILY_FOCUS_KEY) || "";
+  } catch { return ""; }
+}
+
+function saveDailyFocusAuthor(author) {
+  try { localStorage.setItem(DAILY_FOCUS_KEY, author || ""); } catch {}
+}
+
+function getDailyQuote() {
+  const author = loadDailyFocusAuthor();
+  const pool = author
+    ? DAILY_QUOTES.filter((q) => q.author === author)
+    : DAILY_QUOTES;
+  if (!pool.length) return DAILY_QUOTES[0];
+  const day = Math.floor(Date.now() / 86400000);
+  return pool[day % pool.length];
+}
+
+function renderDailyFocus() {
+  const container = $("#daily-focus");
+  if (!container) return;
+  const q = getDailyQuote();
+  container.innerHTML = "";
+  const quote = document.createElement("span");
+  quote.className = "daily-focus-quote";
+  quote.textContent = `"${q.text}"`;
+  const author = document.createElement("span");
+  author.className = "daily-focus-author";
+  author.textContent = `— ${q.author}`;
+  const selector = document.createElement("select");
+  selector.className = "daily-focus-selector";
+  selector.title = "Filter by author";
+  const authors = ["", "Frank Herbert", "J.R.R. Tolkien", "G.K. Chesterton", "C.S. Lewis"];
+  const labels = ["All", "Dune", "Tolkien", "Chesterton", "Lewis"];
+  const current = loadDailyFocusAuthor();
+  for (let i = 0; i < authors.length; i++) {
+    const opt = document.createElement("option");
+    opt.value = authors[i];
+    opt.textContent = labels[i];
+    if (authors[i] === current) opt.selected = true;
+    selector.appendChild(opt);
+  }
+  selector.addEventListener("change", () => {
+    saveDailyFocusAuthor(selector.value);
+    renderDailyFocus();
+  });
+  container.appendChild(quote);
+  container.appendChild(document.createTextNode(" "));
+  container.appendChild(author);
+  container.appendChild(document.createTextNode(" "));
+  container.appendChild(selector);
 }
 
 async function checkSession() {
