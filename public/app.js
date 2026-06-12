@@ -13735,7 +13735,7 @@ function buildOpportunityPreviewStandardFields(opp, tags) {
   push("Stage", resolveStageTitle(opp));
   push("Contact", getOpportunityContactLabel(opp));
   push("Responsible", formatResponsibleLabel(opp));
-  push("Members", formatMembersLabel(opp));
+
   push("Value", formatMoney(opp));
   push("Expected close", formatPreviewDueDate(opportunityDueDateRaw(opp)));
   // Actual close hidden per user request (showActualClose field removed from preview)

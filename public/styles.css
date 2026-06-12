@@ -2561,8 +2561,8 @@ body {
   max-width: 28rem;
 }
 
-.modal-card-deal-edit.modal-card-form {
-  scroll-padding-bottom: 4rem;
+.modal-actions-spacer {
+  height: 4rem;
 }
 
 .modal-card-deal-edit .modal-actions {
