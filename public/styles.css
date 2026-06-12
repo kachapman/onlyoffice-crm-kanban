@@ -3546,6 +3546,10 @@ body {
   flex-direction: column;
 }
 
+.modal-card-opp-preview .modal-actions {
+  padding-top: 0.75rem;
+}
+
 .opp-preview-head {
   display: flex;
   align-items: flex-start;
