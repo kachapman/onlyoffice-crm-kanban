@@ -15,6 +15,10 @@ venv/
 .vscode/
 *.swp
 .DS_Store
+.opencode/
+
+# Lighthouse / audit reports
+dashboard.vanguardadj.com-*.json
 
 # Build artifacts (OnlyOffice module)
 onlyoffice-module/**/bin/

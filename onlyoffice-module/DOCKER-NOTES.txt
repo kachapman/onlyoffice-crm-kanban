@@ -27,5 +27,5 @@ Docker-specific tips:
   https://office.vanguardadj.com/Products/OpportunityBoard/Default.aspx
 
 Until the module is deployed, use the local test portal:
-  cd /home/zionad/crm-kanban && ./start.sh
+  cd <project-root> && ./start.sh
   → http://127.0.0.1:8765 (sign in with same Vanguard credentials)

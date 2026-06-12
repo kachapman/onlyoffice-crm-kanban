@@ -8,7 +8,7 @@ This file is auto-loaded by Grok into the system prompt for every session in thi
 **Always:** 
 - Resume prior work via TUI welcome screen (recent sessions for this cwd), `/load`, `grok --resume <id>`, or `-c` (continue most recent). Chat history + prior state is preserved in `~/.grok/sessions/...`.
 - Still use tools (list_dir / read_file / grep / run_terminal_command for git etc.) to inspect *current* code state — files + docs are the source of truth.
-- For new sessions: `cd /home/zionad/crm-kanban` first (sets workspace/cwd for rules + session grouping).
+- For new sessions: `cd <project-root>` (sets workspace/cwd for rules + session grouping).
 
 ## Project Overview & Architecture (high level, reuse these)
 - Vanilla JS dashboard (no framework) + Python proxy for OnlyOffice CRM (Community Server / Workspace).
