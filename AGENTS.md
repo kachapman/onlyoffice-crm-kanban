@@ -1,7 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
-**Current version:** 1.7.6 (see CHANGELOG.md)  
-**Last session summary (for next resume):** v1.7.6 (committed): Feed: [Notified:] auto-inject experiment tried and reverted (user reported formatting issues — scrapped; manual @ken keyword filter remains). Mail events removed from feed entirely. FEED_MAX_EVENTS settled at 150. Preview modal fields now card-style with `<field-value-tag>` pills for Yes/No. Tasks rendered as cards (border+radius+shadow). Full-width layout toggle removed from tasks tile and CRM notifications tile. Success probability removed from preview. Server: gzip compression (app.js 553KB→134KB), Cache-Control `public max-age=86400`, proxy-side response cache (60s tag/stage/customfield, 15s filter/history). scroll-padding-bottom fix for deal edit modal.
+**Current version:** 1.8.0 (see CHANGELOG.md)  
+**Last session summary (for next resume):** v1.8.0 (committed): Stale Deals tile attempted, debugged, and scrapped. Two approaches tried: activity-based (feed only covers 30 days) and due-date-based (expectedCloseDate not reliably past-due). All stale deals code removed from app.js, index.html, styles.css. Docker: VERSION file now copied into container so production UI shows correct version (was showing "vdev" because Dockerfile missed it). CHANGELOG.md, AGENTS.md, README.md, ISSUES.md, FUTURE_FEATURES.md updated. Pushed to GitHub as v1.8.0.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 

@@ -1189,6 +1189,7 @@ function createLayoutButtons({ showDoubleHeight = true, showQuarterWidth = false
   if (showDoubleHeight) {
     tallBtn = document.createElement("button");
     tallBtn.type = "button";
+    tallBtn.className = "btn-tile-tall";
     setTileLayoutIconButton(tallBtn, TILE_ICON_HEIGHT_EXPAND, "Double tile height (two grid rows)");
     wrap.appendChild(tallBtn);
   }
@@ -6097,7 +6098,7 @@ const CARD_ICON_PREVIEW_SCREEN = `<svg class="card-action-icon" xmlns="http://ww
 
 function renderCard(opp, group, showStagePill) {
   const card = document.createElement("article");
-  card.className = "card";
+  card.className = "card" + (oppHasTag(opp, "High Priority") ? " card--high-priority" : "");
   card.dataset.opportunityId = opp.id;
 
   const actions = document.createElement("div");

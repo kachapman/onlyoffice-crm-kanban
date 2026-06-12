@@ -1,5 +1,39 @@
 # Known issues
 
+## ISSUE-004 — Stale Deals Tile: attempted, debugged, and scrapped
+
+**Status:** ❌ Abandoned 2026-06-12 — removed in v1.8.0
+**Area:** Dashboard tiles (`public/app.js`, `public/index.html`, `public/styles.css`)
+
+### What was tried
+
+We wanted a tile that shows "stale" opportunities (claims with no recent CRM activity or past their due date). Two approaches were attempted:
+
+**Attempt A (activity-based):**
+- Used `state.feedRawItems` (CRM notifications feed) to find the last activity event per opportunity.
+- Computed days since last event. If no event found in the feed window, showed "no activity in N days."
+- Added caching (`localStorage` daily key), midnight refresh, severity colors (amber/orange/red), and a threshold dropdown.
+- **Why it failed:** The feed only covers the last 30 days (max 150 events). Most opportunities had no activity found in that window. The fallback to `opp.created` (creation date) was misleading — a deal created 6 months ago might have had activity yesterday.
+- **Debug finding:** `state.feedRawItems` contains parsed objects from `parseRelationshipNotifyEvent`. Only the last 30 days of history are available. Opportunity objects from `fetchOpportunitiesForGroup` have `created` but no `updated` field.
+
+**Attempt B (due-date-based):**
+- Switched to `expectedCloseDate` on opportunity objects. If the due date was more than N days in the past, the deal was "stale."
+- Added threshold dropdown (1 week / 30 days / 90+ days). Bread emoji 🍞 for stale indicator.
+- **Why it failed:** During testing, no deals were listed in any time period. The `expectedCloseDate` on open deals was not reliably past-due. Closed deals have no `expectedCloseDate` at all.
+- **Debug finding:** `expectedCloseDate` is available on all open opportunities, but it is future-dated or not far enough in the past to trigger "overdue" in the test data.
+
+### Why it was scrapped
+- Both approaches produced empty results in real-world testing. The tile was non-functional.
+- User explicitly asked to scrap it and document the attempts.
+- All stale deals code removed from `app.js`, `index.html`, and `styles.css`.
+
+### Future possibilities
+- A proper CRM-side query for "last modified" timestamp (not available in current API).
+- A different staleness metric (e.g., "no note added in 30 days" using a dedicated endpoint).
+- Revisit if CRM API provides opportunity `updatedAt` or `lastActivityDate` in the future.
+
+---
+
 ## ISSUE-003 — Feed notification notify-user search: auto-inject [Notified:] attempted and scrapped
 
 **Status:** ❌ Abandoned 2026-06-12 — reverted in v1.7.6
@@ -38,6 +72,40 @@ We wanted to make "My notifications" (events where the current user was in notif
 - `buildOpportunityCreateBody()`: includes `customFieldList` with `{key, value}` format; no flat `customField_{id}` loop.
 - Per-field POST (`POST .../customfield/{fieldId}?fieldValue=...`) works correctly as fallback.
 - Tested end-to-end: dashboard → proxy → CRM. Created opps with text/select/date/checkbox fields; values persist in native CRM.
+
+## ISSUE-004 — Dashboard UI freeze / hang when returning from background tab
+
+**Status:** 🔍 Investigated 2026-06-12 — root cause identified, fix pending
+**Priority:** Medium
+**Area:** Performance / IntersectionObserver / browser tab throttling (`public/app.js`)
+
+### Summary
+
+User reports the dashboard becomes unresponsive or "hangs" when the tab has been in the background for a while and the user returns to it. The issue does not occur during active editing.
+
+### Root cause identified
+
+1. **Browser tab throttling**: When a tab is backgrounded, Chrome aggressively throttles `setInterval` and `setTimeout`. All deferred callbacks fire simultaneously when the tab returns to the foreground.
+
+2. **IntersectionObserver burst**: Each group tile has an `IntersectionObserver` on its opportunity cards. When the tab returns to the foreground, the browser recalculates all intersections, which can trigger up to `OPP_CUSTOM_FIELD_ENRICH_CONCURRENCY` (5) concurrent `fetchOpportunityCustomFields()` calls per group. With 5+ groups, this creates 25+ simultaneous API calls plus DOM rebuilds, causing a brief UI freeze.
+
+3. **Not the mutation queue**: The `processMutationQueue()` (5s interval) was suspected, but it does almost nothing when the queue is empty (which is the normal case). The hang occurs even with zero queued mutations.
+
+### Proposed fix
+
+1. Debounce the intersection observer callback across all groups (batch enrich queue instead of per-group).
+2. Skip `fetchOpportunityCustomFields()` entirely when `document.visibilityState === 'hidden'`.
+3. Add a `document.visibilitychange` listener to pause and resume the intersection observer.
+4. Optionally, add a small delay (e.g., 500ms) after tab visibility returns before re-enabling observers, to let the browser settle.
+
+### Files to change
+
+| File | Role |
+|------|------|
+| `public/app.js` | `observeOpportunityCardsInGroup`, `enqueueOpportunityCustomFieldEnrich`, `drainOppCustomFieldEnrichQueue` |
+| `public/styles.css` | (none expected) |
+
+---
 
 ## ISSUE-002 — CRM Mail: mark read/unread, account selector, unread badge, and linking
 

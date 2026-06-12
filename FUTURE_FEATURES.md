@@ -242,6 +242,22 @@ Decide if iframe-to-portal is viable (often blocked by SSO / `X-Frame-Options` /
 
 ---
 
+## FEAT-023 — Stale Deals Tile (SCRAPPED in v1.8.0)
+
+**Status:** ❌ Abandoned 2026-06-12. See ISSUE-004 in ISSUES.md for full post-mortem.
+
+### Why it was scrapped
+- **Attempt A (activity-based)**: Used `state.feedRawItems` (CRM notifications feed) to find last activity per opportunity. Failed because feed only covers last 30 days (max 150 events). Most opportunities had no activity found.
+- **Attempt B (due-date-based)**: Switched to `expectedCloseDate` on opportunity objects. Added threshold dropdown (1 week / 30 days / 90+ days). Still failed to list any deals in any time period during testing — `expectedCloseDate` was not reliably past-due on open deals.
+- **Result**: All code removed from `public/app.js`, `public/index.html`, `public/styles.css`.
+
+### Future possibilities
+- A proper CRM-side query for "last modified" timestamp (not available in current API).
+- A different staleness metric (e.g., "no note added in 30 days" using a dedicated endpoint).
+- Revisit if CRM API provides opportunity `updatedAt` or `lastActivityDate` in the future.
+
+---
+
 ## Other ideas (backlog)
 
 See **[Toaster_Features](./Toaster_Features)** for dashboard tile/widget ideas (pipeline metrics, stale deals, email, etc.).

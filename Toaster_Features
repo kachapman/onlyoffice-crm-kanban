@@ -34,8 +34,10 @@ TIER 1 — High value, fits current APIs (recommended next)
    - Click card → popup with fields + last 10 history events.
    - Salesforce: "Record preview"; HubSpot: side peek; Pipedrive: deal detail.
 
-2. Stale deals tile
-   - Opportunities with no activity in N days (use history/filter + last modified).
+2. Stale deals tile ❌ (FEAT-023 — scrapped in v1.8.0)
+   - Attempted activity-based (feed only 30 days) and due-date-based (expectedCloseDate not reliably past-due).
+   - Both approaches failed to list deals. See ISSUE-004 in ISSUES.md.
+   - May revisit if CRM API provides last-modified timestamp.
    - Pipedrive: "Stuck deals"; HubSpot: idle deals reports.
 
 3. Closing this week / month tile

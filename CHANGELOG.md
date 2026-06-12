@@ -2,6 +2,20 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [1.8.0] — 2026-06-12
+
+### Stale Deals Tile — Attempted, debugged, and scrapped
+- **Attempt A (activity-based)**: Tried to use `state.feedRawItems` (CRM notifications feed) to find last activity per opportunity. Failed because feed only covers last 30 days (max 150 events), so most opportunities had no activity found.
+- **Attempt B (due-date-based)**: Switched to `expectedCloseDate` on opportunity objects. Added threshold dropdown (1 week / 30 days / 90+ days). Still failed to list any deals in any time period during testing.
+- **Scrapped**: Tile removed from UI and code entirely. All stale deals functions, constants, CSS, and HTML removed from `public/app.js`, `public/index.html`, `public/styles.css`.
+- **Root cause**: `expectedCloseDate` on open deals was not reliably past-due in the test data. The concept of "stale" needs a different data source (e.g., actual last-modified timestamp on opportunities, which the CRM API does not provide directly).
+- **Future**: May revisit with a proper CRM-side query or different staleness metric. See ISSUES.md for full post-mortem.
+
+### Fix: Production version display showing "vdev"
+- **Root cause**: `Dockerfile` did not copy the `VERSION` file into the container. `server.py` fell back to `APP_VERSION = "dev"`, so the UI showed `vdev`.
+- **Fix**: Added `COPY VERSION ./` to `Dockerfile`.
+- **Verify**: On next Docker build, `GET /api/config` should return `"version": "1.8.0"`.
+
 ## [1.7.6] — 2026-06-12
 
 ### Feed: notify auto-inject experiment (tried and reverted)
