@@ -15107,9 +15107,18 @@ function taskSortMs(task) {
   return Number.isNaN(c) ? 0 : c;
 }
 
+function isTaskOverdue(task) {
+  const deadline = task.deadLine?.value || task.deadLine;
+  if (!deadline) return false;
+  const due = new Date(deadline);
+  const now = new Date();
+  const diffMs = now.getTime() - due.getTime();
+  return diffMs > 3 * 24 * 60 * 60 * 1000;
+}
+
 function createTaskRow(task) {
   const row = document.createElement("div");
-  row.className = "task-row";
+  row.className = "task-row" + (isTaskOverdue(task) ? " task-row--overdue" : "");
   const cb = document.createElement("input");
   cb.type = "checkbox";
   cb.addEventListener("change", async () => {

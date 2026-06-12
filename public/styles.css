@@ -1955,6 +1955,12 @@ body {
   opacity: 0.55;
 }
 
+.task-row--overdue {
+  background: rgba(240, 180, 41, 0.08);
+  border-color: var(--warn);
+  border-left: 3px solid var(--warn);
+}
+
 .task-row label {
   flex: 1;
   cursor: pointer;
