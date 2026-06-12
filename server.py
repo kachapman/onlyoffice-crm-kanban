@@ -323,7 +323,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     def end_headers(self) -> None:
         path = urlparse(self.path).path
         if not path.startswith("/api/"):
-            self.send_header("Cache-Control", "public, max-age=86400")
+            self.send_header("Cache-Control", "no-cache, must-revalidate")
         super().end_headers()
 
     def do_POST(self) -> None:
