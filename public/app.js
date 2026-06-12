@@ -13,7 +13,7 @@ const FEED_KEYWORD_STORAGE_KEY = "oo_board_feed_keyword_v1";
 const GROUP_TEMPLATES_STORAGE_KEY = "oo_board_group_templates_v1";
 const FEED_DAYS = 30;
 const FEED_CACHE_TTL_MS = 5 * 60 * 1000;
-const FEED_MAX_EVENTS = 150;
+const FEED_MAX_EVENTS = 100;
 const FEED_HISTORY_PAGE_SIZE = 100;
 const FEED_MAIL_SEARCH = "CRM. New event added to";
 const FEED_MAIL_SEARCHES = [FEED_MAIL_SEARCH, "CRM New event added to"];
@@ -50,6 +50,7 @@ const PRESENCE_CUSTOM_MAX = 120; // modest char limit for custom status (emojis 
 function createTtlCache(ttl) {
   const data = new Map();
   return {
+    _map: data,
     clear() { data.clear(); },
     get(key) {
       const entry = data.get(key);
@@ -66,6 +67,7 @@ function createTtlCache(ttl) {
 function createOppCache(ttl) {
   const data = new Map();
   return {
+    _map: data,
     clear() { data.clear(); },
     get(id) {
       const entry = data.get(String(id));
@@ -76,6 +78,88 @@ function createOppCache(ttl) {
     set(id, val) { data.set(String(id), { val, ts: Date.now() }); },
     invalidate(id) { data.delete(String(id)); },
   };
+}
+
+// ----- IndexedDB cache persistence -----
+const IDB_NAME = "crm-kanban-cache";
+const IDB_VERSION = 1;
+
+function openIndexedDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      for (const name of ["tagCache", "customFieldCache", "filterResultCache"]) {
+        if (!db.objectStoreNames.contains(name)) db.createObjectStore(name);
+      }
+    };
+    req.onsuccess = (e) => resolve(e.target.result);
+    req.onerror = (e) => reject(e.target.error);
+  });
+}
+
+function persistToIndexedDB(store, key, val) {
+  openIndexedDB().then((db) => {
+    const tx = db.transaction(store, "readwrite");
+    tx.objectStore(store).put({ val, ts: Date.now() }, key);
+  }).catch(() => {});
+}
+
+function deleteFromIndexedDB(store, key) {
+  openIndexedDB().then((db) => {
+    const tx = db.transaction(store, "readwrite");
+    tx.objectStore(store).delete(key);
+  }).catch(() => {});
+}
+
+function clearIndexedDBStore(store) {
+  openIndexedDB().then((db) => {
+    const tx = db.transaction(store, "readwrite");
+    tx.objectStore(store).clear();
+  }).catch(() => {});
+}
+
+function hydrateCacheFromIndexedDB(store, cache, ttl) {
+  return openIndexedDB().then((db) => {
+    const tx = db.transaction(store, "readonly");
+    const req = tx.objectStore(store).openCursor();
+    return new Promise((resolve) => {
+      req.onsuccess = (e) => {
+        const cursor = e.target.result;
+        if (cursor) {
+          const { val, ts } = cursor.value;
+          if (Date.now() - ts < ttl) cache._map.set(cursor.key, { val, ts });
+          cursor.continue();
+        } else {
+          resolve();
+        }
+      };
+    });
+  }).catch(() => {});
+}
+
+function enableCachePersistence(cache, store) {
+  const origSet = cache.set.bind(cache);
+  cache.set = (k, v) => { origSet(k, v); persistToIndexedDB(store, k, v); };
+  const origClear = cache.clear.bind(cache);
+  cache.clear = () => { origClear(); clearIndexedDBStore(store); };
+  if (cache.invalidate) {
+    const origInvalidate = cache.invalidate.bind(cache);
+    cache.invalidate = (k) => { origInvalidate(k); deleteFromIndexedDB(store, k); };
+  }
+}
+
+function hydrateAllCachesFromIndexedDB() {
+  if (typeof indexedDB === "undefined") return;
+  const t1 = hydrateCacheFromIndexedDB("tagCache", state.oppTagCache, OPP_TAG_CACHE_TTL_MS);
+  const t2 = hydrateCacheFromIndexedDB("customFieldCache", state.oppCustomFieldCache, OPP_CUSTOM_FIELD_CACHE_TTL_MS);
+  const t3 = hydrateCacheFromIndexedDB("filterResultCache", state.filterResultCache, FILTER_RESULT_CACHE_TTL_MS);
+  return Promise.all([t1, t2, t3]).then(() => {
+    // After hydration, attach persistence so future writes survive page reloads
+    enableCachePersistence(state.oppTagCache, "tagCache");
+    enableCachePersistence(state.oppCustomFieldCache, "customFieldCache");
+    enableCachePersistence(state.filterResultCache, "filterResultCache");
+  });
 }
 
 let userProfileReady = false;
@@ -5978,6 +6062,7 @@ function renderGroupBoard(group, container) {
   for (const col of columns) {
     const column = document.createElement("section");
     column.className = "column" + (col.items.length === 0 ? " column-empty" : "");
+    if (col.stageId != null) column.dataset.stageId = String(col.stageId);
 
     const header = document.createElement("div");
     header.className = "column-header";
@@ -6871,7 +6956,7 @@ function feedCanLoadMore() {
   const p = state.feedPagination;
   if (!p) return false;
   if ((state.feedNotificationsCache || []).length >= FEED_MAX_EVENTS) return false;
-  return !p.historyExhausted || !p.mailExhausted;
+  return !p.historyExhausted;
 }
 
 function updateFeedLoadMoreUi() {
@@ -7150,8 +7235,6 @@ async function loadMoreNotificationFeed() {
     let batch = [];
     if (!p.historyExhausted) {
       batch = await fetchFeedHistoryBatch(periodFrom, p);
-    } else if (!p.mailExhausted) {
-      batch = await fetchFeedMailBatch(periodFrom, p);
     }
     if (batch.length) {
       p.rawItems.push(...batch);
@@ -7550,7 +7633,14 @@ function renderFeedNotificationItem(it) {
   const meta = document.createElement("span");
   meta.className = "feed-meta";
   const when = it.date ? new Date(it.date).toLocaleString() : "";
-  meta.textContent = `${it.author}${when ? " · " + when : ""} — ${it.text}`;
+  const text = it.text || "";
+  const notifiedMatch = text.match(/\n?(\[Notified: .*?\])$/);
+  if (notifiedMatch) {
+    const mainText = text.slice(0, -notifiedMatch[0].length);
+    meta.innerHTML = `${escapeHtml(it.author)}${when ? escapeHtml(" · " + when) : ""} — ${escapeHtml(mainText)}<span class="feed-notified-suffix">${escapeHtml(notifiedMatch[1])}</span>`;
+  } else {
+    meta.textContent = `${it.author}${when ? " · " + when : ""} — ${text}`;
+  }
   body.appendChild(a);
   body.appendChild(meta);
 
@@ -7618,11 +7708,6 @@ async function loadNotificationFeed({ force = false } = {}) {
   try {
     const historyItems = await loadCrmRelationshipNotifyEventsBulk(periodFrom, pagination);
     pagination.rawItems.push(...historyItems);
-
-    const mailItems = await fetchFeedMailInitial(periodFrom, pagination.rawItems);
-    pagination.rawItems.push(...mailItems);
-    pagination.mailPage = 2;
-    if (mailItems.length < FEED_MAIL_PAGE_SIZE) pagination.mailExhausted = true;
 
     if (!tileBodyCollapsed("tile-feed")) commitFeedRawItems(pagination.rawItems);
   } catch {
@@ -8174,6 +8259,19 @@ async function uploadAttachmentForNote(file) {
 }
 
 async function createOpportunityHistoryEvent(oppId, { content, categoryId, notifyUserList, fileIds = [], attachmentNames = [], failedAttachmentNames = [] }) {
+  // Append notified user names to content so they're searchable in the feed
+  if (notifyUserList?.length) {
+    const names = notifyUserList
+      .map((uid) => {
+        const found = state.portalUsers.find((u) => String(u.id) === String(uid));
+        return found ? found.displayName : null;
+      })
+      .filter(Boolean);
+    if (names.length) {
+      const suffix = `\n[Notified: ${names.join(", ")}]`;
+      content = (content || "") + suffix;
+    }
+  }
   const html = noteContentToHtml(content);
   if (!html) throw new Error("Note text is required");
 
@@ -8427,7 +8525,8 @@ async function submitDealEditForm(e) {
       }
     }
 
-    if (dealTagsChanged(ctx.initialTags, ctx.tags)) {
+    const tagsChanged = dealTagsChanged(ctx.initialTags, ctx.tags);
+    if (tagsChanged) {
       try {
         await applyDealTagChanges(oppId, ctx.initialTags, ctx.tags);
         state.oppTagCache?.invalidate(oppId);
@@ -8495,10 +8594,27 @@ async function submitDealEditForm(e) {
       hideCRMSyncStatus();
     }, 1500);
     showToast("Deal updated");
-    // Defer to avoid blocking after edit push (consistent with quick-note + queue fixes for hangs)
-    setTimeout(() => {
-      if (group) refreshGroup(group).catch(() => {});
-      else refreshAll().catch(() => {});
+    // Targeted single-opp refresh instead of full group refetch (~200ms vs 5-10s).
+    // Fetches just the one changed opportunity and updates its card DOM in-place.
+    // For stage/tag changes that affect board layout, re-renders the board from in-memory data (no CRM filter call).
+    setTimeout(async () => {
+      if (!group) { refreshAll(); return; }
+      try {
+        const updatedOpp = await fetchOpportunityForUpdate(oppId);
+        if (!updatedOpp) { refreshGroup(group); return; }
+        indexOpportunity(updatedOpp);
+        const oppIdx = group.opportunities.findIndex(o => Number(o.id ?? o.ID) === oppId);
+        if (oppIdx >= 0) group.opportunities[oppIdx] = updatedOpp;
+        else group.opportunities.push(updatedOpp);
+        if (stageChanged || tagsChanged) {
+          const boardEl = groupDomEl(group)?.querySelector('.board');
+          if (boardEl) renderGroupBoard(group, boardEl);
+        } else {
+          updateOpportunityCardDom(updatedOpp, group);
+        }
+      } catch (e) {
+        refreshGroup(group);
+      }
     }, 40);
 
     // Preview persistence: if the preview modal is still open for this same opp (we launched edit without closing it),
@@ -8741,7 +8857,8 @@ async function submitQuickNoteForm(e) {
       }
     }
 
-    if (dealTagsChanged(ctx.initialTags, ctx.tags)) {
+    const tagsChanged = dealTagsChanged(ctx.initialTags, ctx.tags);
+    if (tagsChanged) {
       try {
         await applyDealTagChanges(oppId, ctx.initialTags, ctx.tags);
         state.oppTagCache?.invalidate(oppId);
@@ -8797,7 +8914,7 @@ async function submitQuickNoteForm(e) {
     // Defer all post-submit refreshes to keep the UI responsive (prevents the "hangs, nothing clickable, then full re-render"
     // after quick notes and similar pushes). Quick notes only affect history (in preview) or due/tags (board).
     // Never do heavy refreshAll synchronously right after the note create.
-    const needsBoardUpdate = dueChanged || dealTagsChanged(ctx.initialTags, ctx.tags);
+    const needsBoardUpdate = dueChanged || tagsChanged;
     const previewEl = $("#opp-preview-modal");
     const isSidePreviewCase = previewEl && !previewEl.classList.contains("hidden") && ctx && ctx.oppId != null &&
       (oppPreviewContext && Number(oppPreviewContext.oppId) === Number(ctx.oppId));
@@ -8810,10 +8927,25 @@ async function submitQuickNoteForm(e) {
       }, 20);
     }
     if (needsBoardUpdate && !isSidePreviewCase) {
-      // Only for non-preview quick notes that actually changed due/tags (affects kanban board)
-      setTimeout(() => {
-        if (group) refreshGroup(group).catch(() => {});
-        else refreshAll().catch(() => {});
+      // Targeted single-opp refresh instead of full group refetch.
+      setTimeout(async () => {
+        if (!group) { refreshAll(); return; }
+        try {
+          const updatedOpp = await fetchOpportunityForUpdate(oppId);
+          if (!updatedOpp) { refreshGroup(group); return; }
+          indexOpportunity(updatedOpp);
+          const oppIdx = group.opportunities.findIndex(o => Number(o.id ?? o.ID) === oppId);
+          if (oppIdx >= 0) group.opportunities[oppIdx] = updatedOpp;
+          else group.opportunities.push(updatedOpp);
+          if (tagsChanged) {
+            const boardEl = groupDomEl(group)?.querySelector('.board');
+            if (boardEl) renderGroupBoard(group, boardEl);
+          } else {
+            updateOpportunityCardDom(updatedOpp, group);
+          }
+        } catch (e) {
+          refreshGroup(group);
+        }
       }, 60);
     }
   } catch (err) {
@@ -15003,6 +15135,15 @@ function updateOpportunityCardDom(opp, group) {
   if (board && entry?.observer) entry.observer.observe(next);
 }
 
+function moveCardToStageColumn(oppId, stageId, boardEl) {
+  if (!boardEl) return;
+  const card = boardEl.querySelector(`.card[data-opportunity-id="${oppId}"]`);
+  if (!card) return;
+  const colBody = boardEl.querySelector(`.column[data-stage-id="${stageId}"] .column-body`);
+  if (!colBody) return;
+  colBody.appendChild(card);
+}
+
 async function drainOppCustomFieldEnrichQueue() {
   while (
     oppCustomFieldEnrich.queue.length > 0 &&
@@ -15150,6 +15291,10 @@ async function refreshAll() {
     state.oppCustomFieldCache.clear();
     state.filterResultCache = state.filterResultCache || createTtlCache(FILTER_RESULT_CACHE_TTL_MS);
     state.filterResultCache.clear();
+    // Hydrate persistent caches from IndexedDB (survives page reloads)
+    if (typeof indexedDB !== "undefined") {
+      await hydrateAllCachesFromIndexedDB();
+    }
     state.tileLayout = loadLayoutFromStorage();
     // Use allSettled so tiles can still render even if some CRM loads fail (e.g. during crash).
     // CRM-dependent loads will have empty state; banner will be shown by api/presence catches.
@@ -15321,14 +15466,13 @@ async function init() {
       // Start presence (bind button, heartbeats for self-online, snapshot for indicators/badge) immediately.
       // This makes the header icon show indicators right away, and button responsive without waiting for refreshAll.
       try { ensurePresenceOnLogin(); } catch {}
-      await refreshAll();
-      // Re-kick after refresh (harmless; bind/heartbeats are guarded, primes roster etc.)
-      try { ensurePresenceOnLogin(); } catch {}
-      // Explicit login: check/refresh the (rarely changing) task categories from CRM server into our local cache.
-      // This populates state + localStorage so that "New Task" works offline later.
-      loadTaskCategories({ force: true }).catch(() => {});
-      // Kick any queued mutations after the initial data load
-      processMutationQueue().catch(() => {});
+      // Defer refreshAll to let the browser paint the app shell first.
+      setTimeout(async () => {
+        await refreshAll();
+        try { ensurePresenceOnLogin(); } catch {}
+        loadTaskCategories({ force: true }).catch(() => {});
+        processMutationQueue().catch(() => {});
+      }, 0);
     } catch (err) {
       clearTimeout(timeoutId);
       let msg = err.message || "Login failed";
@@ -15346,19 +15490,19 @@ async function init() {
     }
   });
 
+  // Show the correct screen immediately (paints login or app shell before heavy work).
   if (await checkSession()) {
     showApp();
-    // Start presence immediately after showApp so header icon gets indicators (badge, self-online dot, waiting flash)
-    // and button is bound/responsive without waiting for the slow refreshAll.
+    // Start presence so header icon gets indicators right away.
     try { ensurePresenceOnLogin(); } catch {}
-    await refreshAll();
-    // Re-kick after refresh (harmless due to guards in bind/heartbeats/timers; ensures roster cache etc.)
-    try { ensurePresenceOnLogin(); } catch {}
-    // Rehydrate: restore task categories from local cache (no server hit unless later explicit login).
-    // This lets New Task modal work immediately even if CRM is currently unreachable.
-    loadTaskCategories({ force: false }).catch(() => {});
-    // Kick queue processor after first successful load on existing session
-    processMutationQueue().catch(() => {});
+    // Defer refreshAll + post-refresh setup to the next task so the browser paints first.
+    // This reduces FCP/LCP blocking and helps TBT by moving heavy CRM renders off the critical path.
+    setTimeout(async () => {
+      await refreshAll();
+      try { ensurePresenceOnLogin(); } catch {}
+      loadTaskCategories({ force: false }).catch(() => {});
+      processMutationQueue().catch(() => {});
+    }, 0);
   } else {
     showLogin();
   }

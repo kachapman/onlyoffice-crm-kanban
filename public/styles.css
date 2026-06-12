@@ -1845,6 +1845,13 @@ body {
   margin-top: 0.2rem;
 }
 
+.feed-notified-suffix {
+  font-size: 0.72em;
+  font-style: italic;
+  opacity: 0.7;
+  display: inline;
+}
+
 .tasks-by-user {
   display: flex;
   flex-direction: column;

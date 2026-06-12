@@ -7,10 +7,13 @@ The board is then served by Workspace at /Products/OpportunityBoard/Default.aspx
 
 from __future__ import annotations
 
+import gzip
+import io
 import json
 import os
 import re
 import ssl
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -76,6 +79,61 @@ SSL_VERIFY = os.environ.get("ONLYOFFICE_SSL_VERIFY", "true").lower() not in (
 SESSION_COOKIE = "oo_token"
 DATA_DIR = ROOT / "data"
 COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
+
+
+class ResponseCache:
+    """Simple in-memory response cache with per-entry TTL."""
+
+    def __init__(self) -> None:
+        self._data: dict[str, tuple[float, int, bytes, str]] = {}
+
+    def get(self, key: str) -> tuple[int, bytes, str] | None:
+        entry = self._data.get(key)
+        if entry is None:
+            return None
+        expires_at, status, body, ctype = entry
+        if time.time() >= expires_at:
+            del self._data[key]
+            return None
+        return (status, body, ctype)
+
+    def set(self, key: str, value: tuple[int, bytes, str], ttl: float) -> None:
+        self._data[key] = (time.time() + ttl, value[0], value[1], value[2])
+
+    def clear(self) -> None:
+        self._data.clear()
+
+    def invalidate_prefix(self, prefix: str) -> None:
+        """Remove all cache entries whose key starts with the given prefix."""
+        to_delete = [k for k in self._data if k.startswith(prefix)]
+        for k in to_delete:
+            del self._data[k]
+
+
+_proxy_cache = ResponseCache()
+
+
+def _proxy_cache_ttl(api_path: str) -> int | None:
+    """Return cache TTL seconds for a GET proxy path, or None (no cache)."""
+    p = api_path.lower()
+    if re.search(r"/crm/opportunity/tag(/\d+)?$", p):
+        return 600  # 10 min — CRM-wide tag definitions, changes only when admin edits tags
+    if "/crm/opportunity/stage" in p:
+        return 600  # 10 min — CRM-wide stage definitions, admin-only changes
+    if "/crm/opportunity/filter" in p:
+        return 30  # 30s — user-scoped filter results (not reusable between users)
+    if "/crm/history/filter" in p:
+        return 30  # 30s — user-scoped history (not reusable between users)
+    if re.search(r"/crm/opportunity/\d+/customfield", p):
+        return 600  # 10 min — CRM-wide custom field definitions
+    # Single-opp fetch for board card updates (used by targeted refresh)
+    if re.search(r"/crm/opportunity/\d+$", p):
+        return 30
+    return None
+
+
+def _cache_key(method: str, api_path: str, query: str, portal: str) -> str:
+    return f"{method}:{api_path}:{query}:{portal}"
 
 
 def _session_token(handler: SimpleHTTPRequestHandler) -> str | None:
@@ -222,10 +280,50 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         super().do_GET()
 
+    def send_head(self):
+        path = urlparse(self.path).path
+        if path.startswith("/api/"):
+            return super().send_head()
+
+        fs_path = self.translate_path(self.path)
+        # Resolve directory to index.html so it gets gzip compression too
+        if os.path.isdir(fs_path):
+            for index in ("index.html", "index.htm"):
+                candidate = os.path.join(fs_path, index)
+                if os.path.exists(candidate):
+                    fs_path = candidate
+                    break
+            else:
+                return super().send_head()
+        elif not os.path.exists(fs_path):
+            return super().send_head()
+
+        ctype = self.guess_type(fs_path)
+        try:
+            with open(fs_path, "rb") as f:
+                data = f.read()
+        except OSError:
+            self.send_error(404)
+            return None
+
+        accept = self.headers.get("Accept-Encoding", "")
+        should_gzip = "gzip" in accept and len(data) > 1024
+
+        if should_gzip:
+            data = gzip.compress(data)
+
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        if should_gzip:
+            self.send_header("Content-Encoding", "gzip")
+        self.end_headers()
+        return io.BytesIO(data)
+
     def end_headers(self) -> None:
         path = urlparse(self.path).path
         if not path.startswith("/api/"):
-            self.send_header("Cache-Control", "no-cache, must-revalidate")
+            self.send_header("Cache-Control", "public, max-age=86400")
         super().end_headers()
 
     def do_POST(self) -> None:
@@ -781,7 +879,31 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self.send_error(404)
             return
         api_path, query = route
+
+        # Server-side response cache (GET only, specific endpoints)
+        ttl = _proxy_cache_ttl(api_path)
+        if ttl is not None:
+            portal = _portal_base(self)
+            ck = _cache_key("GET", api_path, query, portal)
+            cached = _proxy_cache.get(ck)
+            if cached is not None:
+                status, body, ctype = cached
+                self.send_response(status)
+                self.send_header("Content-Type", ctype or "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("X-Proxy-Cache", "HIT")
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
         status, body, ctype = _proxy_request(self, "GET", api_path, query)
+
+        # Cache successful GET responses
+        if ttl is not None and 200 <= status < 400:
+            portal = _portal_base(self)
+            ck = _cache_key("GET", api_path, query, portal)
+            _proxy_cache.set(ck, (status, body, ctype), ttl)
+
         # Best-effort: record CRM activity for presence (only when we can resolve the user without failing the response)
         if status < 400 and ("/crm/" in api_path.lower() or "/people/" in api_path.lower()):
             self._maybe_touch_crm_activity_for_current_request()
@@ -843,6 +965,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         )
         if status < 400 and ("/crm/" in api_path.lower() or "/people/" in api_path.lower()):
             self._maybe_touch_crm_activity_for_current_request()
+        # Invalidate proxy cache on successful mutations so long TTLs are safe.
+        if status < 400:
+            p = api_path.lower()
+            if "/crm/opportunity/tag" in p:
+                _proxy_cache.invalidate_prefix("GET:/api/2.0/crm/opportunity/tag")
+            elif "/crm/opportunity/stage" in p:
+                _proxy_cache.invalidate_prefix("GET:/api/2.0/crm/opportunity/stage")
+            elif "/crm/opportunity/customfield" in p or "/customfield/" in p:
+                _proxy_cache.invalidate_prefix("GET:/api/2.0/crm/opportunity/")  # nuke all opp caches (rare mutation)
+            elif "/crm/opportunity/" in p and method in ("PUT", "POST"):
+                # Opp update — invalidate filter results + this specific opp's single-opp cache line
+                _proxy_cache.invalidate_prefix("GET:/api/2.0/crm/opportunity/filter")
+                _proxy_cache.invalidate_prefix(f"GET:{api_path}")
+            elif "/crm/history" in p:
+                _proxy_cache.invalidate_prefix("GET:/api/2.0/crm/history")
         self.send_response(status)
         self.send_header("Content-Type", ctype or "application/json")
         self.send_header("Content-Length", str(len(resp_body)))
