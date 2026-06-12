@@ -2,7 +2,7 @@
 
 This guide covers updating the server after a commit to GitHub.
 
-**Server path:** `/opt/vanguard/crm-kanban`
+**Server path:** `/opt/vanguard/onlyoffice-crm-kanban`
 
 For initial server setup (Docker, Nginx, HTTPS certs), see the one-time setup steps archived in docs/. This document assumes the droplet is already provisioned.
 
@@ -26,7 +26,7 @@ dig +short dashboard.vanguardadj.com
 On the droplet:
 
 ```bash
-cd /opt/vanguard/crm-kanban
+cd /opt/vanguard/onlyoffice-crm-kanban
 chmod +x deploy/update.sh
 ./deploy/update.sh
 ```
@@ -34,7 +34,7 @@ chmod +x deploy/update.sh
 Or manually:
 
 ```bash
-cd /opt/vanguard/crm-kanban
+cd /opt/vanguard/onlyoffice-crm-kanban
 git pull
 docker compose build
 docker compose up -d
