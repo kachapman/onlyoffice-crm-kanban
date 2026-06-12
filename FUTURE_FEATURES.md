@@ -258,6 +258,67 @@ Decide if iframe-to-portal is viable (often blocked by SSO / `X-Frame-Options` /
 
 ---
 
+## FEAT-007 — Advanced Opportunity Search (enhanced CRM-style filtering)
+
+**Status:** Planned — current implementation is title-only. Needs expansion.
+
+### What the native CRM search does
+
+In OnlyOffice CRM, the Opportunities page has a search/filter panel that lets you:
+- Filter by stage (single or multi-select)
+- Filter by responsible user (team member)
+- Filter by tags (multi-select)
+- Filter by custom/user fields (e.g., "Claim Type", "Loss Date", "Adjuster")
+- Filter by date range (created, expected close, last modified)
+- Filter by deal value (min/max)
+- Full-text search across title, description, contact name
+- Save and name filter combinations
+
+### Current dashboard implementation (v1.8.0)
+
+- Header search bar: searches by **title only**
+- Queries local loaded opportunities + CRM `/api/2.0/crm/opportunity/filter`
+- Returns title + ID only
+- Single-select → opens preview modal
+- No filters, no custom field search, no saved searches
+
+### Why this matters
+
+The user explicitly needs to find **opportunities with similar custom/user fields** (e.g., "all claims with Claim Type = Hail Damage", "all deals with Loss Date in March"). This is a primary CRM workflow that currently requires leaving the dashboard.
+
+### Implementation phases
+
+| Phase | Feature | Effort | APIs |
+|-------|---------|--------|------|
+| A | Rich search results (show stage, due date, value, contact in dropdown) | Low | Existing filter API |
+| B | Filter by stage + responsible user | Low | Existing filter API |
+| C | Filter by tags (multi-select) | Low | Existing filter API |
+| D | **Filter by custom/user fields** | Low | Existing filter API + custom field defs |
+| E | Date range filters (created, closing, last modified) | Low | Existing filter API |
+| F | Full-text search (description, contact, company) | Medium | May need CRM config |
+| G | Saveable searches / named filters | Medium | Profile storage |
+
+### Priority: Phase D first
+
+Custom/user field filtering is the most-used workflow and should be implemented first. It leverages:
+- `state.customFieldDefs` (already loaded in dashboard)
+- `opportunity.userFields` (already available on opportunity objects)
+- CRM filter API already supports `customFieldKey` + `customFieldValue` parameters
+
+### Files to modify
+
+- `public/app.js` — Search logic, filter UI, custom field dropdowns
+- `public/index.html` — Search modal / filter panel
+- `public/styles.css` — Filter dropdowns, multi-select, results list
+- `user_profile_store.py` — Saved search persistence (Phase G)
+
+### See also
+
+- `Toaster_Features` — Cross-reference for CRM search patterns
+- `ISSUES.md` — No blocking issues
+
+---
+
 ## Other ideas (backlog)
 
 See **[Toaster_Features](./Toaster_Features)** for dashboard tile/widget ideas (pipeline metrics, stale deals, email, etc.).
@@ -267,7 +328,7 @@ See **[Toaster_Features](./Toaster_Features)** for dashboard tile/widget ideas (
 | FEAT-004 | Persist `estimate-network` in `docker-compose.yml` on server | Low |
 | FEAT-005 | Custom fields on **edit** deal (not only create) | Medium |
 | FEAT-006 | Export group/opportunities to CSV | Medium |
-| FEAT-007 | Global search across opportunities | High |
+| FEAT-007 | **Advanced Opportunity Search** — filter by stage, user, tags, custom fields, date range (see detailed section below) | High |
 | FEAT-022 | OnlyOffice document / spreadsheet tile (explore) | High — see above |
 
 ### FEAT-008 — AccuLynx API research (post-v1.1, from user list)

@@ -127,7 +127,10 @@ TIER 4 — Polish & power-user (from mature CRM home screens)
 
 23. Pin favorite opportunities (starred list tile)
 
-24. Global search toaster (Cmd+K) across titles / contacts
+24. Global search toaster (FEAT-007) across titles / contacts / custom fields
+    - Phase D: filter by custom/user fields (e.g., "Claim Type = Hail Damage", "Loss Date in March")
+    - Phase F: full-text search across description, contact, company
+    - See FUTURE_FEATURES.md for full implementation phases
 
 25. Custom HTML / iframe tile (user-supplied URL — security review required)
 
