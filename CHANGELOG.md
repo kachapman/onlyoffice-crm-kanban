@@ -32,26 +32,6 @@ All notable changes to the CRM Kanban dashboard are documented here.
 ### Other
 - `modal-card-deal-edit .modal-form` now has `scroll-padding-bottom: 4rem` so content doesn't hide behind sticky action bar.
 
-## [1.6.1] — 2026-06-11
-
-### FEAT-003: Attachments on event notes
-- Full support for attaching files (≤25 MB each) when creating event notes from Deal Edit and Quick Note (including side-by-side from preview and prefill from notes tile).
-- Native CRM upload flow: client uploads via proxied UploadProgress.ashx (multipart, using current UserID), then history create uses form-urlencoded with repeated `fileId[]`.
-- Text is always priority (note sent even if some/all uploads fail; per-fail error toast).
-- Pre-submit selected files: plain filename (size) list with × remove (no icons).
-- Right-side status list in header (near mutation-sync-status): shows pending + all completed note actions; success = checkmark, fail = ✕; completed items auto-clear after exactly 10 seconds.
-- Reuses existing preview attachment rendering, queue resilience (history items), rich note editor, and currentUserId.
-- Server proxy updated to correctly forward form-urlencoded (for history) and multipart (for uploads) so attachments work through the deployed dashboard (extra hop).
-- Hotfix for production uploads: added `X-OnlyOffice-Portal` header to the direct `UploadProgress.ashx` fetch (was missing, causing attachments to fail on the droplet proxy while local and text notes succeeded). Confirmed working after nginx client_max_body_size + proxy buffering config.
-
-### Additional fixes
-- Mobile vertical stacking of deal preview + deal/quick-note editor: improved dynamic measurement, ResizeObserver, and constraints in `layoutSideBySideDealEditAndPreview` to prevent overlap at top when stacked.
-- Hanging after deal edits and event notes (prod): deferred the preview re-open in `submitDealEditForm` (was immediate heavy fetch+render); board refreshes already deferred. (Does not happen on local test server.)
-- Added version number (v1.6.1) next to "Sign out" button (in header meta, to the right of portal URL, properly spaced).
-- Rolled back "show empty stages" checkbox visibility for tag-sorted groups (the change had broken group tiles rendering); now only shown for stage groupBy as before.
-
-See AGENTS.md for implementation details. These (plus proxy support for attachments on server) are released as v1.6.1.
-
 ## [1.7.5] — 2026-06-11
 
 ### Performance: tag cache, custom field cache, filter result cache
@@ -131,6 +111,26 @@ See AGENTS.md for implementation details. These (plus proxy support for attachme
 - Fix: finds the wrapper div by data attribute, then queries `input, select, textarea` inside it to get the real user-entered value.
 - Also corrected `buildCustomFieldListForApi` to `{key, value}` format (camelCase, no duplicate `Key`/`Value` props) and added `customFieldList` to create body alongside per-field POST fallback.
 - `CREATE_OPP_USER_FIELDS_ENABLED=true`. Tested and confirmed end-to-end (dashboard → proxy → CRM).
+
+## [1.6.1] — 2026-06-11
+
+### FEAT-003: Attachments on event notes
+- Full support for attaching files (≤25 MB each) when creating event notes from Deal Edit and Quick Note (including side-by-side from preview and prefill from notes tile).
+- Native CRM upload flow: client uploads via proxied UploadProgress.ashx (multipart, using current UserID), then history create uses form-urlencoded with repeated `fileId[]`.
+- Text is always priority (note sent even if some/all uploads fail; per-fail error toast).
+- Pre-submit selected files: plain filename (size) list with × remove (no icons).
+- Right-side status list in header (near mutation-sync-status): shows pending + all completed note actions; success = checkmark, fail = ✕; completed items auto-clear after exactly 10 seconds.
+- Reuses existing preview attachment rendering, queue resilience (history items), rich note editor, and currentUserId.
+- Server proxy updated to correctly forward form-urlencoded (for history) and multipart (for uploads) so attachments work through the deployed dashboard (extra hop).
+- Hotfix for production uploads: added `X-OnlyOffice-Portal` header to the direct `UploadProgress.ashx` fetch (was missing, causing attachments to fail on the droplet proxy while local and text notes succeeded). Confirmed working after nginx client_max_body_size + proxy buffering config.
+
+### Additional fixes
+- Mobile vertical stacking of deal preview + deal/quick-note editor: improved dynamic measurement, ResizeObserver, and constraints in `layoutSideBySideDealEditAndPreview` to prevent overlap at top when stacked.
+- Hanging after deal edits and event notes (prod): deferred the preview re-open in `submitDealEditForm` (was immediate heavy fetch+render); board refreshes already deferred. (Does not happen on local test server.)
+- Added version number (v1.6.1) next to "Sign out" button (in header meta, to the right of portal URL, properly spaced).
+- Rolled back "show empty stages" checkbox visibility for tag-sorted groups (the change had broken group tiles rendering); now only shown for stage groupBy as before.
+
+See AGENTS.md for implementation details. These (plus proxy support for attachments on server) are released as v1.6.1.
 
 ## [1.6.0] — 2026-06-10
 
