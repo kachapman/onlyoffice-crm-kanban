@@ -5155,6 +5155,17 @@ body {
   .column {
     flex: 0 0 260px;
   }
+
+  .daily-focus {
+    flex-wrap: wrap;
+    white-space: normal;
+    overflow: visible;
+    max-width: 100%;
+  }
+  .daily-focus-quote {
+    white-space: normal;
+    overflow: visible;
+  }
 }
 
 /* Mail attachments shown inside expanded email panel */
