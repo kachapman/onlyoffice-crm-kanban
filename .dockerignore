@@ -10,5 +10,6 @@ data
 onlyoffice-module
 *.md
 !README.md
+!CHANGELOG.md
 scripts
 terminals
