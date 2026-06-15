@@ -8384,10 +8384,18 @@ async function openDealEditModal(opp, group) {
 
   // When launched from opp preview (edit note / edit deal), position the editor popup LEFT (desktop) or TOP (mobile) of the preview modal.
   // Both remain interactive (see layout fn for pe:none trick + mobile stacking).
+  // Also supports search-popup preview tabs.
   setTimeout(() => {
     const p = $("#opp-preview-modal");
-    if (p && !p.classList.contains("hidden") && state.dealEdit && oppPreviewContext && Number(oppPreviewContext.oppId) === Number(state.dealEdit.oppId)) {
-      layoutSideBySideDealEditAndPreview();
+    const s = $("#search-popup-modal");
+    const isPreviewOpen = p && !p.classList.contains("hidden");
+    const isSearchOpen = s && !s.classList.contains("hidden");
+    if (state.dealEdit && oppPreviewContext && Number(oppPreviewContext.oppId) === Number(state.dealEdit.oppId)) {
+      if (isPreviewOpen) {
+        layoutSideBySideDealEditAndPreview();
+      } else if (isSearchOpen) {
+        layoutSideBySideDealEditAndSearchPopup();
+      }
     }
   }, 80);
 }
@@ -12641,6 +12649,10 @@ const oppPreviewMailCache = new Map();
 /** @type {{ oppId: number | null, opp: object | null, group: object | null }} */
 let oppPreviewContext = { oppId: null, opp: null, group: null };
 
+/* Search popup state */
+const MAX_SEARCH_PREVIEW_TABS = 5;
+let searchPopupPreviewTabs = new Map(); // oppId -> { title, data, container, button }
+
 function createCrmOpenLink(oppId, { className = "crm-open-external", title = "Open in CRM" } = {}) {
   const a = document.createElement("a");
   a.href = crmOpportunityUrl(oppId);
@@ -14140,142 +14152,7 @@ function renderOpportunityPreviewBody(data) {
   const body = $("#opp-preview-body");
   if (!body) return;
   body.innerHTML = "";
-
-  const { opp, customFieldValues, history, tags, documents } = data;
-  const standardRows = buildOpportunityPreviewStandardFields(opp, tags);
-  const userRows = buildOpportunityPreviewUserFields(opp, customFieldValues);
-  const description = String(opp.description ?? opp.Description ?? "").trim();
-
-  // Tabs at top of preview window
-  const tabs = document.createElement("div");
-  tabs.className = "opp-preview-tabs";
-  const tabDetails = document.createElement("button");
-  tabDetails.type = "button";
-  tabDetails.className = "opp-preview-tab active";
-  tabDetails.textContent = "Details";
-  tabDetails.dataset.tab = "details";
-  const tabDocs = document.createElement("button");
-  tabDocs.type = "button";
-  tabDocs.className = "opp-preview-tab";
-  tabDocs.textContent = "Documents";
-  tabDocs.dataset.tab = "documents";
-  tabs.appendChild(tabDetails);
-  tabs.appendChild(tabDocs);
-  body.appendChild(tabs);
-
-  // Details content
-  const detailsContent = document.createElement("div");
-  detailsContent.className = "opp-preview-tab-content";
-  detailsContent.dataset.tabContent = "details";
-
-  appendPreviewSection(detailsContent, "Deal fields", (section) => {
-    renderPreviewFieldGrid(section, standardRows);
-  });
-
-  appendPreviewSection(detailsContent, "Description", (section) => {
-    if (!description) {
-      const p = document.createElement("p");
-      p.className = "opp-preview-empty";
-      p.textContent = "No description";
-      section.appendChild(p);
-      return;
-    }
-    const p = document.createElement("p");
-    p.className = "opp-preview-description";
-    p.textContent = description;
-    section.appendChild(p);
-  });
-
-  appendPreviewSection(detailsContent, "User fields", (section) => {
-    renderPreviewFieldGrid(section, userRows);
-  });
-
-  appendPreviewSection(detailsContent, "History & notes", (section) => {
-    if (!history.length) {
-      const p = document.createElement("p");
-      p.className = "opp-preview-empty";
-      p.textContent = "No history events";
-      section.appendChild(p);
-      return;
-    }
-    const ul = document.createElement("ul");
-    ul.className = "opp-preview-history";
-    for (const ev of history) {
-      ul.appendChild(renderHistoryEventItem(ev));
-    }
-    section.appendChild(ul);
-  });
-
-  body.appendChild(detailsContent);
-
-  // Documents tab content - actual tab showing list with download icons
-  const docsContent = document.createElement("div");
-  docsContent.className = "opp-preview-tab-content";
-  docsContent.dataset.tabContent = "documents";
-  docsContent.style.display = "none";
-
-  const docs = documents || [];
-  if (!docs.length) {
-    const p = document.createElement("p");
-    p.className = "opp-preview-empty";
-    p.textContent = "No documents attached to this deal";
-    docsContent.appendChild(p);
-  } else {
-    const ul = document.createElement("ul");
-    ul.className = "opp-preview-documents";
-    for (const d of docs) {
-      const li = document.createElement("li");
-      const fid = d.id ?? d.ID ?? d.fileId ?? d.FileId ?? "";
-      const base = (state.portalUrl || "").replace(/\/$/, "");
-
-      // View link (keep text same color as other text)
-      const a = document.createElement("a");
-      a.href = fid ? `${base}/Products/Files/DocEditor.aspx?fileid=${fid}` : "#";
-      a.target = "_blank";
-      a.rel = "noopener noreferrer";
-      a.textContent = d.title || d.Title || d.name || d.Name || "Document";
-      a.style.color = "inherit";
-      a.style.textDecoration = "none";
-      li.appendChild(a);
-
-      // Download button icon
-      if (fid) {
-        const dl = document.createElement("a");
-        dl.href = portalFileDownloadUrl ? portalFileDownloadUrl(fid) : `${base}/Products/Files/HttpHandlers/filehandler.ashx?action=download&fileid=${fid}`;
-        dl.title = "Download";
-        dl.setAttribute("aria-label", "Download document");
-        dl.setAttribute("download", "");
-        // Minimalistic download icon (chosen; see 3 examples below in comments)
-        dl.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
-        dl.style.marginLeft = '0.5em';
-        dl.style.textDecoration = 'none';
-        dl.style.fontSize = '0.9em';
-        dl.style.display = 'inline-flex';
-        dl.style.alignItems = 'center';
-        // 3 example minimalistic download/save document icons (stroke-based to match dashboard style):
-        // 1. (chosen) Classic down arrow into box: <svg ...><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        // 2. Simple arrow down: <svg ...><line x1="12" y1="3" x2="12" y2="21"/><polyline points="19 14 12 21 5 14"/></svg>
-        // 3. Disk save with arrow: <svg ...><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><line x1="7" y1="3" x2="7" y2="8"/></svg>
-        dl.target = '_blank';
-        dl.rel = 'noopener';
-        li.appendChild(dl);
-      }
-
-      ul.appendChild(li);
-    }
-    docsContent.appendChild(ul);
-  }
-
-  body.appendChild(docsContent);
-
-  // Tab switching
-  const activateTab = (tabName) => {
-    tabs.querySelectorAll('.opp-preview-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tabName));
-    detailsContent.style.display = tabName === 'details' ? '' : 'none';
-    docsContent.style.display = tabName === 'documents' ? '' : 'none';
-  };
-  tabDetails.addEventListener('click', () => activateTab('details'));
-  tabDocs.addEventListener('click', () => activateTab('documents'));
+  renderOpportunityPreviewContent(body, data);
 }
 
 function setOpportunityPreviewCrmLink(oppId) {
@@ -14447,10 +14324,85 @@ function layoutSideBySideDealEditAndPreview() {
   previewModal.style.zIndex = "2000";
 }
 
+/* Same layout logic but for search-popup modal instead of opp-preview-modal */
+function layoutSideBySideDealEditAndSearchPopup() {
+  const searchModal = $("#search-popup-modal");
+  let sideModal = $("#deal-edit-modal");
+  let isQuick = false;
+  if (!sideModal || sideModal.classList.contains("hidden")) {
+    sideModal = $("#quick-note-modal");
+    isQuick = true;
+  }
+  if (!searchModal || searchModal.classList.contains("hidden") || !sideModal || sideModal.classList.contains("hidden")) return;
+  const pCard = searchModal.querySelector(".modal-card");
+  const sCard = sideModal.querySelector(".modal-card");
+  if (!pCard || !sCard) return;
+
+  if (pCard.dataset.origStyle == null) pCard.dataset.origStyle = pCard.getAttribute("style") || "";
+  if (sCard.dataset.origStyle == null) sCard.dataset.origStyle = sCard.getAttribute("style") || "";
+
+  const isMobile = window.innerWidth < 700;
+  const gap = 12;
+  let sideW, previewW, sideLeft, previewLeft, sideTop, previewTop;
+  const baseTop = 20;
+
+  if (isMobile) {
+    const w = Math.min(900, window.innerWidth - 24);
+    sideW = w;
+    previewW = w;
+    sideLeft = 12;
+    previewLeft = 12;
+    sideTop = baseTop;
+    previewTop = baseTop + 180 + gap;
+  } else {
+    sideW = Math.min(440, Math.floor(window.innerWidth * 0.38));
+    previewW = Math.min(900, Math.floor(window.innerWidth * 0.48));
+    const total = sideW + previewW + gap;
+    const left = Math.max(12, Math.floor((window.innerWidth - total) / 2));
+    sideLeft = left;
+    previewLeft = left + sideW + gap;
+    sideTop = 36;
+    previewTop = 36;
+  }
+
+  sCard.style.cssText = `position:fixed!important; left:${sideLeft}px!important; top:${sideTop}px!important; width:${sideW}px!important; max-height:${isMobile ? "40vh" : "92vh"}!important; overflow:auto!important; z-index:2100!important; margin:0!important; box-shadow:var(--shadow); pointer-events:auto!important;`;
+  pCard.style.cssText = `position:fixed!important; left:${previewLeft}px!important; top:${previewTop}px!important; width:${previewW}px!important; max-height:${isMobile ? "55vh" : "92vh"}!important; overflow:auto!important; z-index:2005!important; margin:0!important; box-shadow:var(--shadow);`;
+
+  if (isMobile) {
+    const adjustMobileVerticalStack = () => {
+      if (!sCard || !pCard || sideModal.classList.contains("hidden") || searchModal.classList.contains("hidden")) return;
+      const sRect = sCard.getBoundingClientRect();
+      const desiredPTop = Math.max(baseTop + 80, sRect.bottom + 4);
+      pCard.style.top = `${desiredPTop}px`;
+      pCard.style.maxHeight = `calc(100vh - ${desiredPTop + 20}px)`;
+      sCard.style.maxHeight = `min(45vh, calc(100vh - ${baseTop + 30}px))`;
+    };
+    setTimeout(adjustMobileVerticalStack, 120);
+    requestAnimationFrame(adjustMobileVerticalStack);
+    if (!sCard._stackObserver) {
+      sCard._stackObserver = new ResizeObserver(() => {
+        clearTimeout(sCard._adjustT || 0);
+        sCard._adjustT = setTimeout(adjustMobileVerticalStack, 40);
+      });
+      sCard._stackObserver.observe(sCard);
+    }
+  }
+
+  const sBack = sideModal.querySelector(".modal-backdrop");
+  if (sBack) {
+    sBack.style.display = "none";
+    sBack.dataset.sideHidden = "1";
+  }
+  sideModal.style.pointerEvents = "none";
+  sideModal.style.zIndex = "2010";
+  searchModal.style.zIndex = "2000";
+}
+
 function restoreSideBySideCards() {
   const previewModal = $("#opp-preview-modal");
+  const searchModal = $("#search-popup-modal");
   const editModal = $("#deal-edit-modal");
-  [previewModal, editModal].forEach((modal) => {
+  [previewModal, searchModal, editModal].forEach((modal) => {
     if (!modal) return;
     const card = modal.querySelector(".modal-card");
     if (card && card.dataset.origStyle != null) {
@@ -14469,6 +14421,9 @@ function restoreSideBySideCards() {
   }
   if (previewModal) {
     previewModal.style.zIndex = "";
+  }
+  if (searchModal) {
+    searchModal.style.zIndex = "";
   }
 }
 
@@ -14615,6 +14570,556 @@ function bindGlobalOpportunitySearch() {
   document.addEventListener("click", (e) => {
     if (!wrap.contains(e.target)) hideResults();
   });
+}
+
+/* ================================================================================
+   Search popup modal — large search with tabbed preview (max 5 tabs)
+   ================================================================================ */
+
+function bindSearchPopupBtn() {
+  const btn = $("#search-popup-btn");
+  if (!btn || btn.dataset.bound) return;
+  btn.dataset.bound = "1";
+  btn.addEventListener("click", () => openSearchPopupModal());
+}
+
+function openSearchPopupModal() {
+  const modal = $("#search-popup-modal");
+  if (!modal) return;
+  modal.classList.remove("hidden");
+  activateSearchPopupTab("search");
+  const input = $("#search-popup-input");
+  if (input) {
+    input.focus();
+    input.select();
+  }
+}
+
+function closeSearchPopupModal() {
+  const modal = $("#search-popup-modal");
+  if (!modal) return;
+  modal.classList.add("hidden");
+  // Clear all preview tabs
+  for (const oppId of Array.from(searchPopupPreviewTabs.keys())) {
+    closeSearchPreviewTab(oppId);
+  }
+  const input = $("#search-popup-input");
+  if (input) input.value = "";
+  const results = $("#search-popup-results");
+  if (results) results.innerHTML = "";
+  hideSearchPopupError();
+}
+
+function showSearchPopupError(msg) {
+  const el = $("#search-popup-error");
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.remove("hidden");
+  // Auto-hide after 5 seconds
+  setTimeout(() => hideSearchPopupError(), 5000);
+}
+
+function hideSearchPopupError() {
+  const el = $("#search-popup-error");
+  if (!el) return;
+  el.classList.add("hidden");
+  el.textContent = "";
+}
+
+function bindSearchPopupModal() {
+  const modal = $("#search-popup-modal");
+  if (!modal || modal.dataset.bound) return;
+  modal.dataset.bound = "1";
+
+  $("#search-popup-close")?.addEventListener("click", closeSearchPopupModal);
+  modal.querySelectorAll("[data-search-popup-dismiss]").forEach((el) => {
+    el.addEventListener("click", closeSearchPopupModal);
+  });
+
+  // Escape closes
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !modal.classList.contains("hidden")) {
+      // Prefer closing deal-edit side modal first if open
+      const editM = $("#deal-edit-modal");
+      if (editM && !editM.classList.contains("hidden")) {
+        closeDealEditModal();
+        return;
+      }
+      closeSearchPopupModal();
+    }
+  });
+
+  // Enter in search input
+  const input = $("#search-popup-input");
+  if (input) {
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        performSearchPopupQuery();
+      }
+    });
+  }
+
+  // Tab bar click delegation
+  const tabBar = $("#search-popup-tabs");
+  if (tabBar) {
+    tabBar.addEventListener("click", (e) => {
+      const tabBtn = e.target.closest(".search-popup-tab");
+      if (!tabBtn) return;
+      const tabId = tabBtn.dataset.tab;
+      if (!tabId) return;
+
+      // Close button on preview tab
+      const closeEl = e.target.closest(".search-popup-tab-close");
+      if (closeEl) {
+        const closeId = closeEl.dataset.closeTab;
+        if (closeId != null) {
+          closeSearchPreviewTab(Number(closeId));
+          return;
+        }
+      }
+
+      activateSearchPopupTab(tabId);
+    });
+  }
+}
+
+async function performSearchPopupQuery() {
+  const input = $("#search-popup-input");
+  const results = $("#search-popup-results");
+  if (!input || !results) return;
+  hideSearchPopupError();
+  const q = input.value.trim();
+  if (!q) {
+    results.innerHTML = "";
+    return;
+  }
+
+  results.innerHTML = '<p class="search-popup-results-empty">Searching…</p>';
+  try {
+    const params = new URLSearchParams({
+      startIndex: "0",
+      count: "100",
+      filterValue: q,
+      stageType: "0",
+    });
+    const data = await api(`/api/2.0/crm/opportunity/filter?${params}`);
+    let opps = unwrap(data);
+    if (opps.length) {
+      opps = await enrichOpportunitiesTags(opps);
+    }
+    renderSearchPopupResults(opps);
+  } catch (err) {
+    results.innerHTML = `<p class="search-popup-results-empty">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function renderSearchPopupResults(opps) {
+  const results = $("#search-popup-results");
+  if (!results) return;
+  results.innerHTML = "";
+  if (!opps.length) {
+    results.innerHTML = '<p class="search-popup-results-empty">No open deals found</p>';
+    return;
+  }
+
+  for (const o of opps) {
+    const id = Number(o.id ?? o.ID);
+    const title = (o.title || o.Title || `Deal #${id}`).trim();
+    const stage = o.stage?.title || o.stage?.Title || o.Stage?.title || "";
+    const due = formatOppDueLabel(o);
+    const contact = getOpportunityContactLabel(o);
+    const bid = formatMoney(o.bidValue || o.BidValue || 0);
+
+    const metaParts = [stage, due, contact, bid].filter(Boolean);
+    const meta = metaParts.join("  ·  ");
+
+    const row = document.createElement("div");
+    row.className = "search-popup-result-row";
+
+    const titleEl = document.createElement("span");
+    titleEl.className = "search-popup-result-title";
+    titleEl.textContent = title;
+    titleEl.title = title;
+
+    const metaEl = document.createElement("span");
+    metaEl.className = "search-popup-result-meta";
+    metaEl.textContent = meta;
+    metaEl.title = meta;
+
+    const actions = document.createElement("span");
+    actions.className = "search-popup-result-actions";
+
+    const previewBtn = document.createElement("button");
+    previewBtn.type = "button";
+    previewBtn.className = "btn btn-primary";
+    previewBtn.textContent = "+ Tab";
+    previewBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openSearchPreviewTab(id, title);
+    });
+
+    const crmLink = createCrmOpenLink(id, {
+      className: "opp-preview-open-crm",
+      title: "Open in CRM",
+    });
+
+    actions.appendChild(previewBtn);
+    actions.appendChild(crmLink);
+    row.appendChild(titleEl);
+    row.appendChild(metaEl);
+    row.appendChild(actions);
+    results.appendChild(row);
+  }
+}
+
+async function openSearchPreviewTab(oppId, titleHint) {
+  const id = Number(oppId);
+  if (!Number.isFinite(id) || id <= 0) return;
+
+  // If already open, just activate
+  if (searchPopupPreviewTabs.has(id)) {
+    activateSearchPopupTab(`preview-${id}`);
+    return;
+  }
+
+  // Enforce max 5 tabs (stop at 5, show error if trying to open more)
+  if (searchPopupPreviewTabs.size >= MAX_SEARCH_PREVIEW_TABS) {
+    showSearchPopupError("Maximum 5 preview tabs reached. Close a tab to open another.");
+    return;
+  }
+
+  // Create tab button
+  const tabBar = $("#search-popup-tabs");
+  const tabBtn = document.createElement("button");
+  tabBtn.type = "button";
+  tabBtn.className = "search-popup-tab";
+  tabBtn.dataset.tab = `preview-${id}`;
+  const shortTitle = titleHint.length > 24 ? titleHint.slice(0, 22) + "…" : titleHint;
+  tabBtn.innerHTML = `
+    <span class="search-popup-tab-title">${escapeHtml(shortTitle)}</span>
+    <span class="search-popup-tab-close" data-close-tab="${id}" title="Close tab">×</span>
+  `;
+  tabBar.appendChild(tabBtn);
+
+  // Create content container
+  const containers = $("#search-popup-preview-containers");
+  const container = document.createElement("div");
+  container.className = "search-popup-tab-content";
+  container.dataset.tabContent = `preview-${id}`;
+  container.style.display = "none";
+  container.innerHTML = `
+    <div class="search-popup-preview-container">
+        <div class="search-popup-preview-head">
+        <h3 class="search-popup-preview-title">${escapeHtml(titleHint)}</h3>
+        <div class="search-popup-preview-actions">
+          <button type="button" class="search-popup-preview-refresh" data-refresh-id="${id}" title="Refresh">⟳</button>
+          <button type="button" class="search-popup-preview-edit" data-edit-id="${id}" title="Edit deal">✎</button>
+          <span class="search-popup-preview-crm-wrap"></span>
+        </div>
+      </div>
+      <div class="search-popup-preview-body" data-preview-body="${id}">
+        <p class="opp-preview-loading">Loading opportunity…</p>
+      </div>
+    </div>
+  `;
+  containers.appendChild(container);
+
+  // CRM link
+  const crmWrap = container.querySelector(".search-popup-preview-crm-wrap");
+  if (crmWrap) {
+    crmWrap.appendChild(createCrmOpenLink(id, { className: "opp-preview-open-crm" }));
+  }
+
+  // Refresh button
+  const refreshBtn = container.querySelector(".search-popup-preview-refresh");
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      refreshSearchPreviewTab(id);
+    });
+  }
+
+  // Edit button
+  const editBtn = container.querySelector(".search-popup-preview-edit");
+  if (editBtn) {
+    editBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      handleSearchPreviewEdit(id);
+    });
+  }
+
+  // Store
+  searchPopupPreviewTabs.set(id, {
+    title: titleHint,
+    container,
+    button: tabBtn,
+    data: null,
+  });
+
+  // Activate immediately
+  activateSearchPopupTab(`preview-${id}`);
+
+  // Load data
+  try {
+    const data = await fetchOpportunityPreviewData(id, true);
+    const body = container.querySelector(`[data-preview-body="${id}"]`);
+    if (body) {
+      body.innerHTML = "";
+      renderOpportunityPreviewContent(body, data);
+      linkifyPhonesAndEmails(body);
+    }
+    // Update title if loaded
+    const fullTitle = data.opp?.title || data.opp?.Title || titleHint;
+    const titleEl = container.querySelector(".search-popup-preview-title");
+    if (titleEl) titleEl.textContent = fullTitle;
+    // Update tab button title
+    const shortFull = fullTitle.length > 24 ? fullTitle.slice(0, 22) + "…" : fullTitle;
+    const tabTitleEl = tabBtn.querySelector(".search-popup-tab-title");
+    if (tabTitleEl) tabTitleEl.textContent = shortFull;
+    // Store data for edit
+    const tab = searchPopupPreviewTabs.get(id);
+    if (tab) tab.data = data;
+  } catch (err) {
+    const body = container.querySelector(`[data-preview-body="${id}"]`);
+    if (body) {
+      body.innerHTML = `<p class="opp-preview-error">${escapeHtml(err.message)}</p>`;
+    }
+  }
+}
+
+async function refreshSearchPreviewTab(oppId) {
+  const id = Number(oppId);
+  const tab = searchPopupPreviewTabs.get(id);
+  if (!tab) return;
+  const body = tab.container.querySelector(`[data-preview-body="${id}"]`);
+  if (body) {
+    body.innerHTML = '<p class="opp-preview-loading">Refreshing…</p>';
+  }
+  try {
+    const data = await fetchOpportunityPreviewData(id, true);
+    if (body) {
+      body.innerHTML = "";
+      renderOpportunityPreviewContent(body, data);
+      linkifyPhonesAndEmails(body);
+    }
+    // Update title
+    const fullTitle = data.opp?.title || data.opp?.Title || tab.title;
+    const titleEl = tab.container.querySelector(".search-popup-preview-title");
+    if (titleEl) titleEl.textContent = fullTitle;
+    const shortFull = fullTitle.length > 24 ? fullTitle.slice(0, 22) + "…" : fullTitle;
+    const tabTitleEl = tab.button.querySelector(".search-popup-tab-title");
+    if (tabTitleEl) tabTitleEl.textContent = shortFull;
+    tab.data = data;
+  } catch (err) {
+    if (body) {
+      body.innerHTML = `<p class="opp-preview-error">${escapeHtml(err.message)}</p>`;
+    }
+  }
+}
+
+function closeSearchPreviewTab(oppId) {
+  const id = Number(oppId);
+  const tab = searchPopupPreviewTabs.get(id);
+  if (!tab) return;
+
+  tab.button.remove();
+  tab.container.remove();
+  searchPopupPreviewTabs.delete(id);
+
+  // If this was the active tab, switch to search
+  const tabBar = $("#search-popup-tabs");
+  const activeBtn = tabBar?.querySelector(".search-popup-tab.active");
+  if (!activeBtn || activeBtn.dataset.tab === `preview-${id}`) {
+    activateSearchPopupTab("search");
+  }
+}
+
+function activateSearchPopupTab(tabId) {
+  const tabBar = $("#search-popup-tabs");
+  const contents = document.querySelectorAll("#search-popup-modal .search-popup-tab-content");
+
+  // Update tab buttons
+  tabBar?.querySelectorAll(".search-popup-tab").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.tab === tabId);
+  });
+
+  // Show/hide content
+  contents.forEach((el) => {
+    const isMatch = el.dataset.tabContent === tabId || el.dataset.tab === tabId;
+    el.classList.toggle("active", isMatch);
+    el.style.display = isMatch ? "" : "none";
+  });
+
+  // Hide preview containers wrapper when search tab is active so it doesn't take up flex space
+  const previewContainers = $("#search-popup-preview-containers");
+  if (previewContainers) {
+    previewContainers.style.display = tabId === "search" ? "none" : "";
+  }
+}
+
+async function handleSearchPreviewEdit(oppId) {
+  const id = Number(oppId);
+  let deal = null;
+  const tab = searchPopupPreviewTabs.get(id);
+  if (tab && tab.data && tab.data.opp) {
+    deal = tab.data.opp;
+  } else {
+    try {
+      deal = await fetchOpportunityForUpdate(id);
+    } catch (err) {
+      showToast(err.message, true);
+      return;
+    }
+  }
+  // Set preview context so side-by-side layout works (same as opp-preview-modal)
+  setOpportunityPreviewContext(id, deal, null);
+  try {
+    await openDealEditModal(deal, null);
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+/* ================================================================================
+   Render opportunity preview content into any container (reused by modal + tabs)
+   ================================================================================ */
+
+function renderOpportunityPreviewContent(container, data) {
+  if (!container) return;
+  container.innerHTML = "";
+
+  const { opp, customFieldValues, history, tags, documents } = data;
+  const standardRows = buildOpportunityPreviewStandardFields(opp, tags);
+  const userRows = buildOpportunityPreviewUserFields(opp, customFieldValues);
+  const description = String(opp.description ?? opp.Description ?? "").trim();
+
+  // Tabs at top
+  const tabs = document.createElement("div");
+  tabs.className = "opp-preview-tabs";
+  const tabDetails = document.createElement("button");
+  tabDetails.type = "button";
+  tabDetails.className = "opp-preview-tab active";
+  tabDetails.textContent = "Details";
+  tabDetails.dataset.tab = "details";
+  const tabDocs = document.createElement("button");
+  tabDocs.type = "button";
+  tabDocs.className = "opp-preview-tab";
+  tabDocs.textContent = "Documents";
+  tabDocs.dataset.tab = "documents";
+  tabs.appendChild(tabDetails);
+  tabs.appendChild(tabDocs);
+  container.appendChild(tabs);
+
+  // Details content
+  const detailsContent = document.createElement("div");
+  detailsContent.className = "opp-preview-tab-content";
+  detailsContent.dataset.tabContent = "details";
+
+  appendPreviewSection(detailsContent, "Deal fields", (section) => {
+    renderPreviewFieldGrid(section, standardRows);
+  });
+
+  appendPreviewSection(detailsContent, "Description", (section) => {
+    if (!description) {
+      const p = document.createElement("p");
+      p.className = "opp-preview-empty";
+      p.textContent = "No description";
+      section.appendChild(p);
+      return;
+    }
+    const p = document.createElement("p");
+    p.className = "opp-preview-description";
+    p.textContent = description;
+    section.appendChild(p);
+  });
+
+  appendPreviewSection(detailsContent, "User fields", (section) => {
+    renderPreviewFieldGrid(section, userRows);
+  });
+
+  appendPreviewSection(detailsContent, "History & notes", (section) => {
+    if (!history.length) {
+      const p = document.createElement("p");
+      p.className = "opp-preview-empty";
+      p.textContent = "No history events";
+      section.appendChild(p);
+      return;
+    }
+    const ul = document.createElement("ul");
+    ul.className = "opp-preview-history";
+    for (const ev of history) {
+      ul.appendChild(renderHistoryEventItem(ev));
+    }
+    section.appendChild(ul);
+  });
+
+  container.appendChild(detailsContent);
+
+  // Documents tab
+  const docsContent = document.createElement("div");
+  docsContent.className = "opp-preview-tab-content";
+  docsContent.dataset.tabContent = "documents";
+  docsContent.style.display = "none";
+
+  const docs = documents || [];
+  if (!docs.length) {
+    const p = document.createElement("p");
+    p.className = "opp-preview-empty";
+    p.textContent = "No documents attached to this deal";
+    docsContent.appendChild(p);
+  } else {
+    const ul = document.createElement("ul");
+    ul.className = "opp-preview-documents";
+    for (const d of docs) {
+      const li = document.createElement("li");
+      const fid = d.id ?? d.ID ?? d.fileId ?? d.FileId ?? "";
+      const base = (state.portalUrl || "").replace(/\/$/, "");
+
+      const a = document.createElement("a");
+      a.href = fid ? `${base}/Products/Files/DocEditor.aspx?fileid=${fid}` : "#";
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = d.title || d.Title || d.name || d.Name || "Document";
+      a.style.color = "inherit";
+      a.style.textDecoration = "none";
+      li.appendChild(a);
+
+      if (fid) {
+        const dl = document.createElement("a");
+        dl.href = portalFileDownloadUrl ? portalFileDownloadUrl(fid) : `${base}/Products/Files/HttpHandlers/filehandler.ashx?action=download&fileid=${fid}`;
+        dl.title = "Download";
+        dl.setAttribute("aria-label", "Download document");
+        dl.setAttribute("download", "");
+        dl.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
+        dl.style.marginLeft = '0.5em';
+        dl.style.textDecoration = 'none';
+        dl.style.fontSize = '0.9em';
+        dl.style.display = 'inline-flex';
+        dl.style.alignItems = 'center';
+        dl.target = '_blank';
+        dl.rel = 'noopener';
+        li.appendChild(dl);
+      }
+
+      ul.appendChild(li);
+    }
+    docsContent.appendChild(ul);
+  }
+
+  container.appendChild(docsContent);
+
+  // Tab switching
+  const activateTab = (tabName) => {
+    tabs.querySelectorAll('.opp-preview-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tabName));
+    detailsContent.style.display = tabName === 'details' ? '' : 'none';
+    docsContent.style.display = tabName === 'documents' ? '' : 'none';
+  };
+  tabDetails.addEventListener('click', () => activateTab('details'));
+  tabDocs.addEventListener('click', () => activateTab('documents'));
 }
 
 function bindNewTaskOpportunityPicker() {
@@ -15750,6 +16255,8 @@ async function init() {
   bindCreateOpportunityModal();
   bindGlobalOpportunitySearch();
   bindOpportunityPreviewModal();
+  bindSearchPopupBtn();
+  bindSearchPopupModal();
   bindDashboardActivityTracking();
   bindFeedHiddenModal();
   bindNotesArchiveRestoreModal();

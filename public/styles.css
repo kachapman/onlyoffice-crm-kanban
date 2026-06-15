@@ -5292,3 +5292,321 @@ body {
   text-decoration: underline;
 }
 
+/* ================================================================================
+   Search popup modal — large search with tabbed preview (max 5 tabs)
+   ================================================================================ */
+
+.modal-card-search-popup {
+  width: min(900px, 96vw);
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.search-popup-tabs {
+  display: flex;
+  gap: 0.35rem;
+  border-bottom: 1px solid var(--border);
+  padding: 0.5rem 0.75rem 0;
+  flex-shrink: 0;
+  overflow-x: hidden;
+  background: var(--surface);
+  flex-wrap: nowrap;
+}
+
+.search-popup-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  margin-bottom: -1px;
+  position: relative;
+  overflow: hidden;
+}
+
+.search-popup-tab.active {
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--border);
+  border-bottom: 1px solid var(--surface);
+  font-weight: 600;
+  z-index: 1;
+  flex-shrink: 0;
+}
+
+.search-popup-tab:hover:not(.active) {
+  color: var(--text);
+  background: var(--surface-3, var(--surface-2));
+  border-color: var(--border);
+}
+
+.search-popup-tab-search {
+  border-left: 3px solid var(--accent);
+  padding-left: 0.6rem;
+  flex-shrink: 0;
+}
+
+.search-popup-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.search-popup-tab-close {
+  margin-left: 0.25rem;
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 0.15rem;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.search-popup-tab-close:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+/* Content wrapper: holds both search tab and preview containers */
+#search-popup-preview-containers {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.search-popup-tab-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: none;
+}
+
+.search-popup-tab-content.active {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Search tab specific */
+.search-popup-tab-content[data-tab-content="search"] {
+  display: none;
+}
+
+.search-popup-tab-content[data-tab-content="search"].active {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Ensure preview container fills the tab content */
+.search-popup-tab-content.active .search-popup-preview-container {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Search tab */
+.search-popup-input-wrap {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.search-popup-input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.95rem;
+  font-family: var(--font);
+}
+
+.search-popup-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+.search-popup-results {
+  flex: 1;
+  min-height: 0;
+  padding: 0.5rem 1rem;
+  overflow-y: auto;
+}
+
+.search-popup-results-empty {
+  color: var(--muted);
+  font-size: 0.9rem;
+  padding: 1rem 0;
+  text-align: center;
+}
+
+.search-popup-error {
+  padding: 0.75rem 1rem;
+  margin: 0.5rem 1rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--warn, #f0b429);
+  font-size: 0.9rem;
+  text-align: center;
+  font-weight: 500;
+}
+
+.search-popup-error.hidden {
+  display: none;
+}
+
+/* Result rows */
+.search-popup-result-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: background 0.15s;
+  cursor: default;
+}
+
+.search-popup-result-row:hover {
+  background: var(--surface-2);
+}
+
+.search-popup-result-title {
+  font-weight: 600;
+  flex-shrink: 0;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.search-popup-result-meta {
+  color: var(--muted);
+  font-size: 0.8rem;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-popup-result-actions {
+  display: flex;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.search-popup-result-actions .btn {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  min-height: 1.6rem;
+}
+
+/* Preview tab */
+.search-popup-preview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
+  flex-shrink: 0;
+}
+
+.search-popup-preview-title {
+  margin: 0;
+  font-size: 1rem;
+  flex: 1;
+  word-break: break-word;
+  line-height: 1.3;
+}
+
+.search-popup-preview-actions {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.search-popup-preview-refresh {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  margin-right: 0.25rem;
+}
+
+.search-popup-preview-refresh:hover,
+.search-popup-preview-refresh:focus-visible {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--surface-2);
+  outline: none;
+}
+
+.search-popup-preview-edit {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.search-popup-preview-edit:hover,
+.search-popup-preview-edit:focus-visible {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--surface-2);
+  outline: none;
+}
+
+.search-popup-preview-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 0.15rem;
+}
+
+/* Preview tab container (flex wrapper for each tab) */
+.search-popup-preview-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 0.75rem 1rem;
+  overflow: hidden;
+}
+

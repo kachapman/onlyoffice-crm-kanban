@@ -2,6 +2,26 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [1.8.2] — 2026-06-15
+
+### Search popup — large modal with tabbed deal preview
+- **Feature:** New search button in the header (magnifying glass icon, `btn-secondary`, left of the existing search field). Opens a large modal with a search bar and results list.
+- **Search:** Searches all open deals (`stageType=0`) via `/api/2.0/crm/opportunity/filter?filterValue=...`. Results are enriched with tags. Search triggers on Enter key press.
+- **Results list:** Compact single-line rows showing: deal title (bold), stage · due date · contact · bid value. Inline buttons: "Preview" (opens a tab) and "Open in CRM" (new tab).
+- **Preview tabs:** Max 5 tabs. Each tab shows the full deal preview (standard fields, user fields, description, history & notes, documents) using the exact same rendering as the existing preview modal. Each tab has a deal title and a × close button.
+- **Search tab:** Always present, styled with a left accent border and search icon. Clicking it returns to the search results.
+- **Edit button:** Inside each preview tab, top-right. Opens the deal edit modal pinned to the left (same behavior as the existing preview modal).
+- **Refactoring:** `renderOpportunityPreviewBody()` now delegates to `renderOpportunityPreviewContent(container, data)` — the same rendering logic works in both the old modal and the new popup tabs.
+
+### Bug fixes
+- **Tab content shrinking on switch:** `activateSearchPopupTab()` used a broad selector `[data-tab-content]` that accidentally matched the inner Details/Documents tabs inside the preview body. Switching outer tabs hid both inner tabs, making the preview appear empty/shrunken. Fix: selector narrowed to `.search-popup-tab-content` only.
+- **Missing search input on modal open:** Child combinator `>` in the selector fix prevented matching the search tab content (nested inside `.modal-card-search-popup`). Fix: changed to descendant selector `.search-popup-tab-content`.
+- **Height instability:** `#search-popup-preview-containers` and the search tab content both had `flex: 1` as siblings, splitting the modal space 50/50. When search tab was active, the empty preview containers ate half the height. Fix: `activateSearchPopupTab` now hides the preview containers when search tab is active.
+- **No width scroll on tab bar:** Tab bar uses `overflow-x: hidden` with `flex-shrink: 1` on tabs and `text-overflow: ellipsis` on tab titles.
+- **Centered error for max 5 tabs:** Error message now renders as a centered banner in the search results area instead of a background toast.
+
+- **Files changed:** `public/index.html`, `public/app.js`, `public/styles.css`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`
+
 ## [1.8.1] — 2026-06-14
 
 ### Deal caching — refresh now pulls fresh data

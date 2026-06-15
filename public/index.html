@@ -90,6 +90,12 @@
           <h1 class="hero-title">Workspace <em>dashboard</em></h1>
         </div>
         <div class="hero-actions">
+          <button type="button" id="search-popup-btn" class="btn btn-secondary btn-icon-only" title="Search deals" aria-label="Search deals">
+            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="11" cy="11" r="8"/>
+              <path d="m21 21-4.3-4.3"/>
+            </svg>
+          </button>
           <div class="global-opp-search" id="global-opp-search">
             <label class="visually-hidden" for="global-opp-search-input">Search opportunities</label>
             <input
@@ -702,6 +708,36 @@
     </div>
   </div>
 
-  <script src="app.js?v=1.8.0" type="module"></script>
+  <!-- Search popup modal — large search with tabbed preview (max 5 tabs) -->
+  <div id="search-popup-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="search-popup-title">
+    <div class="modal-backdrop" data-search-popup-dismiss></div>
+    <div class="modal-card modal-card-search-popup">
+      <!-- Tab bar -->
+      <div class="search-popup-tabs" id="search-popup-tabs">
+        <button type="button" class="search-popup-tab search-popup-tab-search active" data-tab="search" title="Search">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          <span>Search</span>
+        </button>
+      </div>
+
+      <!-- Search tab content -->
+      <div class="search-popup-tab-content" data-tab-content="search">
+        <div class="search-popup-input-wrap">
+          <input type="search" id="search-popup-input" class="search-popup-input" placeholder="Search open deals… (press Enter)" autocomplete="off" />
+        </div>
+        <div id="search-popup-results" class="search-popup-results"></div>
+        <div id="search-popup-error" class="search-popup-error hidden"></div>
+      </div>
+
+      <!-- Preview tab containers injected dynamically -->
+      <div id="search-popup-preview-containers"></div>
+
+      <div class="modal-actions">
+        <button type="button" id="search-popup-close" class="btn btn-secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js?v=1.8.2" type="module"></script>
 </body>
 </html>
