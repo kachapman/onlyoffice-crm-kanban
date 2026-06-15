@@ -2,6 +2,51 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [1.8.1] — 2026-06-14
+
+### Deal caching — refresh now pulls fresh data
+- **Root cause:** `refreshAll()` cleared in-memory caches then immediately rehydrated from IndexedDB before the clear transaction committed, repopulating stale data. Also, server-side proxy cache (30s TTL for single-opp, 600s for tags) returned stale data after tag/note edits.
+- **Fix:** `refreshAll()` no longer rehydrates from IndexedDB — hydration only happens once on initial page load via `initCaches()`. `enableCachePersistence()` is now idempotent (guards against double-wrapping). Server-side cache invalidation now covers `DELETE` mutations and invalidates the single-opp `GET:/api/2.0/crm/opportunity/{id}` cache line when tags change. The preview modal refresh button (`⟳`) now appends `?_t=Date.now()` to bypass the proxy cache entirely.
+- **Files changed:** `public/app.js`, `server.py`
+
+### Email width — expanded emails now fill available space
+- **Root cause:** `.mail-detail` and `.opp-preview-mail-embed` had no explicit `width: 100%`, and the mail inbox modal was using `.mail-expanded-embed` (a class with no CSS rules) instead of `.opp-preview-mail-embed`.
+- **Fix:** Added `width: 100%; box-sizing: border-box` to `.mail-detail`, `.opp-preview-mail-embed`, and `.opp-preview-mail-body`. Changed the mail inbox JS to use `.opp-preview-mail-embed` class.
+- **Files changed:** `public/styles.css`, `public/app.js`
+
+### UI freeze when returning from background tab
+- **Root cause:** When a tab is backgrounded, Chrome throttles timers and defers IntersectionObserver callbacks. Returning to the tab fires all deferred callbacks simultaneously, triggering up to 25+ concurrent `fetchOpportunityCustomFields()` calls (5 per group × 5+ groups).
+- **Fix:** Added a 50ms debounced batch collector for intersection callbacks. Added `document.visibilitychange` listener that disconnects all observers when hidden and re-observes after a 500ms delay when returning. `enqueueOpportunityCustomFieldEnrich()` skips work entirely when `document.visibilityState === 'hidden'`.
+- **Files changed:** `public/app.js`
+- **Issue:** ISSUE-004 — resolved
+
+### Attachment note indicator — queue status now visible
+- **Root cause:** `createOpportunityHistoryEvent()` returned `{ queued: true }` on transient CRM errors but callers didn't check the return value, so notes appeared "sent" even when they were only queued for retry.
+- **Fix:** `createOpportunityHistoryEvent()` now explicitly returns `{ queued: true }` or `{ success: true }`. `submitDealEditForm()` and `submitQuickNoteForm()` check the return value and show a toast: "Note queued for retry (CRM is temporarily down). Check the header indicator." The note queue indicator in the header was also made more visible (amber background, larger font).
+- **Files changed:** `public/app.js`, `public/styles.css`
+
+### Quote font — easier to read at small size
+- **Root cause:** The daily quote used "Instrument Serif" (decorative italic serif) at 0.8rem, which was tight and hard to read.
+- **Fix:** Changed to `var(--font)` (DM Sans / system-ui sans-serif), increased to 0.85rem, added `font-weight: 500`, increased line-height to 1.45. Reverted to italic style per user request.
+- **Files changed:** `public/styles.css`
+
+### Preview modal stale data — manual refresh bypasses cache
+- **Root cause:** The preview modal refresh button (`⟳`) re-fetched the same API paths, which were cached by the server-side proxy for 30 seconds (opportunity data, history) or 600 seconds (tags, custom fields).
+- **Fix:** Added `bustCache(path)` helper that appends `?_t=Date.now()`. The preview modal refresh button now passes `force=true` through the entire chain: `openOpportunityPreviewModal(…, true)` → `fetchOpportunityPreviewData(…, true)` → each individual fetch function. This guarantees fresh data on manual refresh.
+- **Files changed:** `public/app.js`
+
+### Amber border lost after deal edit
+- **Root cause:** `fetchOpportunityForUpdate()` returns the core opportunity object but does **not** include tags. The single-opp refresh path in `submitDealEditForm()` and `submitQuickNoteForm()` updated the card with the untagged opportunity, so `renderCard()` couldn't detect "High Priority" and the amber border/background disappeared.
+- **Fix:** Added `await enrichOpportunitiesTags([updatedOpp])` immediately after `fetchOpportunityForUpdate()` in both submit paths. This fetches tags for the updated opportunity before rendering the card, preserving the amber styling.
+- **Files changed:** `public/app.js`
+
+### Changelog popup — shown once per version on first login
+- **New feature:** Modal that displays `CHANGELOG.md` content on first login after a version update. Uses the existing `renderBasicMarkdown()` renderer (headers, lists, bold, italic, links, code). Close button + Escape + backdrop click dismiss the modal. The seen version is persisted in `localStorage` under `changelog_seen_version`, so the modal only reappears when the version changes.
+- **Files changed:** `public/index.html`, `public/app.js`, `public/styles.css`, `server.py`
+- **Server endpoint:** `GET /api/changelog` returns `CHANGELOG.md` as `text/markdown`
+
+---
+
 ## [1.8.0] — 2026-06-12
 
 ### Stale Deals Tile — Attempted, debugged, and scrapped

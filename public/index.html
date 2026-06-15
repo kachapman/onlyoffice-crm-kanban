@@ -687,6 +687,21 @@
     </div>
   </div>
 
-  <script src="app.js?v=1.7.1" type="module"></script>
+  <!-- Changelog modal — shown once per version after login -->
+  <div id="changelog-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="changelog-modal-title">
+    <div class="modal-backdrop" data-changelog-dismiss></div>
+    <div class="modal-card modal-card-changelog">
+      <div class="changelog-modal-head">
+        <h2 id="changelog-modal-title" class="modal-title">What's New</h2>
+        <span id="changelog-version" class="changelog-version"></span>
+      </div>
+      <div id="changelog-body" class="changelog-body"></div>
+      <div class="modal-actions">
+        <button type="button" id="changelog-close" class="btn btn-secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js?v=1.8.0" type="module"></script>
 </body>
 </html>

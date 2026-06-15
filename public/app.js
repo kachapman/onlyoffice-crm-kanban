@@ -298,6 +298,8 @@ function hydrateCacheFromIndexedDB(store, cache, ttl) {
 }
 
 function enableCachePersistence(cache, store) {
+  if (cache._persistenceEnabled) return;
+  cache._persistenceEnabled = true;
   const origSet = cache.set.bind(cache);
   cache.set = (k, v) => { origSet(k, v); persistToIndexedDB(store, k, v); };
   const origClear = cache.clear.bind(cache);
@@ -319,6 +321,15 @@ function hydrateAllCachesFromIndexedDB() {
     enableCachePersistence(state.oppCustomFieldCache, "customFieldCache");
     enableCachePersistence(state.filterResultCache, "filterResultCache");
   });
+}
+
+async function initCaches() {
+  state.oppTagCache = state.oppTagCache || createOppCache(OPP_TAG_CACHE_TTL_MS);
+  state.oppCustomFieldCache = state.oppCustomFieldCache || createOppCache(OPP_CUSTOM_FIELD_CACHE_TTL_MS);
+  state.filterResultCache = state.filterResultCache || createTtlCache(FILTER_RESULT_CACHE_TTL_MS);
+  if (typeof indexedDB !== "undefined") {
+    await hydrateAllCachesFromIndexedDB();
+  }
 }
 
 let userProfileReady = false;
@@ -5392,8 +5403,13 @@ function serializeCrmTimestamp(dateInputValue) {
   return d.toISOString();
 }
 
-async function fetchOpportunityForUpdate(oppId) {
-  const data = await api(`/api/2.0/crm/opportunity/${oppId}`);
+function bustCache(path) {
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}_t=${Date.now()}`;
+}
+
+async function fetchOpportunityForUpdate(oppId, force = false) {
+  const data = await api(force ? bustCache(`/api/2.0/crm/opportunity/${oppId}`) : `/api/2.0/crm/opportunity/${oppId}`);
   return data?.response ?? data?.result ?? data;
 }
 
@@ -8276,12 +8292,13 @@ function populateQuickNoteNotifySelect() {
   populateNotifyUserSelect($("#quick-note-notify"));
 }
 
-async function loadDealEditTags(opp) {
+async function loadDealEditTags(opp, force = false) {
   let tags = getOppTagsFromRecord(opp);
   const id = opp.id ?? opp.ID;
   if (!tags.length && id != null) {
     try {
-      tags = unwrapEntityTags(await api(`/api/2.0/crm/opportunity/tag/${id}`));
+      const path = `/api/2.0/crm/opportunity/tag/${id}`;
+      tags = unwrapEntityTags(await api(force ? bustCache(path) : path));
       opp.tags = tags;
     } catch {
       /* no tags */
@@ -8489,7 +8506,10 @@ async function createOpportunityHistoryEvent(oppId, { content, categoryId, notif
     attachmentNames: attachmentNames || [],
     failedAttachmentNames: failedAttachmentNames || [],
   });
-  if (res && res.queued) return;
+  if (res && res.queued) {
+    // Note was queued (CRM temporarily down) — caller should show "queued" instead of "sent"
+    return { queued: true };
+  }
 
   // Immediate success (no queue needed): record for the attachments status list (10s auto-clear)
   addCompletedNoteQueueEntry({
@@ -8498,6 +8518,7 @@ async function createOpportunityHistoryEvent(oppId, { content, categoryId, notif
     failedNames: failedAttachmentNames || [],
     status: "success",
   });
+  return { success: true };
 }
 
 function renderSelectedAttachments(ctxKey) {
@@ -8707,7 +8728,7 @@ async function submitDealEditForm(e) {
           }
         }
 
-        await createOpportunityHistoryEvent(oppId, {
+        const noteResult = await createOpportunityHistoryEvent(oppId, {
           content: noteBody,
           categoryId,
           notifyUserList,
@@ -8715,6 +8736,9 @@ async function submitDealEditForm(e) {
           attachmentNames: successfulNames,
           failedAttachmentNames: failedNames,
         });
+        if (noteResult && noteResult.queued) {
+          showToast("Note queued for retry (CRM is temporarily down). Check the header indicator.");
+        }
       } catch (err) {
         throw dealEditStepError("Event note", err);
       }
@@ -8751,6 +8775,8 @@ async function submitDealEditForm(e) {
       try {
         const updatedOpp = await fetchOpportunityForUpdate(oppId);
         if (!updatedOpp) { refreshGroup(group); return; }
+        // Ensure tags are present so card styling (amber border) applies correctly.
+        await enrichOpportunitiesTags([updatedOpp]);
         indexOpportunity(updatedOpp);
         const oppIdx = group.opportunities.findIndex(o => Number(o.id ?? o.ID) === oppId);
         if (oppIdx >= 0) group.opportunities[oppIdx] = updatedOpp;
@@ -9035,7 +9061,7 @@ async function submitQuickNoteForm(e) {
         }
       }
 
-      await createOpportunityHistoryEvent(oppId, {
+      const noteResult = await createOpportunityHistoryEvent(oppId, {
         content: noteBody,
         categoryId,
         notifyUserList,
@@ -9043,6 +9069,9 @@ async function submitQuickNoteForm(e) {
         attachmentNames: successfulNames,
         failedAttachmentNames: failedNames,
       });
+      if (noteResult && noteResult.queued) {
+        showToast("Note queued for retry (CRM is temporarily down). Check the header indicator.");
+      }
     } catch (err) {
       throw dealEditStepError("Event note", err);
     }
@@ -9082,6 +9111,8 @@ async function submitQuickNoteForm(e) {
         try {
           const updatedOpp = await fetchOpportunityForUpdate(oppId);
           if (!updatedOpp) { refreshGroup(group); return; }
+          // Ensure tags are present so card styling (amber border) applies correctly.
+          await enrichOpportunitiesTags([updatedOpp]);
           indexOpportunity(updatedOpp);
           const oppIdx = group.opportunities.findIndex(o => Number(o.id ?? o.ID) === oppId);
           if (oppIdx >= 0) group.opportunities[oppIdx] = updatedOpp;
@@ -9599,14 +9630,14 @@ function mergeCustomFieldValues(existing, incoming) {
   return [...byId.values()];
 }
 
-async function fetchOpportunityCustomFieldValues(oppId) {
+async function fetchOpportunityCustomFieldValues(oppId, force = false) {
   const paths = [
     `/api/2.0/crm/opportunity/${oppId}/customfield`,
     `/api/2.0/crm/opportunity/${oppId}/customfields`,
   ];
   for (const path of paths) {
     try {
-      const list = unwrap(await api(path));
+      const list = unwrap(await api(force ? bustCache(path) : path));
       if (list.length) return list;
     } catch {
       /* try next */
@@ -12290,7 +12321,7 @@ function renderMailList(msgs) {
         const fullMail = await fetchMailMessage(id);
         detail.innerHTML = "";
         const embed = document.createElement("div");
-        embed.className = "mail-expanded-embed";
+        embed.className = "opp-preview-mail-embed";
         detail.appendChild(embed);
         renderMailEmbedPanel(embed, fullMail, id, {
           openUrl: portalMailMessageUrl(id)
@@ -13947,7 +13978,7 @@ function buildOpportunityPreviewUserFields(opp, customFieldValues) {
   return rows;
 }
 
-async function fetchAllOpportunityHistory(oppId) {
+async function fetchAllOpportunityHistory(oppId, force = false) {
   const all = [];
   let startIndex = 0;
   while (all.length < OPP_PREVIEW_HISTORY_MAX) {
@@ -13957,7 +13988,8 @@ async function fetchAllOpportunityHistory(oppId) {
       entityType: "opportunity",
       entityId: String(oppId),
     });
-    const data = await api(`/api/2.0/crm/history/filter?${params}`);
+    const path = `/api/2.0/crm/history/filter?${params}`;
+    const data = await api(force ? bustCache(path) : path);
     const page = unwrapHistoryEvents(data);
     if (!page.length) break;
     all.push(...page);
@@ -13973,7 +14005,7 @@ async function fetchAllOpportunityHistory(oppId) {
   return all.slice(0, OPP_PREVIEW_HISTORY_MAX);
 }
 
-async function fetchOpportunityPreviewData(oppId) {
+async function fetchOpportunityPreviewData(oppId, force = false) {
   const id = Number(oppId);
   if (!Number.isFinite(id) || id <= 0) throw new Error("Invalid opportunity id");
 
@@ -13984,23 +14016,24 @@ async function fetchOpportunityPreviewData(oppId) {
     loadHistoryCategories(),
   ]);
 
-  const opp = await fetchOpportunityForUpdate(id);
+  const opp = await fetchOpportunityForUpdate(id, force);
   const [customFieldValues, history, tags, documents] = await Promise.all([
-    fetchOpportunityCustomFieldValues(id),
-    fetchAllOpportunityHistory(id),
-    loadDealEditTags(opp),
-    fetchOpportunityDocuments(id),
+    fetchOpportunityCustomFieldValues(id, force),
+    fetchAllOpportunityHistory(id, force),
+    loadDealEditTags(opp, force),
+    fetchOpportunityDocuments(id, force),
   ]);
 
   return { opp, customFieldValues, history, tags, documents, oppId: id };
 }
 
-async function fetchOpportunityDocuments(oppId) {
+async function fetchOpportunityDocuments(oppId, force = false) {
   const id = Number(oppId);
   if (!Number.isFinite(id) || id <= 0) return [];
   try {
     // CRM opportunity attached files endpoint (proxy will forward)
-    const data = await api(`/api/2.0/crm/opportunity/${id}/files`);
+    const path = `/api/2.0/crm/opportunity/${id}/files`;
+    const data = await api(force ? bustCache(path) : path);
     return unwrap(data);
   } catch {
     return [];
@@ -14439,7 +14472,7 @@ function restoreSideBySideCards() {
   }
 }
 
-async function openOpportunityPreviewModal(oppId, titleHint = "", group = null) {
+async function openOpportunityPreviewModal(oppId, titleHint = "", group = null, force = false) {
   const modal = $("#opp-preview-modal");
   const body = $("#opp-preview-body");
   const titleEl = $("#opp-preview-title");
@@ -14454,7 +14487,7 @@ async function openOpportunityPreviewModal(oppId, titleHint = "", group = null) 
   modal.classList.remove("hidden");
 
   try {
-    const data = await fetchOpportunityPreviewData(id);
+    const data = await fetchOpportunityPreviewData(id, force);
     const resolvedGroup = group || findGroupForOpportunity(id);
     setOpportunityPreviewContext(id, data.opp, resolvedGroup);
     titleEl.textContent = data.opp.title || data.opp.Title || titleHint || `Opportunity #${id}`;
@@ -14477,7 +14510,9 @@ function bindOpportunityPreviewModal() {
     const ctx = oppPreviewContext;
     if (ctx && ctx.oppId != null) {
       const titleHint = ctx.opp ? (ctx.opp.title || ctx.opp.Title || "") : "";
-      openOpportunityPreviewModal(ctx.oppId, titleHint, ctx.group || null).catch(() => {});
+      // force=true bypasses the 30-second server-side proxy cache so the preview
+      // always reflects the latest CRM data (tags, history, custom fields).
+      openOpportunityPreviewModal(ctx.oppId, titleHint, ctx.group || null, true).catch(() => {});
     }
   });
   $("#opp-preview-edit")?.addEventListener("click", (e) => {
@@ -15246,6 +15281,8 @@ function renderTasksByUser() {
 }
 
 const groupCardObservers = new Map();
+const observerBatch = new Map(); // groupId -> Set(oppIds)
+let observerFlushTimeout = null;
 const oppCustomFieldEnrich = {
   queue: [],
   inFlight: new Set(),
@@ -15263,6 +15300,38 @@ function opportunityHasCustomFieldLists(opp) {
   ];
   return lists.some((l) => Array.isArray(l) && l.length);
 }
+
+function flushObserverBatch() {
+  observerFlushTimeout = null;
+  for (const [groupId, oppIds] of observerBatch) {
+    const group = state.groups.find((g) => g.id === groupId);
+    if (!group) continue;
+    for (const oppId of oppIds) {
+      const opp = findOpportunityInGroup(group, oppId);
+      if (opp) enqueueOpportunityCustomFieldEnrich(opp, group);
+    }
+  }
+  observerBatch.clear();
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    // Disconnect all observers to prevent a burst of callbacks when the tab returns
+    for (const entry of groupCardObservers.values()) {
+      entry.observer.disconnect();
+    }
+    groupCardObservers.clear();
+  } else {
+    // Re-observe after a short delay to let the browser settle
+    setTimeout(() => {
+      for (const group of state.groups) {
+        if (group._el && !tileBodyCollapsed(`group-${group.id}`)) {
+          observeOpportunityCardsInGroup(group);
+        }
+      }
+    }, 500);
+  }
+});
 
 function findOpportunityInGroup(group, oppId) {
   const id = String(oppId);
@@ -15343,6 +15412,7 @@ async function drainOppCustomFieldEnrichQueue() {
 }
 
 function enqueueOpportunityCustomFieldEnrich(opp, group) {
+  if (document.visibilityState === 'hidden') return;
   const id = String(opp.id ?? opp.ID);
   if (!id || !group) return;
   if (opportunityHasCustomFieldLists(opp)) return;
@@ -15374,12 +15444,26 @@ function observeOpportunityCardsInGroup(group) {
   const tileRoot = group._el?.closest(".dashboard-tile") || null;
   const observer = new IntersectionObserver(
     (entries) => {
+      if (document.visibilityState === 'hidden') return;
+      let hasNew = false;
       for (const entry of entries) {
         if (!entry.isIntersecting) continue;
         const card = entry.target;
         const oppId = card.dataset.opportunityId;
-        const opp = findOpportunityInGroup(group, oppId);
-        if (opp) enqueueOpportunityCustomFieldEnrich(opp, group);
+        if (!oppId) continue;
+        let set = observerBatch.get(group.id);
+        if (!set) {
+          set = new Set();
+          observerBatch.set(group.id, set);
+        }
+        if (!set.has(oppId)) {
+          set.add(oppId);
+          hasNew = true;
+        }
+      }
+      if (hasNew) {
+        if (observerFlushTimeout) clearTimeout(observerFlushTimeout);
+        observerFlushTimeout = setTimeout(flushObserverBatch, 50);
       }
     },
     { root: tileRoot, rootMargin: "160px 0px", threshold: 0.02 }
@@ -15406,6 +15490,13 @@ async function refreshGroup(group, { force = false } = {}) {
   if (!force && tileBodyCollapsed(tileId)) {
     showTileCollapsedHint(tileId, "Minimized — expand to load deals");
     return;
+  }
+  // On a manual force-refresh, clear the filter result cache for this group so
+  // we always fetch fresh data from the CRM (not a 30-second stale cached response).
+  if (force) {
+    const baseQs = buildFilterQuery(group);
+    const cacheKey = `${group.id}::${baseQs}`;
+    state.filterResultCache?.delete(cacheKey);
   }
   // Show tile-level loading indicator after 200ms (avoids flash on fast/cached refreshes)
   let loadingTimer;
@@ -15462,10 +15553,6 @@ async function refreshAll() {
     state.oppCustomFieldCache.clear();
     state.filterResultCache = state.filterResultCache || createTtlCache(FILTER_RESULT_CACHE_TTL_MS);
     state.filterResultCache.clear();
-    // Hydrate persistent caches from IndexedDB (survives page reloads)
-    if (typeof indexedDB !== "undefined") {
-      await hydrateAllCachesFromIndexedDB();
-    }
     state.tileLayout = loadLayoutFromStorage();
     // Use allSettled so tiles can still render even if some CRM loads fail (e.g. during crash).
     // CRM-dependent loads will have empty state; banner will be shown by api/presence catches.
@@ -15580,6 +15667,62 @@ async function checkSession() {
   return (await (await fetch("/api/session", { credentials: "same-origin" })).json()).authenticated;
 }
 
+// --- Changelog modal ---
+const CHANGELOG_SEEN_KEY = "changelog_seen_version";
+
+async function showChangelogModal(version) {
+  const modal = $("#changelog-modal");
+  const body = $("#changelog-body");
+  const verLabel = $("#changelog-version");
+  if (!modal || !body) return;
+
+  verLabel.textContent = version ? `v${version}` : "";
+  body.innerHTML = '<p class="opp-preview-loading">Loading changelog…</p>';
+  modal.classList.remove("hidden");
+
+  try {
+    const res = await fetch("/api/changelog", { credentials: "same-origin" });
+    const text = await res.text();
+    body.innerHTML = renderBasicMarkdown(text);
+  } catch (err) {
+    body.innerHTML = `<p class="opp-preview-error">Could not load changelog: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function closeChangelogModal(version) {
+  const modal = $("#changelog-modal");
+  if (modal) modal.classList.add("hidden");
+  if (version) {
+    localStorage.setItem(CHANGELOG_SEEN_KEY, String(version));
+  }
+}
+
+function maybeShowChangelog(version) {
+  if (!version) return;
+  const seen = localStorage.getItem(CHANGELOG_SEEN_KEY);
+  if (seen === String(version)) return;
+  // Defer slightly so the dashboard shell paints first
+  setTimeout(() => {
+    showChangelogModal(version);
+  }, 300);
+}
+
+function bindChangelogModal(version) {
+  const modal = $("#changelog-modal");
+  if (!modal || modal.dataset.bound) return;
+  modal.dataset.bound = "1";
+
+  $("#changelog-close")?.addEventListener("click", () => closeChangelogModal(version));
+  modal.querySelectorAll("[data-changelog-dismiss]").forEach((el) => {
+    el.addEventListener("click", () => closeChangelogModal(version));
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && modal && !modal.classList.contains("hidden")) {
+      closeChangelogModal(version);
+    }
+  });
+}
+
 async function init() {
   // Load any previously queued CRM mutations (survives reload / offline periods).
   loadMutationQueue();
@@ -15681,8 +15824,11 @@ async function init() {
       // Start presence (bind button, heartbeats for self-online, snapshot for indicators/badge) immediately.
       // This makes the header icon show indicators right away, and button responsive without waiting for refreshAll.
       try { ensurePresenceOnLogin(); } catch {}
+      bindChangelogModal(config.version);
+      maybeShowChangelog(config.version);
       // Defer refreshAll to let the browser paint the app shell first.
       setTimeout(async () => {
+        await initCaches();
         await refreshAll();
         try { ensurePresenceOnLogin(); } catch {}
         loadTaskCategories({ force: true }).catch(() => {});
@@ -15710,9 +15856,12 @@ async function init() {
     showApp();
     // Start presence so header icon gets indicators right away.
     try { ensurePresenceOnLogin(); } catch {}
+    bindChangelogModal(config.version);
+    maybeShowChangelog(config.version);
     // Defer refreshAll + post-refresh setup to the next task so the browser paints first.
     // This reduces FCP/LCP blocking and helps TBT by moving heavy CRM renders off the critical path.
     setTimeout(async () => {
+      await initCaches();
       await refreshAll();
       try { ensurePresenceOnLogin(); } catch {}
       loadTaskCategories({ force: false }).catch(() => {});

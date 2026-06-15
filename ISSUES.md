@@ -75,7 +75,7 @@ We wanted to make "My notifications" (events where the current user was in notif
 
 ## ISSUE-004 — Dashboard UI freeze / hang when returning from background tab
 
-**Status:** 🔍 Investigated 2026-06-12 — root cause identified, fix pending
+**Status:** ✅ Fixed 2026-06-14 — implemented in `public/app.js` (see below)
 **Priority:** Medium
 **Area:** Performance / IntersectionObserver / browser tab throttling (`public/app.js`)
 
@@ -98,11 +98,18 @@ User reports the dashboard becomes unresponsive or "hangs" when the tab has been
 3. Add a `document.visibilitychange` listener to pause and resume the intersection observer.
 4. Optionally, add a small delay (e.g., 500ms) after tab visibility returns before re-enabling observers, to let the browser settle.
 
-### Files to change
+### Fix applied
+
+1. **Batch observer callbacks** — `observerBatch` (Map groupId → Set oppIds) collects all intersecting cards in a 50ms debounce, then flushes once via `flushObserverBatch()` instead of firing per-card.
+2. **Skip when hidden** — `enqueueOpportunityCustomFieldEnrich` returns immediately if `document.visibilityState === 'hidden'`; observer callback also bails early.
+3. **Pause/resume on visibilitychange** — When the tab is hidden, all group observers are disconnected and `groupCardObservers` is cleared. When the tab returns, a 500ms delay lets the browser settle before re-observing all visible groups.
+4. **Result** — Eliminates the burst of 25+ concurrent API calls + DOM rebuilds that caused the freeze.
+
+### Files changed
 
 | File | Role |
 |------|------|
-| `public/app.js` | `observeOpportunityCardsInGroup`, `enqueueOpportunityCustomFieldEnrich`, `drainOppCustomFieldEnrichQueue` |
+| `public/app.js` | `observeOpportunityCardsInGroup`, `enqueueOpportunityCustomFieldEnrich`, `drainOppCustomFieldEnrichQueue`, `flushObserverBatch`, visibilitychange listener |
 | `public/styles.css` | (none expected) |
 
 ---
@@ -170,3 +177,148 @@ The dashboard previously loaded `/api/2.0/mail/messages` which returned individu
 - Accounts/folders for badge: `/api/2.0/mail/accounts`, `/api/2.0/mail/folders?accountId=...`
 - History mail parse: `parseHistoryMailPayload`, `isMailLinkedHistoryEvent`, `extractMailMessageIds`, `crmMailReceivedLine`, `renderMailHistoryReceivedSummary`
 - See also CHANGELOG / RELEASE notes for v1.7.0 context
+
+---
+
+## ISSUE-005 — Deal caching: stale data after edits and refresh
+
+**Status:** ✅ Fixed 2026-06-14 — v1.8.1
+**Priority:** High
+**Area:** Dashboard caching (`public/app.js`, `server.py`)
+
+### Summary
+
+After editing a deal (tags, notes, due date) and clicking the tile refresh button or the global Refresh All, the dashboard still showed stale data. The user confirmed the changes were saved in the native CRM, but the dashboard didn't reflect them.
+
+### Root cause
+
+**Client-side (IndexedDB):** `refreshAll()` called `state.filterResultCache.clear()` and then `await hydrateAllCachesFromIndexedDB()`. The `clear()` method triggers `clearIndexedDBStore()` fire-and-forget (not awaited), while hydration reads from IndexedDB before the clear transaction commits. This repopulated the in-memory cache with stale data.
+
+**Server-side (proxy cache):** `server.py` caches GET responses for 30 seconds (`/crm/opportunity/{id}`) and 600 seconds (tags, custom fields). The invalidation logic only handled `PUT`/`POST`, not `DELETE`, and didn't invalidate the single-opp cache line on tag changes.
+
+### Fix
+
+1. `refreshAll()` no longer calls `hydrateAllCachesFromIndexedDB()` — hydration only happens on initial load via `initCaches()`.
+2. `enableCachePersistence()` made idempotent (prevents double-wrapping).
+3. `refreshGroup({ force: true })` now explicitly clears the filter result cache entry before fetching.
+4. Server-side: Added `DELETE` to mutation invalidation, and tag changes now invalidate the single-opp cache line.
+5. Preview modal refresh button (`⟳`) appends `?_t=Date.now()` to bypass the proxy cache entirely.
+
+### Files changed
+
+| File | Role |
+|------|------|
+| `public/app.js` | `initCaches()`, `refreshAll()`, `refreshGroup()`, `enableCachePersistence()` idempotency, `bustCache()` helper |
+| `server.py` | Cache invalidation for `DELETE`, single-opp cache invalidation on tag changes |
+
+---
+
+## ISSUE-006 — Amber border lost after deal edit
+
+**Status:** ✅ Fixed 2026-06-14 — v1.8.1
+**Priority:** High
+**Area:** Card rendering / tag enrichment (`public/app.js`)
+
+### Summary
+
+After editing a deal (e.g., adding a note via quick note or deal edit), the card in the group tile lost its amber border and background. The "High Priority" tag was still present on the deal in native CRM, but the dashboard card no longer showed the styling.
+
+### Root cause
+
+`fetchOpportunityForUpdate()` returns the core opportunity object but does **not** include the `tags` property. The targeted single-opp refresh path in `submitDealEditForm()` and `submitQuickNoteForm()` updated the in-memory opportunity with the untagged object, then called `renderCard()`. Since `oppHasTag(opp, "High Priority")` found no tags, the `.card--high-priority` class was not applied.
+
+### Fix
+
+Added `await enrichOpportunitiesTags([updatedOpp])` immediately after `fetchOpportunityForUpdate()` in both submit paths. This fetches tags for the updated opportunity before rendering the card, preserving the amber border/background styling.
+
+### Files changed
+
+| File | Role |
+|------|------|
+| `public/app.js` | `submitDealEditForm()`, `submitQuickNoteForm()` — tag enrichment after fetch |
+
+---
+
+## ISSUE-007 — Attachment note with no failure indicator
+
+**Status:** ✅ Fixed 2026-06-14 — v1.8.1
+**Priority:** High
+**Area:** Note submission / mutation queue (`public/app.js`)
+
+### Summary
+
+A note with a PDF attachment submitted on a deal tile did not appear in the CRM. The user did not see any error indicator or failure message. The note was silently queued for retry but the UI showed "Note saved" as if it succeeded.
+
+### Root cause
+
+`createOpportunityHistoryEvent()` used `withCrmQueueOnTransient()` which queues the mutation on transient errors and returns `{ queued: true }`. The callers (`submitDealEditForm()`, `submitQuickNoteForm()`) did not check the return value, so they always showed the success toast regardless of whether the note was actually sent or queued.
+
+### Fix
+
+1. `createOpportunityHistoryEvent()` now explicitly returns `{ queued: true }` or `{ success: true }`.
+2. Callers check the return value and show "Note queued for retry (CRM is temporarily down)" when appropriate.
+3. The note queue indicator in the header was made more visible (amber background, larger font).
+
+### Files changed
+
+| File | Role |
+|------|------|
+| `public/app.js` | `createOpportunityHistoryEvent()`, `submitDealEditForm()`, `submitQuickNoteForm()` |
+| `public/styles.css` | Note queue indicator visibility |
+
+---
+
+## ISSUE-008 — Preview modal manual refresh returns stale data
+
+**Status:** ✅ Fixed 2026-06-14 — v1.8.1
+**Priority:** Medium
+**Area:** Preview modal / server proxy cache (`public/app.js`)
+
+### Summary
+
+Clicking the manual refresh button (`⟳`) in the preview modal still showed stale data even after edits were confirmed in native CRM. The user had to wait ~30 seconds for the server proxy cache to expire.
+
+### Root cause
+
+The preview modal refresh button re-fetched the same API paths without any cache-busting parameter. The server-side proxy cache (`_proxy_cache`) stores GET responses for 30 seconds (opportunity data, history) and 600 seconds (tags, custom fields). So the manual refresh was returning the cached stale response.
+
+### Fix
+
+Added `bustCache(path)` helper that appends `?_t=Date.now()` to any API path. The preview modal refresh button now passes `force=true` through the entire chain: `openOpportunityPreviewModal(…, true)` → `fetchOpportunityPreviewData(…, true)` → each individual fetch function (`fetchOpportunityForUpdate`, `fetchOpportunityCustomFieldValues`, `fetchAllOpportunityHistory`, `loadDealEditTags`, `fetchOpportunityDocuments`).
+
+### Files changed
+
+| File | Role |
+|------|------|
+| `public/app.js` | `bustCache()`, `fetchOpportunityForUpdate()`, `fetchOpportunityCustomFieldValues()`, `fetchAllOpportunityHistory()`, `loadDealEditTags()`, `fetchOpportunityDocuments()`, `fetchOpportunityPreviewData()`, `openOpportunityPreviewModal()`, preview refresh button |
+
+---
+
+## ISSUE-009 — Changelog popup on first login after update
+
+**Status:** ✅ Implemented 2026-06-14 — v1.8.1
+**Priority:** Low
+**Area:** UX / onboarding (`public/app.js`, `public/index.html`, `public/styles.css`, `server.py`)
+
+### Summary
+
+New feature: Show a modal with the changelog content when the user logs in after a version update. The modal should only appear once per version — if the user closes it, they don't see it again until the next version update.
+
+### Implementation
+
+1. **Server:** `GET /api/changelog` endpoint reads `CHANGELOG.md` and returns it as `text/markdown`.
+2. **Client:** After login (or session restore), the app fetches `/api/config` to get the current version, compares it with `localStorage.getItem("changelog_seen_version")`, and shows the modal if different.
+3. **Rendering:** Uses the existing `renderBasicMarkdown()` function (headers, lists, bold, italic, links, code, etc.).
+4. **Dismissal:** Close button, Escape key, or backdrop click. Saves the seen version to `localStorage`.
+5. **Defer:** 300ms delay so the dashboard shell paints first.
+
+### Files changed
+
+| File | Role |
+|------|------|
+| `public/index.html` | Modal markup (`#changelog-modal`, `#changelog-body`, `#changelog-close`) |
+| `public/app.js` | `showChangelogModal()`, `closeChangelogModal()`, `maybeShowChangelog()`, `bindChangelogModal()` |
+| `public/styles.css` | `.modal-card-changelog`, `.changelog-body`, `.changelog-version`, markdown typography |
+| `server.py` | `GET /api/changelog` endpoint |
+| `CHANGELOG.md` | Updated with v1.8.1 release notes |
+| `docs/RELEASE_v1.8.1.md` | Release notes file |

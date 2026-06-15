@@ -869,6 +869,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 },
             )
             return
+        if api_path == "/api/changelog":
+            changelog_path = Path(__file__).parent / "CHANGELOG.md"
+            if changelog_path.exists():
+                body = changelog_path.read_text("utf-8")
+            else:
+                body = "# Changelog\n\nNo changelog available."
+            self.send_response(200)
+            self.send_header("Content-Type", "text/markdown; charset=utf-8")
+            self.send_header("Content-Length", str(len(body.encode("utf-8"))))
+            self.end_headers()
+            self.wfile.write(body.encode("utf-8"))
+            return
         if api_path == "/api/session":
             jar = cookies.SimpleCookie(self.headers.get("Cookie", ""))
             _json_response(self, 200, {"authenticated": SESSION_COOKIE in jar})
@@ -970,11 +982,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             p = api_path.lower()
             if "/crm/opportunity/tag" in p:
                 _proxy_cache.invalidate_prefix("GET:/api/2.0/crm/opportunity/tag")
+                _proxy_cache.invalidate_prefix("GET:/api/2.0/crm/opportunity/filter")
+                # Also invalidate the single-opp cache line for the affected opportunity
+                m = re.search(r"/crm/opportunity/(\d+)", p)
+                if m:
+                    _proxy_cache.invalidate_prefix(f"GET:/api/2.0/crm/opportunity/{m.group(1)}")
             elif "/crm/opportunity/stage" in p:
                 _proxy_cache.invalidate_prefix("GET:/api/2.0/crm/opportunity/stage")
             elif "/crm/opportunity/customfield" in p or "/customfield/" in p:
                 _proxy_cache.invalidate_prefix("GET:/api/2.0/crm/opportunity/")  # nuke all opp caches (rare mutation)
-            elif "/crm/opportunity/" in p and method in ("PUT", "POST"):
+            elif "/crm/opportunity/" in p and method in ("PUT", "POST", "DELETE"):
                 # Opp update — invalidate filter results + this specific opp's single-opp cache line
                 _proxy_cache.invalidate_prefix("GET:/api/2.0/crm/opportunity/filter")
                 _proxy_cache.invalidate_prefix(f"GET:{api_path}")
