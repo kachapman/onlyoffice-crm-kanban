@@ -1,7 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
-**Current version:** 1.8.2 (see CHANGELOG.md)  
-**Last session summary (for next resume):** v1.8.2 (committed + pushed): Search popup feature with tabbed preview. Bug fixes: (1) `activateSearchPopupTab()` selector `[data-tab-content]` caught inner Details/Documents tabs inside preview body — when switching outer tabs, those inner tabs got hidden, making preview appear empty/shrunken. Fixed by narrowing selector to `.search-popup-tab-content`. (2) Child combinator `>` prevented matching search tab content (nested in `.modal-card-search-popup`). Fixed with descendant selector. (3) Height instability — `#search-popup-preview-containers` and search tab content both had `flex:1` as siblings, splitting modal space. Preview containers now hidden when search tab active. (4) Width scroll — `overflow-x:hidden + flex-shrink:1 + text-overflow:ellipsis`. (5) Error for max 5 tabs now centered banner.
+**Current version:** 1.85 (see CHANGELOG.md)  
+**Last session summary (for next resume):** v1.85 (committed + pushed): Bookmark sidebar feature — collapsible right sidebar with bookmarked deal preview tabs. Trigger tab vertical with one-letter-per-row "Bookmarks". Sidebar strip 220px with drag-and-drop reorderable tabs (max 15). Preview panel 880px. Bookmark ribbon on every card and search popup preview. Edit button in preview header opens deal edit modal positioned to the left of sidebar for side-by-side reference. Filled ribbon removes bookmark (no × button). Persistence via localStorage + server profile. Chevron-right sidebar toggle. Subtle tab shadows.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 

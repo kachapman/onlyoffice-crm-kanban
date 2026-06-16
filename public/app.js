@@ -11,6 +11,8 @@ const LAYOUT_STORAGE_KEY = "oo_board_layout_v2";
 const HIDDEN_FEED_STORAGE_KEY = "oo_board_hidden_feed_v1";
 const FEED_KEYWORD_STORAGE_KEY = "oo_board_feed_keyword_v1";
 const GROUP_TEMPLATES_STORAGE_KEY = "oo_board_group_templates_v1";
+const BOOKMARKED_STORAGE_KEY = "oo_board_bookmarked_v1";
+const MAX_BOOKMARKED_DEALS = 15;
 const FEED_DAYS = 30;
 const FEED_CACHE_TTL_MS = 5 * 60 * 1000;
 const FEED_MAX_EVENTS = 150;
@@ -377,6 +379,8 @@ const state = {
   presenceModalOpen: false,
   presenceSelectedUserId: null,
   hasPresenceTile: false,   // persisted via tileLayout or a small flag; controls whether the tile is in the top panel
+  bookmarkedDeals: [],      // [{ oppId, title, addedAt }]
+  activeBookmarkTab: null,  // oppId of the expanded preview
 };
 
 function crmOpportunityUrl(id) {
@@ -3522,6 +3526,7 @@ function buildUserProfilePayload() {
     groupTemplates: state.groupTemplates,
     hiddenFeedKeys: serializeHiddenFeedEntries(),
     feedKeywordFilter: state.feedKeywordFilter || "",
+    bookmarkedDeals: state.bookmarkedDeals.map((d) => stripBookmarkedRuntimeFields(d)),
   };
 }
 
@@ -3559,6 +3564,31 @@ function applyUserProfile(profile) {
     : loadLocalKanbanTilesFromStorage().map((k) => ({ ...newLocalKanbanTile(), ...stripLocalKanbanRuntimeFields(k) }));
 
   state.groupTemplates = Array.isArray(profile.groupTemplates) ? profile.groupTemplates : [];
+
+  // Bookmarked deals
+  if (Array.isArray(profile.bookmarkedDeals)) {
+    state.bookmarkedDeals = profile.bookmarkedDeals.map((d) => ({
+      oppId: Number(d.oppId),
+      title: String(d.title || ""),
+      addedAt: String(d.addedAt || new Date().toISOString()),
+    })).filter((d) => Number.isFinite(d.oppId) && d.oppId > 0);
+  } else {
+    try {
+      const raw = localStorage.getItem(BOOKMARKED_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          state.bookmarkedDeals = parsed.map((d) => ({
+            oppId: Number(d.oppId),
+            title: String(d.title || ""),
+            addedAt: String(d.addedAt || new Date().toISOString()),
+          })).filter((d) => Number.isFinite(d.oppId) && d.oppId > 0);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 function persistProfileToLocalStorage() {
@@ -3571,6 +3601,7 @@ function persistProfileToLocalStorage() {
   localStorage.setItem(GROUP_TEMPLATES_STORAGE_KEY, JSON.stringify(payload.groupTemplates));
   localStorage.setItem(HIDDEN_FEED_STORAGE_KEY, JSON.stringify(payload.hiddenFeedKeys));
   localStorage.setItem(FEED_KEYWORD_STORAGE_KEY, payload.feedKeywordFilter);
+  localStorage.setItem(BOOKMARKED_STORAGE_KEY, JSON.stringify(payload.bookmarkedDeals || []));
 }
 
 function profileHasDashboardData(profile) {
@@ -3593,6 +3624,13 @@ function loadLocalUserProfileBundle() {
     groupTemplates: loadGroupTemplates(),
     hiddenFeedKeys: hiddenFeedEntriesToPayload(loadHiddenFeedEntriesFromStorage()),
     feedKeywordFilter: localStorage.getItem(FEED_KEYWORD_STORAGE_KEY) || "",
+    bookmarkedDeals: (() => {
+      try {
+        const raw = localStorage.getItem(BOOKMARKED_STORAGE_KEY);
+        if (raw) return JSON.parse(raw);
+      } catch { /* ignore */ }
+      return [];
+    })(),
   };
 }
 
@@ -3731,6 +3769,18 @@ function loadLocalKanbanTilesFromStorage() {
 function saveLocalKanbanTilesToStorage() {
   const slim = (state.localKanbanTiles || []).map((k) => stripLocalKanbanRuntimeFields(k));
   localStorage.setItem(LOCAL_KANBAN_TILES_STORAGE_KEY, JSON.stringify(slim));
+  scheduleUserProfileSave();
+}
+
+function stripBookmarkedRuntimeFields(entry) {
+  if (!entry || typeof entry !== "object") return entry;
+  const { _cachedData, ...rest } = entry;
+  return rest;
+}
+
+function saveBookmarkedDealsToStorage() {
+  const slim = state.bookmarkedDeals.map((d) => stripBookmarkedRuntimeFields(d));
+  localStorage.setItem(BOOKMARKED_STORAGE_KEY, JSON.stringify(slim));
   scheduleUserProfileSave();
 }
 
@@ -6112,6 +6162,12 @@ function appendCardDetailLine(container, label, value) {
 
 const CARD_ICON_PREVIEW_SCREEN = `<svg class="card-action-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>`;
 
+/** Bookmark ribbon SVG — outline (not bookmarked) vs filled (bookmarked). */
+function bookmarkRibbonSvg(filled = false) {
+  const fillAttr = filled ? 'currentColor' : 'none';
+  return `<svg class="bookmark-ribbon-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="${fillAttr}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>`;
+}
+
 function renderCard(opp, group, showStagePill) {
   const card = document.createElement("article");
   card.className = "card" + (oppHasTag(opp, "High Priority") ? " card--high-priority" : "");
@@ -6229,6 +6285,28 @@ function renderCard(opp, group, showStagePill) {
     due.textContent = `Due ${dueLabel}`;
     card.appendChild(due);
   }
+
+  // Bookmark ribbon button (bottom-right)
+  const oppId = opp.id ?? opp.ID;
+  const isBookmarked = isDealBookmarked(oppId);
+  const bookmarkBtn = document.createElement("button");
+  bookmarkBtn.type = "button";
+  bookmarkBtn.className = "card-bookmark-btn" + (isBookmarked ? " bookmarked" : "");
+  bookmarkBtn.title = isBookmarked ? "Remove bookmark" : "Bookmark deal";
+  bookmarkBtn.setAttribute("aria-label", bookmarkBtn.title);
+  bookmarkBtn.dataset.oppId = oppId;
+  bookmarkBtn.innerHTML = bookmarkRibbonSvg(isBookmarked);
+  bookmarkBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const id = Number(opp.id ?? opp.ID);
+    if (isDealBookmarked(id)) {
+      removeBookmarkDeal(id);
+    } else {
+      addBookmarkDeal(id, opp.title || opp.Title || "");
+    }
+  });
+  card.appendChild(bookmarkBtn);
 
   return card;
 }
@@ -8397,7 +8475,56 @@ async function openDealEditModal(opp, group) {
         layoutSideBySideDealEditAndSearchPopup();
       }
     }
+    // Bookmark sidebar edit: position edit modal left of the sidebar so user sees both preview + edit form
+    const bmSidebar = $("#bookmark-sidebar");
+    if (state.dealEdit && bmSidebar && !bmSidebar.classList.contains("sidebar-hidden") && state.activeBookmarkTab && Number(state.activeBookmarkTab) === Number(state.dealEdit.oppId)) {
+      layoutSideBySideDealEditAndBookmark();
+    }
   }, 80);
+}
+
+function layoutSideBySideDealEditAndBookmark() {
+  const sidebar = $("#bookmark-sidebar");
+  const editModal = $("#deal-edit-modal");
+  if (!sidebar || sidebar.classList.contains("sidebar-hidden") || !editModal || editModal.classList.contains("hidden")) return;
+  const editCard = editModal.querySelector(".modal-card");
+  if (!editCard) return;
+
+  if (editCard.dataset.origStyle == null) editCard.dataset.origStyle = editCard.getAttribute("style") || "";
+
+  const isMobile = window.innerWidth < 700;
+  const gap = 12;
+
+  if (isMobile) {
+    const w = Math.min(720, window.innerWidth - 24);
+    editCard.style.cssText = `position:fixed!important; left:12px!important; top:20px!important; width:${w}px!important; max-height:45vh!important; overflow:auto!important; z-index:2100!important; margin:0!important; pointer-events:auto!important;`;
+  } else {
+    const sbRect = sidebar.getBoundingClientRect();
+    const editW = Math.min(520, Math.floor(window.innerWidth * 0.4));
+    const left = Math.max(12, sbRect.left - editW - gap);
+    const top = 36;
+    editCard.style.cssText = `position:fixed!important; left:${left}px!important; top:${top}px!important; width:${editW}px!important; max-height:92vh!important; overflow:auto!important; z-index:2100!important; margin:0!important; pointer-events:auto!important; box-shadow:var(--shadow);`;
+  }
+
+  const back = editModal.querySelector(".modal-backdrop");
+  if (back) {
+    back.style.display = "none";
+    back.dataset.sideHidden = "1";
+  }
+  editModal.style.pointerEvents = "none";
+  editModal.style.zIndex = "2010";
+
+  // Hook resize for re-layout
+  if (!window._bookmarkEditResizeHooked) {
+    window._bookmarkEditResizeHooked = true;
+    window.addEventListener("resize", () => {
+      const s = $("#bookmark-sidebar");
+      const d = $("#deal-edit-modal");
+      if (s && !s.classList.contains("sidebar-hidden") && d && !d.classList.contains("hidden") && state.activeBookmarkTab) {
+        layoutSideBySideDealEditAndBookmark();
+      }
+    }, { passive: true });
+  }
 }
 
 /* Upload a single file for note attachment using the native CRM handler.
@@ -14809,6 +14936,7 @@ async function openSearchPreviewTab(oppId, titleHint) {
   container.className = "search-popup-tab-content";
   container.dataset.tabContent = `preview-${id}`;
   container.style.display = "none";
+  const bookmarkIcon = bookmarkRibbonSvg(isDealBookmarked(id));
   container.innerHTML = `
     <div class="search-popup-preview-container">
         <div class="search-popup-preview-head">
@@ -14816,6 +14944,7 @@ async function openSearchPreviewTab(oppId, titleHint) {
         <div class="search-popup-preview-actions">
           <button type="button" class="search-popup-preview-refresh" data-refresh-id="${id}" title="Refresh">⟳</button>
           <button type="button" class="search-popup-preview-edit" data-edit-id="${id}" title="Edit deal">✎</button>
+          <button type="button" class="search-popup-preview-bookmark" data-opp-id="${id}" title="Bookmark deal">${bookmarkIcon}</button>
           <span class="search-popup-preview-crm-wrap"></span>
         </div>
       </div>
@@ -14849,6 +14978,22 @@ async function openSearchPreviewTab(oppId, titleHint) {
       e.preventDefault();
       e.stopPropagation();
       handleSearchPreviewEdit(id);
+    });
+  }
+
+  // Bookmark button
+  const bookmarkBtn = container.querySelector(".search-popup-preview-bookmark");
+  if (bookmarkBtn) {
+    bookmarkBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const bid = Number(bookmarkBtn.dataset.oppId);
+      if (isDealBookmarked(bid)) {
+        removeBookmarkDeal(bid);
+      } else {
+        const fullTitle = titleHint;
+        addBookmarkDeal(bid, fullTitle);
+      }
     });
   }
 
@@ -14982,6 +15127,357 @@ async function handleSearchPreviewEdit(oppId) {
   } catch (err) {
     showToast(err.message, true);
   }
+}
+
+/* ================================================================================
+   Bookmark sidebar — collapsible right sidebar with bookmarked deal tabs
+   ================================================================================ */
+
+function isDealBookmarked(oppId) {
+  return state.bookmarkedDeals.some((d) => Number(d.oppId) === Number(oppId));
+}
+
+function initBookmarkSidebar() {
+  const sidebar = $("#bookmark-sidebar");
+  const trigger = $("#bookmark-trigger");
+  if (!sidebar || sidebar.dataset.bound) return;
+  sidebar.dataset.bound = "1";
+
+  renderBookmarkTabs();
+
+  // Trigger tab click — open the sidebar
+  if (trigger) {
+    trigger.addEventListener("click", () => {
+      sidebar.classList.remove("sidebar-hidden");
+      trigger.classList.add("trigger-hidden");
+    });
+  }
+
+  // Toggle button in sidebar header — close/hide the sidebar
+  const toggleBtn = $("#bookmark-sidebar-toggle");
+  if (toggleBtn) {
+    toggleBtn.addEventListener("click", () => {
+      hideBookmarkSidebar();
+    });
+  }
+
+  // Tab bar delegation
+  const tabBar = $("#bookmark-sidebar-tabs");
+  if (tabBar) {
+    tabBar.addEventListener("click", (e) => {
+      const tabBtn = e.target.closest(".bookmark-tab");
+      if (!tabBtn) return;
+      const oppId = Number(tabBtn.dataset.oppId);
+      if (!Number.isFinite(oppId) || oppId <= 0) return;
+
+      // Bookmark icon on tab — click to remove bookmark
+      if (e.target.closest(".bookmark-tab-icon")) {
+        removeBookmarkDeal(oppId);
+        return;
+      }
+
+      // Toggle: if already active, collapse; otherwise activate
+      if (state.activeBookmarkTab === oppId) {
+        closeBookmarkPreview();
+      } else {
+        activateBookmarkTab(oppId);
+      }
+    });
+  }
+
+  // Preview refresh
+  const refreshBtn = $("#bookmark-preview-refresh");
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", () => {
+      const id = state.activeBookmarkTab;
+      if (id) refreshBookmarkTab(id);
+    });
+  }
+
+  // Preview unbookmark
+  const unbookmarkBtn = $("#bookmark-preview-unbookmark");
+  if (unbookmarkBtn) {
+    unbookmarkBtn.addEventListener("click", () => {
+      const id = state.activeBookmarkTab;
+      if (id) removeBookmarkDeal(id);
+    });
+  }
+
+  // Preview edit button — opens deal edit modal
+  const editBtn = $("#bookmark-preview-edit");
+  if (editBtn) {
+    editBtn.addEventListener("click", () => {
+      const id = state.activeBookmarkTab;
+      if (!id) return;
+      const deal = state.bookmarkedDeals.find((d) => Number(d.oppId) === id);
+      if (!deal?._cachedData?.opp) return;
+      openDealEditModal(deal._cachedData.opp, null).catch(() => {});
+    });
+  }
+}
+
+function hideBookmarkSidebar() {
+  const sidebar = $("#bookmark-sidebar");
+  const trigger = $("#bookmark-trigger");
+  if (sidebar) {
+    closeBookmarkPreview();
+    sidebar.classList.add("sidebar-hidden");
+  }
+  if (trigger) trigger.classList.remove("trigger-hidden");
+}
+
+function renderBookmarkTabs() {
+  const tabBar = $("#bookmark-sidebar-tabs");
+  if (!tabBar) return;
+  tabBar.innerHTML = "";
+
+  if (!state.bookmarkedDeals.length) {
+    tabBar.innerHTML = '<div class="bookmark-tabs-empty">No bookmarked deals</div>';
+    return;
+  }
+
+  for (let i = 0; i < state.bookmarkedDeals.length; i++) {
+    const deal = state.bookmarkedDeals[i];
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "bookmark-tab" + (state.activeBookmarkTab === deal.oppId ? " active" : "");
+    btn.dataset.oppId = deal.oppId;
+    btn.draggable = true;
+    btn.dataset.index = i;
+
+    // Drag events
+    btn.addEventListener("dragstart", (e) => {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", btn.dataset.index);
+      btn.classList.add("bookmark-tab-dragging");
+    });
+    btn.addEventListener("dragend", () => {
+      btn.classList.remove("bookmark-tab-dragging");
+      tabBar.querySelectorAll(".bookmark-tab-drag-over").forEach((el) => el.classList.remove("bookmark-tab-drag-over"));
+    });
+    btn.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      tabBar.querySelectorAll(".bookmark-tab-drag-over").forEach((el) => el.classList.remove("bookmark-tab-drag-over"));
+      btn.classList.add("bookmark-tab-drag-over");
+    });
+    btn.addEventListener("dragleave", () => {
+      btn.classList.remove("bookmark-tab-drag-over");
+    });
+    btn.addEventListener("drop", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      btn.classList.remove("bookmark-tab-drag-over");
+      tabBar.querySelectorAll(".bookmark-tab-drag-over").forEach((el) => el.classList.remove("bookmark-tab-drag-over"));
+
+      const fromIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
+      const toIdx = parseInt(btn.dataset.index, 10);
+      if (!Number.isFinite(fromIdx) || !Number.isFinite(toIdx) || fromIdx === toIdx) return;
+
+      // Reorder array
+      const [moved] = state.bookmarkedDeals.splice(fromIdx, 1);
+      state.bookmarkedDeals.splice(toIdx, 0, moved);
+      saveBookmarkedDealsToStorage();
+      renderBookmarkTabs();
+      // Re-activate the moved tab if it was active
+      if (state.activeBookmarkTab === moved.oppId) {
+        const activeEl = tabBar.querySelector(`.bookmark-tab[data-opp-id="${moved.oppId}"]`);
+        if (activeEl) {
+          activeEl.classList.add("active");
+          // Scroll into view
+          activeEl.scrollIntoView({ block: "nearest" });
+        }
+      }
+    });
+
+    // Stage dot color
+    const stageColor = getStageColorForOppId(deal.oppId) || "#4f8cff";
+
+    // Stage title and due date (from cache if available, else placeholder)
+    let stageLabel = "";
+    let dueLabel = "";
+    if (deal._cachedData?.opp) {
+      const opp = deal._cachedData.opp;
+      stageLabel = resolveStageTitle(opp);
+      const raw = opportunityDueDateRaw(opp);
+      if (raw) {
+        const d = new Date(raw);
+        if (!Number.isNaN(d.getTime())) {
+          dueLabel = "Due " + d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+        }
+      }
+    }
+
+    btn.innerHTML = `
+      <span class="bookmark-tab-icon">${bookmarkRibbonSvg(true)}</span>
+      <span class="bookmark-tab-stage-dot" style="background:${escapeHtml(stageColor)}"></span>
+      <span class="bookmark-tab-title">${escapeHtml(deal.title)}</span>
+      <span class="bookmark-tab-meta">${escapeHtml(stageLabel)}${stageLabel && dueLabel ? " · " : ""}${escapeHtml(dueLabel)}</span>
+    `;
+    tabBar.appendChild(btn);
+  }
+
+  // Highlight active if any
+  if (state.activeBookmarkTab) {
+    const activeEl = tabBar.querySelector(`.bookmark-tab[data-opp-id="${state.activeBookmarkTab}"]`);
+    if (activeEl) activeEl.classList.add("active");
+  }
+}
+
+function getStageColorForOppId(oppId) {
+  // Try cached data first
+  const deal = state.bookmarkedDeals.find((d) => Number(d.oppId) === Number(oppId));
+  if (deal?._cachedData?.opp?.stage?.id) {
+    const stageId = String(deal._cachedData.opp.stage.id);
+    const stage = state.stages.find((s) => String(s.id ?? s.ID) === stageId);
+    return stage?.color || "#4f8cff";
+  }
+  // Try lookup in group opportunities
+  for (const g of state.groups) {
+    for (const opp of g.opportunities || []) {
+      if (Number(opp.id ?? opp.ID) === Number(oppId)) {
+        const stageId = String(opp.stage?.id ?? opp.stage?.ID);
+        const stage = state.stages.find((s) => String(s.id ?? s.ID) === stageId);
+        if (stage) return (g.stageColors && g.stageColors[stageId]) || stage.color || "#4f8cff";
+      }
+    }
+  }
+  return "#4f8cff";
+}
+
+async function activateBookmarkTab(oppId) {
+  const id = Number(oppId);
+  if (!Number.isFinite(id) || id <= 0) return;
+
+  state.activeBookmarkTab = id;
+  const previewPanel = $("#bookmark-sidebar-preview");
+  const titleEl = $("#bookmark-preview-title");
+  const bodyEl = $("#bookmark-preview-body");
+  if (!previewPanel || !titleEl || !bodyEl) return;
+
+  previewPanel.classList.remove("hidden");
+  const deal = state.bookmarkedDeals.find((d) => Number(d.oppId) === id);
+
+  // Use cached data if available
+  if (deal?._cachedData) {
+    titleEl.textContent = deal.title;
+    bodyEl.innerHTML = "";
+    renderOpportunityPreviewContent(bodyEl, deal._cachedData);
+    linkifyPhonesAndEmails(bodyEl);
+  } else {
+    titleEl.textContent = deal?.title || `Opportunity #${id}`;
+    bodyEl.innerHTML = '<p class="opp-preview-loading">Loading opportunity…</p>';
+  }
+
+  // Fetch data in background (always refresh if not cached, or on explicit refresh only)
+  if (!deal?._cachedData) {
+    try {
+      const data = await fetchOpportunityPreviewData(id, false);
+      if (state.activeBookmarkTab !== id) return; // tab changed while loading
+      // Cache it
+      if (deal) deal._cachedData = data;
+      titleEl.textContent = data.opp?.title || data.opp?.Title || deal?.title || `Opportunity #${id}`;
+      bodyEl.innerHTML = "";
+      renderOpportunityPreviewContent(bodyEl, data);
+      linkifyPhonesAndEmails(bodyEl);
+      // Update tab's stage/due info
+      renderBookmarkTabs();
+    } catch (err) {
+      if (state.activeBookmarkTab === id) {
+        bodyEl.innerHTML = `<p class="opp-preview-error">${escapeHtml(err.message)}</p>`;
+      }
+    }
+  }
+
+  renderBookmarkTabs();
+}
+
+function closeBookmarkPreview() {
+  state.activeBookmarkTab = null;
+  const previewPanel = $("#bookmark-sidebar-preview");
+  if (previewPanel) previewPanel.classList.add("hidden");
+  renderBookmarkTabs();
+}
+
+function addBookmarkDeal(oppId, title) {
+  const id = Number(oppId);
+  if (!Number.isFinite(id) || id <= 0) return;
+  if (isDealBookmarked(id)) return;
+
+  if (state.bookmarkedDeals.length >= MAX_BOOKMARKED_DEALS) {
+    showToast(`Maximum ${MAX_BOOKMARKED_DEALS} bookmarked deals reached. Remove one to add another.`, true);
+    return;
+  }
+
+  state.bookmarkedDeals.push({
+    oppId: id,
+    title: String(title || "").trim() || `Opportunity #${id}`,
+    addedAt: new Date().toISOString(),
+  });
+
+  saveBookmarkedDealsToStorage();
+  closeBookmarkPreview(); // collapse if expanded
+  renderBookmarkTabs();
+  refreshAllBookmarkButtonStates();
+}
+
+function removeBookmarkDeal(oppId) {
+  const id = Number(oppId);
+  state.bookmarkedDeals = state.bookmarkedDeals.filter((d) => Number(d.oppId) !== id);
+
+  if (state.activeBookmarkTab === id) {
+    closeBookmarkPreview();
+  }
+
+  saveBookmarkedDealsToStorage();
+  renderBookmarkTabs();
+  refreshAllBookmarkButtonStates();
+}
+
+async function refreshBookmarkTab(oppId) {
+  const id = Number(oppId);
+  const deal = state.bookmarkedDeals.find((d) => Number(d.oppId) === id);
+  if (!deal) return;
+
+  const bodyEl = $("#bookmark-preview-body");
+  if (bodyEl) bodyEl.innerHTML = '<p class="opp-preview-loading">Refreshing…</p>';
+
+  try {
+    const data = await fetchOpportunityPreviewData(id, true);
+    deal._cachedData = data;
+    const titleEl = $("#bookmark-preview-title");
+    if (titleEl) titleEl.textContent = data.opp?.title || data.opp?.Title || deal.title;
+    if (bodyEl) {
+      bodyEl.innerHTML = "";
+      renderOpportunityPreviewContent(bodyEl, data);
+      linkifyPhonesAndEmails(bodyEl);
+    }
+    renderBookmarkTabs();
+  } catch (err) {
+    if (bodyEl) {
+      bodyEl.innerHTML = `<p class="opp-preview-error">${escapeHtml(err.message)}</p>`;
+    }
+  }
+}
+
+function refreshAllBookmarkButtonStates() {
+  document.querySelectorAll(".card-bookmark-btn").forEach((btn) => {
+    const oppId = Number(btn.dataset.oppId);
+    const bookmarked = isDealBookmarked(oppId);
+    btn.classList.toggle("bookmarked", bookmarked);
+    btn.title = bookmarked ? "Remove bookmark" : "Bookmark deal";
+    btn.setAttribute("aria-label", btn.title);
+    btn.innerHTML = bookmarkRibbonSvg(bookmarked);
+  });
+  // Also update search popup preview bookmark buttons
+  document.querySelectorAll(".search-popup-preview-bookmark").forEach((btn) => {
+    const oppId = Number(btn.dataset.oppId);
+    const bookmarked = isDealBookmarked(oppId);
+    btn.classList.toggle("bookmarked", bookmarked);
+    btn.title = bookmarked ? "Remove bookmark" : "Bookmark deal";
+    btn.setAttribute("aria-label", btn.title);
+    btn.innerHTML = bookmarkRibbonSvg(bookmarked);
+  });
 }
 
 /* ================================================================================
@@ -16081,6 +16577,9 @@ async function refreshAll() {
       }
     }
     syncFeedFilterPlaceholder();
+    // Re-render bookmark sidebar + button states now that profile (including bookmarkedDeals) is loaded
+    renderBookmarkTabs();
+    refreshAllBookmarkButtonStates();
     renderBoardGroups();
     refreshDashboardTileLayouts();
     populateTasksUserFilter();
@@ -16260,6 +16759,7 @@ async function init() {
   bindDashboardActivityTracking();
   bindFeedHiddenModal();
   bindNotesArchiveRestoreModal();
+  initBookmarkSidebar();
 
   $("#new-opportunity-btn")?.addEventListener("click", () => {
     openCreateOpportunityModal().catch((err) => showToast(err.message, true));

@@ -2,6 +2,19 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [1.85] — 2026-06-16
+
+### Bookmark sidebar — collapsible right sidebar with bookmarked deal previews
+- **Feature:** Vertical bookmark trigger tab on right edge (one-letter-per-row "Bookmarks" text). Click opens a sidebar with deal tabs.
+- **Bookmark button:** Ribbon icon on every deal card (bottom-right) and search popup preview headers. Filled = bookmarked, outline = not. Click toggles state.
+- **Sidebar:** 220px strip with vertical deal tabs showing stage dot, title, stage name, due date. Filled ribbon icon on each tab removes bookmark. Drag-and-drop reordering of tabs. Max 15 bookmarks.
+- **Preview panel:** 880px deal detail preview (standard fields, user fields, description, history, documents) using same renderer as modal preview. Refresh button, edit button (opens edit modal to the left), filled ribbon to remove bookmark.
+- **Persistence:** Bookmarks survive logout/login via localStorage + server user profile.
+- **Edit button:** Opens the deal edit modal positioned to the left of the sidebar preview so both are visible simultaneously.
+- **Tab shadows:** Subtle box-shadow + margin on each tab for visual distinction.
+- **Sidebar toggle:** Chevron-right arrow (not filled ribbon). Preview panel expands left of the strip.
+- **Files changed:** `public/index.html`, `public/app.js`, `public/styles.css`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`
+
 ## [1.8.2] — 2026-06-15
 
 ### Search popup — large modal with tabbed deal preview

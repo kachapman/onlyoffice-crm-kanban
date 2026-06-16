@@ -33,9 +33,10 @@ def _empty_profile() -> dict[str, Any]:
         "tileLayout": {"order": [], "widths": {}, "heights": {}, "collapsed": {}},
         "calendarTiles": [],
         "notesTiles": [],
-        "groupTemplates": [],
+            "groupTemplates": [],
         "hiddenFeedKeys": [],
         "feedKeywordFilter": "",
+        "bookmarkedDeals": [],
     }
 
 
@@ -223,6 +224,7 @@ def load_user_profile(portal: str, user_id: str) -> dict[str, Any]:
     profile["groupTemplates"] = templates if isinstance(templates, list) else []
     profile["hiddenFeedKeys"] = _clean_hidden_feed_keys(data.get("hiddenFeedKeys"))
     profile["feedKeywordFilter"] = str(data.get("feedKeywordFilter") or "")[:500]
+    profile["bookmarkedDeals"] = data.get("bookmarkedDeals") if isinstance(data.get("bookmarkedDeals"), list) else []
     profile["updatedAt"] = str(data.get("updatedAt") or "")
     return _migrate_legacy_notes(portal, user_id, profile)
 
@@ -247,6 +249,7 @@ def save_user_profile(portal: str, user_id: str, payload: dict[str, Any]) -> dic
         else [],
         "hiddenFeedKeys": _clean_hidden_feed_keys(payload.get("hiddenFeedKeys")),
         "feedKeywordFilter": str(payload.get("feedKeywordFilter") or "")[:500],
+        "bookmarkedDeals": payload.get("bookmarkedDeals") if isinstance(payload.get("bookmarkedDeals"), list) else [],
     }
     path.write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
     return cleaned

@@ -5610,3 +5610,444 @@ body {
   overflow: hidden;
 }
 
+/* ================================================================================
+   Bookmark ribbon button on search popup preview
+   ================================================================================ */
+
+.search-popup-preview-bookmark {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.search-popup-preview-bookmark:hover,
+.search-popup-preview-bookmark:focus-visible {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--surface-2);
+  outline: none;
+}
+
+.search-popup-preview-bookmark.bookmarked {
+  color: var(--accent);
+}
+
+.search-popup-preview-bookmark.bookmarked:hover {
+  color: #ef4444;
+  border-color: #ef4444;
+}
+
+/* ================================================================================
+   Bookmark ribbon button on deal tiles
+   ================================================================================ */
+
+.card-bookmark-btn {
+  position: absolute;
+  bottom: 0.3rem;
+  right: 0.75rem;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+  z-index: 1;
+}
+
+.card-bookmark-btn:hover,
+.card-bookmark-btn:focus-visible {
+  color: var(--accent);
+  background: var(--surface-2);
+  outline: none;
+}
+
+.card-bookmark-btn.bookmarked {
+  color: var(--accent);
+}
+
+.card-bookmark-btn.bookmarked:hover {
+  color: #ef4444;
+}
+
+/* ================================================================================
+   Bookmark trigger tab — rounded pill on right edge when sidebar is hidden
+   ================================================================================ */
+
+.bookmark-trigger {
+  position: fixed;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  z-index: 1499;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.7rem 0.4rem;
+  border: 1px solid var(--border);
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.62rem;
+  font-weight: 600;
+  line-height: 1.2;
+  transition: color 0.15s, background 0.15s, opacity 0.2s, transform 0.2s;
+  box-shadow: -2px 0 8px rgba(0,0,0,0.08);
+}
+
+.bookmark-trigger-text {
+  writing-mode: vertical-lr;
+  text-orientation: upright;
+  text-transform: uppercase;
+  letter-spacing: -0.15em;
+  font-size: 0.55rem;
+  font-weight: 700;
+}
+
+.bookmark-trigger:hover,
+.bookmark-trigger:focus-visible {
+  color: var(--accent);
+  background: var(--surface-2);
+  outline: none;
+}
+
+/* When sidebar is visible, hide the trigger */
+.bookmark-sidebar:not(.sidebar-hidden) ~ .bookmark-trigger,
+.bookmark-sidebar:not(.sidebar-hidden) + .bookmark-trigger {
+  /* Can't use sibling selector since trigger is before sidebar in DOM.
+     Handled via JS by toggling .trigger-hidden class. */
+}
+
+.bookmark-trigger.trigger-hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%) translateX(10px);
+}
+
+/* ================================================================================
+   Bookmark sidebar — slides in from right
+   ================================================================================ */
+
+.bookmark-sidebar {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100vh;
+  z-index: 1500;
+  display: flex;
+  flex-direction: row;
+  transition: transform 0.25s ease;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.bookmark-sidebar.sidebar-hidden {
+  transform: translateX(100%);
+}
+
+.bookmark-sidebar:not(.sidebar-hidden) {
+  transform: translateX(0);
+}
+
+.bookmark-sidebar-strip {
+  width: 220px;
+  min-width: 220px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  pointer-events: auto;
+  overflow: hidden;
+}
+
+.bookmark-sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.5rem 0.5rem 0.35rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.bookmark-sidebar-toggle {
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s;
+}
+
+.bookmark-sidebar-toggle:hover,
+.bookmark-sidebar-toggle:focus-visible {
+  color: var(--text);
+  background: var(--surface-2);
+  outline: none;
+}
+
+.bookmark-sidebar-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bookmark-sidebar-tabs {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0.25rem 0;
+}
+
+.bookmark-tabs-empty {
+  padding: 1rem 0.65rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-align: center;
+  line-height: 1.4;
+}
+
+/* Individual tab button */
+.bookmark-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  padding: 0.4rem 0.5rem 0.4rem 0.65rem;
+  border: none;
+  border-left: 3px solid transparent;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s, border-color 0.12s;
+  position: relative;
+  min-height: 0;
+  gap: 0;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.02);
+  margin-bottom: 2px;
+}
+
+.bookmark-tab:hover {
+  background: var(--surface-2);
+}
+
+.bookmark-tab.active {
+  background: var(--surface-2);
+  border-left-color: var(--accent);
+}
+
+.bookmark-tab-icon {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.5rem;
+  color: var(--accent);
+  opacity: 0.7;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: opacity 0.12s;
+  pointer-events: auto;
+}
+.bookmark-tab-icon:hover {
+  opacity: 1;
+  color: #ef4444;
+}
+
+.bookmark-tab-stage-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-right: 0.35rem;
+  vertical-align: middle;
+}
+
+.bookmark-tab-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+  padding-right: 1.25rem;
+}
+
+.bookmark-tab-meta {
+  font-size: 0.68rem;
+  color: var(--muted);
+  line-height: 1.3;
+  margin-top: 0.1rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 1.25rem;
+}
+
+.bookmark-tab-dragging {
+  opacity: 0.4;
+}
+
+.bookmark-tab-drag-over {
+  border-top: 2px solid var(--accent) !important;
+  border-left-color: var(--accent) !important;
+  background: var(--surface-2);
+}
+
+/* Expanded preview panel */
+.bookmark-sidebar-preview {
+  width: 880px;
+  min-width: 880px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  pointer-events: auto;
+  overflow: hidden;
+}
+
+.bookmark-sidebar-preview.hidden {
+  display: none;
+}
+
+.bookmark-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.65rem 0.85rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.bookmark-preview-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bookmark-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+
+.bookmark-preview-action-btn {
+  width: 1.85rem;
+  height: 1.85rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.bookmark-preview-action-btn:hover,
+.bookmark-preview-action-btn:focus-visible {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--surface-2);
+  outline: none;
+}
+
+#bookmark-preview-unbookmark {
+  color: var(--accent);
+}
+
+#bookmark-preview-unbookmark:hover {
+  color: #ef4444;
+  border-color: #ef4444;
+}
+
+.bookmark-preview-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.65rem 0.85rem;
+}
+
+.bookmark-preview-body .opp-preview-tabs {
+  margin-top: 0;
+}
+
+/* Responsive: narrow screen — reduce sidebar widths */
+@media (max-width: 1400px) {
+  .bookmark-sidebar-preview {
+    width: 600px;
+    min-width: 600px;
+  }
+}
+
+@media (max-width: 1100px) {
+  .bookmark-sidebar-strip {
+    width: 170px;
+    min-width: 170px;
+  }
+  .bookmark-sidebar-preview {
+    width: 420px;
+    min-width: 420px;
+  }
+}
+
+@media (max-width: 768px) {
+  .bookmark-sidebar-strip {
+    width: 140px;
+    min-width: 140px;
+  }
+  .bookmark-sidebar-preview {
+    width: calc(100vw - 160px);
+    min-width: 260px;
+  }
+}
+
