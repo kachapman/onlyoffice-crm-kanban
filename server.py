@@ -132,8 +132,8 @@ def _proxy_cache_ttl(api_path: str) -> int | None:
     return None
 
 
-def _cache_key(method: str, api_path: str, query: str, portal: str) -> str:
-    return f"{method}:{api_path}:{query}:{portal}"
+def _cache_key(method: str, api_path: str, query: str, portal: str, token: str = "") -> str:
+    return f"{method}:{api_path}:{query}:{portal}:{token}"
 
 
 def _session_token(handler: SimpleHTTPRequestHandler) -> str | None:
@@ -903,7 +903,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         ttl = _proxy_cache_ttl(api_path)
         if ttl is not None:
             portal = _portal_base(self)
-            ck = _cache_key("GET", api_path, query, portal)
+            token = _session_token(self) or ""
+            ck = _cache_key("GET", api_path, query, portal, token)
             cached = _proxy_cache.get(ck)
             if cached is not None:
                 status, body, ctype = cached
@@ -920,7 +921,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # Cache successful GET responses
         if ttl is not None and 200 <= status < 400:
             portal = _portal_base(self)
-            ck = _cache_key("GET", api_path, query, portal)
+            token = _session_token(self) or ""
+            ck = _cache_key("GET", api_path, query, portal, token)
             _proxy_cache.set(ck, (status, body, ctype), ttl)
 
         # Best-effort: record CRM activity for presence (only when we can resolve the user without failing the response)

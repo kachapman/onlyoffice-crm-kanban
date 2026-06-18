@@ -2,6 +2,15 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [1.87.1] — 2026-06-17
+
+### Hotfix: Cross-user cache contamination + date timezone shift
+
+- **Root cause — proxy cache key missing user identity:** `_cache_key` in `server.py` used only `method:api_path:query:portal`, so one user's CRM filter results were served to other users within the 30-second TTL. This caused users to see wrong deal counts, stale due dates, and other users' personalized data. Fix: added session token to cache key so each user's data is segregated.
+- **Date-only parsing for expectedCloseDate:** `new Date(raw)` on the CRM's timezone-qualified ISO string caused a one-day date shift in negative UTC offset timezones. Added `parseCrmDateOnly()` helper that extracts `YYYY-MM-DD` and builds a Date at local midnight. Applied in 6 consumers: `isRedOpportunity`, `formatOppDueLabel`, `dueDateToInputValue`, `formatPreviewDueDate`, `oppDueDateMs`, and bookmark tab due label. No changes to datetime fields (notes, feed, calendars, tasks).
+- **Force refresh after mutations:** Changed 4 mutation fallback calls from `refreshGroup(group)` to `refreshGroup(group, { force: true })` so the client-side 30-second cache is bypassed after edits/deletes, ensuring the group UI immediately reflects the change.
+- **Files changed:** `server.py`, `public/app.js`, `VERSION`, `CHANGELOG.md`
+
 ## [1.87] — 2026-06-17
 
 ### Presence auto-status fixes & enhancements

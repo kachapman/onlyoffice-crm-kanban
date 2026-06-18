@@ -5371,6 +5371,13 @@ async function fetchOpportunitiesForGroup(group) {
   return items;
 }
 
+function parseCrmDateOnly(raw) {
+  if (raw == null || raw === "") return null;
+  const m = String(raw).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return new Date(raw);
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+}
+
 function opportunityDueDateRaw(opp) {
   return (
     opp.expectedCloseDate?.value ??
@@ -5382,21 +5389,20 @@ function opportunityDueDateRaw(opp) {
 }
 
 function oppDueDateMs(opp) {
-  return new Date(opportunityDueDateRaw(opp) || 0).getTime();
+  const d = parseCrmDateOnly(opportunityDueDateRaw(opp));
+  return d ? d.getTime() : 0;
 }
 
 function formatOppDueLabel(opp) {
   const raw = opportunityDueDateRaw(opp);
-  if (!raw) return "";
-  const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) return "";
+  const d = parseCrmDateOnly(raw);
+  if (!d || Number.isNaN(d.getTime())) return "";
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 function dueDateToInputValue(raw) {
-  if (!raw) return "";
-  const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) return "";
+  const d = parseCrmDateOnly(raw);
+  if (!d || Number.isNaN(d.getTime())) return "";
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
@@ -5691,9 +5697,8 @@ function resolveOppStageId(opp) {
 /** Due today or earlier — matches CRM “red” overdue opportunities. */
 function isRedOpportunity(opp) {
   const raw = opportunityDueDateRaw(opp);
-  if (raw == null || raw === "") return false;
-  const due = new Date(raw);
-  if (Number.isNaN(due.getTime())) return false;
+  const due = parseCrmDateOnly(raw);
+  if (!due || Number.isNaN(due.getTime())) return false;
   const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate()).getTime();
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -8934,7 +8939,7 @@ async function submitDealEditForm(e) {
       if (!group) { refreshAll(); return; }
       try {
         const updatedOpp = await fetchOpportunityForUpdate(oppId);
-        if (!updatedOpp) { refreshGroup(group); return; }
+        if (!updatedOpp) { refreshGroup(group, { force: true }); return; }
         // Ensure tags are present so card styling (amber border) applies correctly.
         await enrichOpportunitiesTags([updatedOpp]);
         indexOpportunity(updatedOpp);
@@ -8948,7 +8953,7 @@ async function submitDealEditForm(e) {
           updateOpportunityCardDom(updatedOpp, group);
         }
       } catch (e) {
-        refreshGroup(group);
+        refreshGroup(group, { force: true });
       }
     }, 40);
 
@@ -9271,7 +9276,7 @@ async function submitQuickNoteForm(e) {
         if (!group) { refreshAll(); return; }
         try {
           const updatedOpp = await fetchOpportunityForUpdate(oppId);
-          if (!updatedOpp) { refreshGroup(group); return; }
+          if (!updatedOpp) { refreshGroup(group, { force: true }); return; }
           // Ensure tags are present so card styling (amber border) applies correctly.
           await enrichOpportunitiesTags([updatedOpp]);
           indexOpportunity(updatedOpp);
@@ -9285,7 +9290,7 @@ async function submitQuickNoteForm(e) {
             updateOpportunityCardDom(updatedOpp, group);
           }
         } catch (e) {
-          refreshGroup(group);
+          refreshGroup(group, { force: true });
         }
       }, 60);
     }
@@ -14956,10 +14961,8 @@ function formatPreviewDateTime(raw) {
 // Date-only formatter for deal due dates (Expected close) so preview matches native CRM display
 // (avoids time component and potential TZ off-by-one from datetime parsing on read).
 function formatPreviewDueDate(raw) {
-  if (raw == null || raw === "") return "";
-  const iso = crmDateTimeFromApi(raw) || raw;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return String(raw);
+  const d = parseCrmDateOnly(raw);
+  if (!d || Number.isNaN(d.getTime())) return String(raw ?? "");
   return d.toLocaleDateString();
 }
 
@@ -16366,11 +16369,9 @@ function renderBookmarkTabs() {
       const opp = deal._cachedData.opp;
       stageLabel = resolveStageTitle(opp);
       const raw = opportunityDueDateRaw(opp);
-      if (raw) {
-        const d = new Date(raw);
-        if (!Number.isNaN(d.getTime())) {
-          dueLabel = "Due " + d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-        }
+      const d = parseCrmDateOnly(raw);
+      if (d && !Number.isNaN(d.getTime())) {
+        dueLabel = "Due " + d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
       }
     }
 
