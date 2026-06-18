@@ -5311,21 +5311,38 @@ async function enrichOpportunitiesTags(items) {
     uncached.push(opp);
   }
   if (!uncached.length) return items;
-  await Promise.allSettled(
-    uncached.map(async (opp) => {
-      const id = opp.id ?? opp.ID;
-      if (id == null) return;
-      try {
-        const tags = unwrapEntityTags(await api(`/api/2.0/crm/opportunity/tag/${id}`));
-        if (tags.length) {
-          opp.tags = tags;
-          state.oppTagCache?.set(id, tags);
-        }
-      } catch {
-        /* no tags on this deal */
+
+  // Batch-fetch uncached tags via server-side parallel endpoint (much faster than N individual round-trips)
+  const ids = uncached.map(o => o.id ?? o.ID).filter(id => id != null);
+  try {
+    const resp = await api(`/api/batch-opportunity-tags?ids=${ids.join(",")}`);
+    const tagsByOpp = (resp && resp.tags) || {};
+    for (const opp of uncached) {
+      const id = String(opp.id ?? opp.ID);
+      const raw = tagsByOpp[id];
+      if (raw && Array.isArray(raw) && raw.length) {
+        opp.tags = raw;
+        state.oppTagCache?.set(Number(id), raw);
       }
-    })
-  );
+    }
+  } catch {
+    // Fallback: individual requests if batch endpoint fails
+    await Promise.allSettled(
+      uncached.map(async (opp) => {
+        const id = opp.id ?? opp.ID;
+        if (id == null) return;
+        try {
+          const tags = unwrapEntityTags(await api(`/api/2.0/crm/opportunity/tag/${id}`));
+          if (tags.length) {
+            opp.tags = tags;
+            state.oppTagCache?.set(id, tags);
+          }
+        } catch {
+          /* no tags on this deal */
+        }
+      })
+    );
+  }
   return items;
 }
 
@@ -11530,14 +11547,30 @@ function showPopupEmojiPicker() {
   });
   // Position picker below the emoji button
   const emojiBtn = document.querySelector("#presence-modal .presence-dm-input .btn");
+  const isMobile = window.innerWidth < 480;
   if (emojiBtn) {
     const rect = emojiBtn.getBoundingClientRect();
     picker.style.position = "fixed";
-    picker.style.left = rect.left + "px";
-    picker.style.top = (rect.bottom + 4) + "px";
     picker.style.zIndex = "99999";
     picker.style.width = "auto";
     picker.style.minWidth = "200px";
+    if (isMobile) {
+      // On mobile: open to the left (right-aligned), below the entire input area
+      const inputContainer = document.querySelector("#presence-modal .presence-dm-input");
+      if (inputContainer) {
+        const inputRect = inputContainer.getBoundingClientRect();
+        picker.style.left = "8px";
+        picker.style.right = "8px";
+        picker.style.top = (inputRect.bottom + 4) + "px";
+        picker.style.minWidth = "unset";
+      } else {
+        picker.style.left = rect.left + "px";
+        picker.style.top = (rect.bottom + 4) + "px";
+      }
+    } else {
+      picker.style.left = rect.left + "px";
+      picker.style.top = (rect.bottom + 4) + "px";
+    }
   }
   document.body.appendChild(picker);
   // Click away to close
@@ -11576,14 +11609,30 @@ function showInlineEmojiPicker() {
   });
   // Position picker below the emoji button
   const emojiBtn = tile.querySelector("#presence-tile-dm-emoji");
+  const isMobile = window.innerWidth < 480;
   if (emojiBtn) {
     const rect = emojiBtn.getBoundingClientRect();
     picker.style.position = "fixed";
-    picker.style.left = rect.left + "px";
-    picker.style.top = (rect.bottom + 4) + "px";
     picker.style.zIndex = "99999";
     picker.style.width = "auto";
     picker.style.minWidth = "200px";
+    if (isMobile) {
+      // On mobile: open to the left (right-aligned), below the entire input area
+      const inputContainer = tile.querySelector(".presence-dm-input");
+      if (inputContainer) {
+        const inputRect = inputContainer.getBoundingClientRect();
+        picker.style.left = "8px";
+        picker.style.right = "8px";
+        picker.style.top = (inputRect.bottom + 4) + "px";
+        picker.style.minWidth = "unset";
+      } else {
+        picker.style.left = rect.left + "px";
+        picker.style.top = (rect.bottom + 4) + "px";
+      }
+    } else {
+      picker.style.left = rect.left + "px";
+      picker.style.top = (rect.bottom + 4) + "px";
+    }
   }
   document.body.appendChild(picker);
   // Click away to close
@@ -15936,6 +15985,25 @@ function renderSearchPopupResults(opps, tagFilterLabel = null) {
     const actions = document.createElement("span");
     actions.className = "search-popup-result-actions";
 
+    // Bookmark ribbon button
+    const isBookmarked = isDealBookmarked(id);
+    const bookmarkBtn = document.createElement("button");
+    bookmarkBtn.type = "button";
+    bookmarkBtn.className = "search-popup-result-bookmark" + (isBookmarked ? " bookmarked" : "");
+    bookmarkBtn.title = isBookmarked ? "Remove bookmark" : "Bookmark deal";
+    bookmarkBtn.setAttribute("aria-label", bookmarkBtn.title);
+    bookmarkBtn.dataset.oppId = id;
+    bookmarkBtn.innerHTML = bookmarkRibbonSvg(isBookmarked);
+    bookmarkBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (isDealBookmarked(id)) {
+        removeBookmarkDeal(id);
+      } else {
+        addBookmarkDeal(id, title);
+      }
+    });
+
     const previewBtn = document.createElement("button");
     previewBtn.type = "button";
     previewBtn.className = "btn btn-primary";
@@ -15951,6 +16019,7 @@ function renderSearchPopupResults(opps, tagFilterLabel = null) {
       title: "Open in CRM",
     });
 
+    actions.appendChild(bookmarkBtn);
     actions.appendChild(previewBtn);
     actions.appendChild(crmLink);
     row.appendChild(titleEl);
@@ -15958,6 +16027,44 @@ function renderSearchPopupResults(opps, tagFilterLabel = null) {
     row.appendChild(actions);
     results.appendChild(row);
   }
+
+  // Add export CSV button at the bottom of results
+  const exportBar = document.createElement("div");
+  exportBar.className = "search-popup-export-bar";
+  const exportBtn = document.createElement("button");
+  exportBtn.type = "button";
+  exportBtn.className = "btn btn-sm btn-ghost";
+  exportBtn.textContent = "📋 Export CSV";
+  exportBtn.title = "Export results to CSV";
+  exportBtn.addEventListener("click", () => exportSearchResultsToCsv(opps));
+  exportBar.appendChild(exportBtn);
+  results.appendChild(exportBar);
+}
+
+function exportSearchResultsToCsv(opps) {
+  const rows = [["Deal Title", "Stage", "Due Date", "Contact", "Bid Value"]];
+  for (const o of opps) {
+    const title = (o.title || o.Title || "").trim();
+    const stage = o.stage?.title || o.stage?.Title || o.Stage?.title || "";
+    const due = formatOppDueLabel(o);
+    const contact = getOpportunityContactLabel(o);
+    const bid = formatMoney(o.bidValue || o.BidValue || 0);
+    const esc = (v) => {
+      const s = String(v ?? "");
+      return /[,"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    rows.push([title, stage, due, contact, bid].map(esc));
+  }
+  const csv = rows.map((r) => r.join(",")).join("\n");
+  const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `search-results-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 async function openSearchPreviewTab(oppId, titleHint) {
@@ -16422,6 +16529,10 @@ async function activateBookmarkTab(oppId) {
   const bodyEl = $("#bookmark-preview-body");
   if (!previewPanel || !titleEl || !bodyEl) return;
 
+  // Show dimming backdrop
+  const backdrop = $("#bookmark-preview-backdrop");
+  if (backdrop) backdrop.classList.remove("hidden");
+
   previewPanel.classList.remove("hidden");
   const deal = state.bookmarkedDeals.find((d) => Number(d.oppId) === id);
 
@@ -16465,6 +16576,9 @@ function closeBookmarkPreview() {
   state.activeBookmarkTab = null;
   const previewPanel = $("#bookmark-sidebar-preview");
   if (previewPanel) previewPanel.classList.add("hidden");
+  // Hide dimming backdrop
+  const backdrop = $("#bookmark-preview-backdrop");
+  if (backdrop) backdrop.classList.add("hidden");
   renderBookmarkTabs();
 }
 
@@ -16540,6 +16654,15 @@ function refreshAllBookmarkButtonStates() {
   });
   // Also update search popup preview bookmark buttons
   document.querySelectorAll(".search-popup-preview-bookmark").forEach((btn) => {
+    const oppId = Number(btn.dataset.oppId);
+    const bookmarked = isDealBookmarked(oppId);
+    btn.classList.toggle("bookmarked", bookmarked);
+    btn.title = bookmarked ? "Remove bookmark" : "Bookmark deal";
+    btn.setAttribute("aria-label", btn.title);
+    btn.innerHTML = bookmarkRibbonSvg(bookmarked);
+  });
+  // Also update search result row bookmark buttons
+  document.querySelectorAll(".search-popup-result-bookmark").forEach((btn) => {
     const oppId = Number(btn.dataset.oppId);
     const bookmarked = isDealBookmarked(oppId);
     btn.classList.toggle("bookmarked", bookmarked);

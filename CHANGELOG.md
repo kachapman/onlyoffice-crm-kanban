@@ -2,6 +2,18 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [1.87.2] — 2026-06-18
+
+### Hotfix: Mobile emoji picker + auto-status server expiration + bookmark backdrop + batch tag search + search result enhancements
+
+- **Emoji picker on mobile:** `showPopupEmojiPicker()` and `showInlineEmojiPicker()` now detect narrow viewports (< 480px) and position the picker full-width below the message input area (left+right anchored), so it opens to the left and doesn't block the textarea or get cut off.
+- **Auto-status server-side expiration:** Server now strips `autoStatus` from presence responses when the user is not online or `lastDashboardActivity` is older than 5 minutes (client-side timeout may not have fired if the browser was closed). Added `PRESENCE_AUTO_STATUS_TIMEOUT_S = 300` constant. Same check applied to the caller's own `me` record.
+- **Bookmark sidebar preview backdrop:** New `.bookmark-preview-backdrop` overlay (rgba black 55%, z-index 1499) shown when a bookmark preview tab is active, matching the dimming behavior of other modals.
+- **Batch tag fetching:** New server endpoint `GET /api/batch-opportunity-tags?ids=1,2,3` fetches tags for multiple opportunities in parallel server-side (`ThreadPoolExecutor`). Client's `enrichOpportunitiesTags()` now calls this batch endpoint first, falling back to individual requests if it fails. This eliminates the N+1 bottleneck in tag search.
+- **Search result bookmark ribbon:** Each search result row now has a bookmark toggle button (bookmark ribbon SVG) to the left of the "+ Tab" button. `refreshAllBookmarkButtonStates()` updates these buttons alongside existing bookmark buttons.
+- **Search result CSV export:** "📋 Export CSV" button at the bottom of search results downloads a CSV with columns: Deal Title, Stage, Due Date, Contact, Bid Value. UTF-8 BOM included for Excel compatibility.
+- **Files changed:** `public/app.js`, `public/index.html`, `public/styles.css`, `server.py`, `VERSION`, `CHANGELOG.md`
+
 ## [1.87.1] — 2026-06-17
 
 ### Hotfix: Cross-user cache contamination + date timezone shift

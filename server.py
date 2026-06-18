@@ -79,6 +79,7 @@ SSL_VERIFY = os.environ.get("ONLYOFFICE_SSL_VERIFY", "true").lower() not in (
 SESSION_COOKIE = "oo_token"
 DATA_DIR = ROOT / "data"
 COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
+PRESENCE_AUTO_STATUS_TIMEOUT_S = 300  # 5 min — clear auto-status if no dashboard activity
 
 
 class ResponseCache:
@@ -660,6 +661,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     if delta < (3 * 60 * 60):
                         afd = True
 
+            auto_status = ov.get("autoStatus") or ""
+            # Strip auto-status if user is not actively online or last dashboard activity is too old
+            # (client-side 5-min timeout may not have fired if the browser was closed)
+            if auto_status:
+                if not online:
+                    auto_status = ""
+                elif last_dash and (now - last_dash).total_seconds() > PRESENCE_AUTO_STATUS_TIMEOUT_S:
+                    auto_status = ""
+
             row: dict[str, Any] = {
                 "id": uid,
                 "displayName": str(p.get("displayName") or p.get("DisplayName") or p.get("userName") or p.get("UserName") or uid),
@@ -669,7 +679,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "afd": afd,
                 "status": status,
                 "inferred": bool(ov.get("inferred") or False),
-                "autoStatus": ov.get("autoStatus") or "",
+                "autoStatus": auto_status,
                 "lastSeen": ov.get("lastHeartbeat") or ov.get("lastDashboardActivity") or "",
             }
 
@@ -690,6 +700,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         my_presence = load_user_presence(portal, user_id)
         my_last_read = load_user_last_read_dms(portal, user_id)
 
+        # Apply same auto-status expiration to the caller's own record
+        my_auto_status = my_presence.get("autoStatus", "")
+        if my_auto_status:
+            my_last_dash = self._parse_iso_datetime(my_presence.get("lastDashboardActivity") or "")
+            if my_last_dash and (now - my_last_dash).total_seconds() > PRESENCE_AUTO_STATUS_TIMEOUT_S:
+                my_auto_status = ""
+
         _json_response(
             self,
             200,
@@ -700,7 +717,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     "email": my_email,
                     "status": my_presence.get("status", ""),
                     "inferred": bool(my_presence.get("inferred") or False),
-                    "autoStatus": my_presence.get("autoStatus", ""),
+                    "autoStatus": my_auto_status,
                     "lastHeartbeat": my_presence.get("lastHeartbeat", ""),
                 },
                 "isAdmin": is_admin,
@@ -836,6 +853,54 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except Exception:
             return None
 
+    def _handle_batch_opportunity_tags(self) -> None:
+        """Batch-fetch tags for multiple opportunity IDs in parallel.
+        GET /api/batch-opportunity-tags?ids=1,2,3
+        Returns {"tags": {"1": [...], "2": [...], ...}}
+        """
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, token, _user_id = auth
+        qs = parse_qs(urlparse(self.path).query)
+        raw = qs.get("ids", [None])[0]
+        if not raw:
+            _json_response(self, 400, {"error": "Missing ids parameter"})
+            return
+        ids = [x.strip() for x in raw.split(",") if x.strip().isdigit()]
+        if not ids:
+            _json_response(self, 400, {"error": "No valid ids provided"})
+            return
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        result: dict[str, list[Any]] = {}
+        base_url = portal.rstrip("/")
+
+        def fetch_tags(opp_id: str) -> tuple[str, list[Any]]:
+            url = f"{base_url}/api/2.0/crm/opportunity/tag/{opp_id}"
+            req = urllib.request.Request(
+                url,
+                headers={"Accept": "application/json", "Authorization": token},
+                method="GET",
+            )
+            try:
+                with urllib.request.urlopen(req, context=_ssl_context(), timeout=15) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    tags = data.get("response") or data.get("result") or data
+                    if isinstance(tags, list):
+                        return opp_id, tags
+                    return opp_id, []
+            except Exception:
+                return opp_id, []
+
+        with ThreadPoolExecutor(max_workers=12) as pool:
+            futures = {pool.submit(fetch_tags, oid): oid for oid in ids}
+            for fut in as_completed(futures):
+                oid, tags = fut.result()
+                result[oid] = tags
+
+        _json_response(self, 200, {"tags": result})
+
     def _handle_api_get(self) -> None:
         api_path = urlparse(self.path).path
 
@@ -856,6 +921,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self.send_error(404)
             return
 
+        if api_path == "/api/batch-opportunity-tags":
+            self._handle_batch_opportunity_tags()
+            return
         if api_path == "/api/user-profile":
             self._handle_user_profile_get()
             return
