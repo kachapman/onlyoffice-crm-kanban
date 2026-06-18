@@ -1559,10 +1559,11 @@ body {
   align-self: stretch;
 }
 
-/* Team tile body fills available height */
+/* Team tile body fills available height with scroll constraint */
 .dashboard-tile.presence-panel .presence-tile-body {
   flex: 1;
   min-height: 0;
+  max-height: 280px;
   overflow-y: auto;
 }
 
@@ -3676,13 +3677,9 @@ body {
   padding: 0.25rem 0.5rem;
 }
 
-/* Tile expansion when Messages tab is active */
-.presence-tile-expanded {
-  max-height: none !important;
-}
-
+/* Messages tab / DM inline — body constrained with scroll instead of unbounded expansion */
 .presence-tile-expanded .presence-tile-body {
-  max-height: none;
+  max-height: 280px;
   overflow-y: auto;
 }
 

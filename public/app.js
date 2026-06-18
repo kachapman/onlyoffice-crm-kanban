@@ -11503,8 +11503,46 @@ function showEmojiPicker(textarea, container) {
 
 function showPopupEmojiPicker() {
   const ta = $("#presence-dm-text");
-  const container = $("#presence-dm").querySelector(".presence-dm-input");
-  showEmojiPicker(ta, container);
+  if (!ta) return;
+  // Remove any existing picker
+  const existing = document.querySelector("#presence-popup-emoji-picker");
+  if (existing) { existing.remove(); return; }
+  const picker = document.createElement("div");
+  picker.id = "presence-popup-emoji-picker";
+  picker.className = "presence-emoji-picker presence-emoji-picker-overlay";
+  const emojis = ["😀","😃","😄","😁","😆","😅","😂","🤣","😊","😇","🙂","🙃","😉","😌","😍","🥰","😘","😗","😙","😚","😋","😛","😝","😜","🤪","🤨","🧐","🤓","😎","🤩","🥳","😏","😒","😞","😔","😟","😕","🙁","☹️","😣","😖","😫","😩","🥺","😢","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🤗","🤔","🤭","🤫","🤥","😶","😐","😑","😬","🙄","😯","😦","😧","😮","😲","🥱","😴","🤤","😪","😵","🤐","🥴","🤢","🤮","🤧","😷","🤒","🤕","🤑","🤠","😈","👿","👹","👺","🤡","💩","👻","💀","☠️","👽","👾","🤖","🎃","😺","😸","😹","😻","😼","😽","🙀","😿","😾","🙈","🙉","🙊","💋","💌","💘","💝","💖","💗","💓","💞","💕","💟","❣️","💔","❤️","🧡","💛","💚","💙","💜","🤎","🖤","🤍","💯","💢","💥","💫","💦","💨","🕳️","💣","💬","👁️‍🗨️","🗨️","🗯️","💭","💤","👍","👎","👌","✌️","🤞","🤟","🤘","🤙","👈","👉","👆","👇","☝️","✋","🤚","🖐️","🖖","👋","🤙","💪","🦾","🦿","🦵","🦶","👂","🦻","👃","🧠","🦷","🦴","👀","👁️","👅","👄","💋"];
+  emojis.forEach(em => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = em;
+    b.className = "presence-emoji-btn";
+    b.onclick = (e) => {
+      e.stopPropagation();
+      insertEmoji(ta, em);
+      picker.remove();
+    };
+    picker.appendChild(b);
+  });
+  // Position picker below the emoji button
+  const emojiBtn = document.querySelector("#presence-modal .presence-dm-input .btn");
+  if (emojiBtn) {
+    const rect = emojiBtn.getBoundingClientRect();
+    picker.style.position = "fixed";
+    picker.style.left = rect.left + "px";
+    picker.style.top = (rect.bottom + 4) + "px";
+    picker.style.zIndex = "99999";
+    picker.style.width = "auto";
+    picker.style.minWidth = "200px";
+  }
+  document.body.appendChild(picker);
+  // Click away to close
+  const closePicker = (e) => {
+    if (!picker.contains(e.target) && e.target !== emojiBtn && !emojiBtn?.contains(e.target)) {
+      picker.remove();
+      document.removeEventListener("click", closePicker, true);
+    }
+  };
+  setTimeout(() => document.addEventListener("click", closePicker, true), 0);
 }
 
 function showInlineEmojiPicker() {
@@ -11896,7 +11934,10 @@ function renderPresenceModal(snapshot = null, usersCache = null) {
     const recentDms = Array.isArray(snap.myRecentDms) ? snap.myRecentDms : [];
     renderPresenceInbox(listEl, recentDms, cache, snap);
   } else {
-    // Team tab: the user roster (online/offline + last seen)
+    // Team tab: the user roster (online/offline + last seen) — hide any open DM thread
+    if (dmEl) dmEl.classList.add("hidden");
+    state.presenceSelectedUserId = null;
+    clearPresenceReplyTo();
     renderPresenceUserList(listEl, snap, cache, (id, name, p) => {
       // Open DM thread for this user (uses shared helper which wires Clear too)
       openPresenceDMThread(id, name);
@@ -12204,17 +12245,18 @@ function bindPresenceTileControls(tile) {
       // Switch content
       const teamBody = tile.querySelector("#presence-tile-team-body");
       const msgBody = tile.querySelector("#presence-tile-messages-body");
+      const dmInline = tile.querySelector("#presence-tile-dm-inline");
       if (tabId === "messages") {
         if (teamBody) teamBody.style.display = "none";
+        if (dmInline) dmInline.style.display = "none";
         if (msgBody) {
           msgBody.style.display = "";
           renderPresenceTileMessages();
         }
-        tile.classList.add("presence-tile-expanded");
       } else {
         if (teamBody) teamBody.style.display = "";
         if (msgBody) msgBody.style.display = "none";
-        tile.classList.remove("presence-tile-expanded");
+        if (dmInline) dmInline.style.display = "none";
       }
     });
   }
@@ -12375,7 +12417,6 @@ function switchToPresenceMessagesTab() {
   if (teamBody) teamBody.style.display = "none";
   if (msgBody) msgBody.style.display = "";
   if (dmInline) dmInline.style.display = "none";
-  tile.classList.add("presence-tile-expanded");
   renderPresenceTileMessages();
 }
 
