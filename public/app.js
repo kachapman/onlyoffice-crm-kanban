@@ -43,10 +43,13 @@ const RETRY_INTERVAL_MS = 5000;
 const PRESENCE_USERS_CACHE_KEY = "oo_board_presence_users_v1";
 const PRESENCE_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // refresh on next login or after ~7 days
 const PRESENCE_POLL_MS = 30000; // when modal or visible tile is active
-const PRESENCE_HEARTBEAT_MS = 60000; // when tab visible
+const PRESENCE_HEARTBEAT_VISIBLE_MS = 30000; // 30s when tab visible
+const PRESENCE_HEARTBEAT_BG_MS = 120000; // 2min when backgrounded (via sendBeacon)
 const PRESENCE_IDLE_2H_MS = 2 * 60 * 60 * 1000;
 const PRESENCE_AUTO_LOGOUT_3H_MS = 3 * 60 * 60 * 1000;
 const PRESENCE_CUSTOM_MAX = 120; // modest char limit for custom status (emojis allowed)
+const PRESENCE_IDLE_15M_MS = 15 * 60 * 1000; // auto-derived idle threshold
+const PRESENCE_AUTO_STATUS_TIMEOUT_MS = 300000; // 5 min — clear auto-status if no new deal activity
 
 /** Daily Focus quote — rotating daily inspiration banner */
 const DAILY_FOCUS_KEY = "oo_daily_focus_author";
@@ -690,6 +693,8 @@ function getCalendarByTileId(tileId) {
 function ensureTileLayout() {
   const order = state.tileLayout.order?.length ? [...state.tileLayout.order] : defaultTileOrder();
   const known = new Set(defaultTileOrder());
+  // Always include tile-presence in known tiles
+  known.add("tile-presence");
   const filtered = order.filter((id) => known.has(id));
   for (const id of known) {
     if (!filtered.includes(id)) filtered.push(id);
@@ -701,11 +706,12 @@ function ensureTileLayout() {
     if (!state.tileLayout.pinned) state.tileLayout.pinned = {};
     if (state.tileLayout.pinned[id] === undefined) state.tileLayout.pinned[id] = true;
   }
-  // Note: intentionally do NOT call normalizeOrderForPinned() here (only after explicit user drag reorders in the drop handler).
-  // Calling it from ensure (which mount+pin-toggle go through) was causing the array to be re-sorted on unpin,
-  // which automatically "lowered" the just-unpinned tile (pushed to end of otherPart).
-  // Now, unpin just flips the render layer for that tile using its *existing stable position* in the order array.
-  // It only gets displaced in the grid if other tiles are later reordered (via drag, which does normalize to keep pinned logically first).
+  // Always ensure tile-presence is pinned
+  if (!state.tileLayout.pinned) state.tileLayout.pinned = {};
+  state.tileLayout.pinned["tile-presence"] = true;
+  if (!state.tileLayout.order.includes("tile-presence")) {
+    state.tileLayout.order.push("tile-presence");
+  }
   saveLayoutToStorage();
 }
 
@@ -878,7 +884,7 @@ async function loadExpandedDashboardTiles({ quiet = false } = {}) {
   return Promise.resolve();
 }
 
-const PINNED_TILE_IDS = ["tile-feed", "tile-tasks"];
+const PINNED_TILE_IDS = ["tile-feed", "tile-tasks", "tile-presence"];
 const PANEL_TILE_IDS = new Set(PINNED_TILE_IDS);
 
 function isTilePinnedToTop(tileId) {
@@ -956,11 +962,6 @@ function applyTileLayoutClasses(tileEl, tileId) {
     }
     tileEl.classList.add("panel-tile");
     tileEl.classList.remove("tile-double", "tile-half", "tile-quarter", "tasks-tile-full", "panel-width-quarter", "panel-width-half", "panel-width-full");
-    const w = tileWidth(tileId);
-    tileEl.classList.toggle("panel-width-quarter", w === "quarter");
-    tileEl.classList.toggle("panel-width-half", w === "half");
-    tileEl.classList.toggle("panel-width-full", w === "full");
-    tileEl.classList.toggle("tasks-tile-full", tileId === "tile-tasks" && w === "full");
     syncPanelRowLayout();
     return;
   }
@@ -1291,9 +1292,6 @@ function createTileChrome(tileId, label) {
   hint.title = "Drag to reorder (left/right or up/down)";
 
   const isPanel = PANEL_TILE_IDS.has(tileId) && isTilePinnedToTop(tileId);
-  // Note: we intentionally do *not* hide the drag hint or force draggable=false for isPanel (the feed+tasks tiles).
-  // This allows them to be moved left/right while pinned at the top (and behave like other tiles when unpinned).
-  // The isPanel flag is still used below to choose quarter vs tall layout buttons.
 
   const name = document.createElement("span");
   name.className = "tile-toolbar-title";
@@ -1307,35 +1305,26 @@ function createTileChrome(tileId, label) {
   const spacer = document.createElement("span");
   spacer.className = "tile-toolbar-spacer";
 
-  const { wrap, quarterBtn, halfBtn, fullBtn, tallBtn } = createLayoutButtons({
-    showDoubleHeight: !isPanel,
-    showQuarterWidth: isPanel,
-  });
-
   toolbar.appendChild(hint);
   toolbar.appendChild(name);
   toolbar.appendChild(countBadge);
   toolbar.appendChild(spacer);
-  toolbar.appendChild(wrap);
 
-  let pinBtn = null;
-  if (PINNED_TILE_IDS.includes(tileId)) {
-    pinBtn = document.createElement("button");
-    pinBtn.type = "button";
-    pinBtn.className = "btn btn-ghost tile-btn tile-btn-icon tile-pin-btn";
-    toolbar.appendChild(pinBtn);
+  // Panel tiles (feed/tasks/presence): no layout buttons, no pin button — fixed equal width
+  if (!isPanel) {
+    const { wrap, quarterBtn, halfBtn, fullBtn, tallBtn } = createLayoutButtons({
+      showDoubleHeight: true,
+      showQuarterWidth: false,
+    });
+    toolbar.appendChild(wrap);
+    return { toolbar, quarterBtn: null, halfBtn, fullBtn, tallBtn, pinBtn: null, layoutWrap: wrap };
   }
 
-  return { toolbar, quarterBtn, halfBtn, fullBtn, tallBtn, pinBtn };
+  return { toolbar, quarterBtn: null, halfBtn: null, fullBtn: null, tallBtn: null, pinBtn: null, layoutWrap: null };
 }
 
 function syncPanelRowLayout() {
-  const row = $("#dashboard-panel-row");
-  const pinned = $("#dashboard-tiles-pinned");
-  if (!row) return;
-  const anyFull = PINNED_TILE_IDS.some((id) => isTilePinnedToTop(id) && tileWidth(id) === "full" && !tileBodyCollapsed(id));
-  row.classList.toggle("panel-row-has-full", anyFull);
-  if (pinned) pinned.classList.toggle("panel-row-has-full", anyFull);
+  // All panel tiles are equal width — no layout sync needed
 }
 
 function updatePanelTileCount(tileId, count) {
@@ -1365,42 +1354,23 @@ function ensurePanelToolbarCount(tileEl, tileId) {
 }
 
 function ensurePanelLayoutButtons(tileEl, tileId) {
-  if (!PANEL_TILE_IDS.has(tileId)) return;
-  const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
-  if (!toolbar) return;
-  const existingWrap = toolbar.querySelector(".tile-layout-btns");
-  if (existingWrap) {
-    const fullBtn = existingWrap.querySelector('[data-layout="full"]');
-    if (fullBtn) fullBtn.remove();
-    return;
-  }
-  const { wrap, quarterBtn, halfBtn, fullBtn, tallBtn } = createLayoutButtons({ showDoubleHeight: false, showQuarterWidth: true, showFullWidth: false });
-  toolbar.appendChild(wrap);
-  bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn, quarterBtn);
+  // Panel tiles have fixed equal width — no layout buttons
 }
 
 function ensurePanelPinButton(tileEl, tileId) {
-  if (!PANEL_TILE_IDS.has(tileId)) return;
-  const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
-  if (!toolbar || toolbar.querySelector(".tile-pin-btn")) return;
-  const pb = document.createElement("button");
-  pb.type = "button";
-  pb.className = "btn btn-ghost tile-btn tile-btn-icon tile-pin-btn";
-  toolbar.appendChild(pb);
-  bindTilePinButton(tileEl, tileId, pb);
+  // Pin button removed — all panel tiles are always pinned
 }
 
 function bindTileChrome(tileEl, tileId) {
   if (!tileEl.querySelector(":scope > .tile-toolbar")) {
-    const { toolbar, quarterBtn, halfBtn, fullBtn, tallBtn, pinBtn } = createTileChrome(tileId, tileEl.dataset.tileLabel || "Section");
-    bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn, quarterBtn);
+    const { toolbar, halfBtn, fullBtn, tallBtn } = createTileChrome(tileId, tileEl.dataset.tileLabel || "Section");
+    if (halfBtn || fullBtn || tallBtn) {
+      bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn, null);
+    }
     tileEl.prepend(toolbar);
     bindTileDragDrop(tileEl, tileId, toolbar);
-    bindTilePinButton(tileEl, tileId, pinBtn);
   } else {
     ensurePanelToolbarCount(tileEl, tileId);
-    ensurePanelLayoutButtons(tileEl, tileId);
-    ensurePanelPinButton(tileEl, tileId);
   }
   attachTileCollapseButton(tileEl, tileId);
   applyTileBodyCollapsed(tileEl, tileId);
@@ -1713,6 +1683,11 @@ function mountDashboardTiles() {
   if (!root) return;
   ensureTileLayout();
 
+  // Ensure presence tile element exists (always visible, not removable)
+  if (!document.querySelector('[data-tile-id="tile-presence"]')) {
+    renderPresenceTile();
+  }
+
   const nodes = collectDashboardTileNodes();
   if (pinnedRoot) pinnedRoot.innerHTML = "";
   if (panelRow) panelRow.innerHTML = "";
@@ -1792,8 +1767,6 @@ function renderFeedTile() {
   }
   applyTileLayoutClasses(tile, tileId);
   ensurePanelToolbarCount(tile, tileId);
-  ensurePanelLayoutButtons(tile, tileId);
-  ensurePanelPinButton(tile, tileId);
   ensureTileAutoRefreshButton(tile, tileId);
   ensureFeedHiddenToolbarButton(tile);
   syncFeedFilterPlaceholder();
@@ -1835,8 +1808,6 @@ function renderTasksTile() {
   }
   applyTileLayoutClasses(tile, tileId);
   ensurePanelToolbarCount(tile, tileId);
-  ensurePanelLayoutButtons(tile, tileId);
-  ensurePanelPinButton(tile, tileId);
   ensureTileAutoRefreshButton(tile, tileId);
   ensureTasksNewTaskButton(tile);
   if (tile && !tile.dataset.tasksFilterBound) {
@@ -6638,6 +6609,7 @@ function bindContactField(group, wrap) {
 function renderBoardGroups() {
   renderFeedTile();
   renderTasksTile();
+  renderPresenceTile();
   const dash = $("#dashboard-tiles");
   if (!dash) return;
 
@@ -8123,6 +8095,57 @@ let panelTileAutoRefreshTimer = null;
 
 function noteDashboardActivity() {
   lastDashboardActivityAt = Date.now();
+  const data = state.presenceData;
+  if (!data || !data.me) return;
+  const currentStatus = data.me.status || "";
+  const currentAutoStatus = data.me.autoStatus || "";
+  // Reset afk guard when status is no longer AFK (manual clear or server update)
+  if (!currentStatus.startsWith("AFK")) {
+    state._afkClearSent = false;
+  }
+  // Auto-expire AFK statuses when user becomes active; also clear idle auto-status
+  // Never clear a manually-set DND status — only clear autoStatus in that case
+  if (currentStatus.startsWith("AFK")) {
+    // Debounce: only send once while status is AFK — avoids racing with
+    // updateInferredStatus on repeated mousedown/scroll events
+    if (state._afkClearSent) return;
+    state._afkClearSent = true;
+    state._suppressAutoStatus = false;
+    // Send { status: "Online" } WITHOUT autoStatus — server preserves whatever
+    // autoStatus was set by updateInferredStatus, preventing a race where the
+    // AFK-clear request arrives after the auto-status request and wipes it out.
+    presenceFetch("/api/presence/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "Online" }),
+    }).then(() => {
+      state._afkClearSent = false;
+      state.presenceData = null;
+      if (state.hasPresenceTile) {
+        fetchPresenceSnapshot().then(s => {
+          state.presenceData = s;
+          renderPresenceTileCompact(s);
+          updatePresenceTileBadge();
+        }).catch(() => {});
+      }
+    }).catch(() => { state._afkClearSent = false; });
+  } else if (currentAutoStatus === "Idle") {
+    // Only clear autoStatus; new server handles this, old server rejects but doesn't have this scenario
+    presenceFetch("/api/presence/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ autoStatus: "" }),
+    }).then(() => {
+      state.presenceData = null;
+      if (state.hasPresenceTile) {
+        fetchPresenceSnapshot().then(s => {
+          state.presenceData = s;
+          renderPresenceTileCompact(s);
+          updatePresenceTileBadge();
+        }).catch(() => {});
+      }
+    }).catch(() => {});
+  }
 }
 
 function isDashboardActivityFresh() {
@@ -8169,6 +8192,7 @@ function bindDashboardActivityTracking() {
 
 function ensureTileAutoRefreshButton(tileEl, tileId) {
   if (!isAutoRefreshTileId(tileId)) return;
+  if (tileId === "tile-presence") return; // presence updates in real-time via heartbeat/poll
   const toolbar = tileEl.querySelector(":scope > .tile-toolbar, :scope > .group-tile-bar");
   if (!toolbar || toolbar.querySelector(".btn-tile-refresh")) return;
 
@@ -8902,6 +8926,7 @@ async function submitDealEditForm(e) {
       hideCRMSyncStatus();
     }, 1500);
     showToast("Deal updated");
+    updateInferredStatus("edit", ctx.oppTitle || "");
     // Targeted single-opp refresh instead of full group refetch (~200ms vs 5-10s).
     // Fetches just the one changed opportunity and updates its card DOM in-place.
     // For stage/tag changes that affect board layout, re-renders the board from in-memory data (no CRM filter call).
@@ -9223,6 +9248,7 @@ async function submitQuickNoteForm(e) {
       hideCRMSyncStatus();
     }, 1500);
     showToast("Note saved");
+    updateInferredStatus("note", ctx.oppTitle || "");
 
     // Defer all post-submit refreshes to keep the UI responsive (prevents the "hangs, nothing clickable, then full re-render"
     // after quick notes and similar pushes). Quick notes only affect history (in preview) or due/tags (board).
@@ -10494,7 +10520,7 @@ function getPresenceUserId(u) {
 function presenceFetch(path, init = {}) {
   const headers = { ...(init.headers || {}) };
   if (state.portalUrl) headers["X-OnlyOffice-Portal"] = state.portalUrl;
-  return fetch(path, { credentials: "same-origin", ...init, headers });
+  return fetch(path, { credentials: "same-origin", ...init, cache: "no-cache", headers });
 }
 
 async function fetchPresenceSnapshot() {
@@ -10507,6 +10533,7 @@ async function fetchPresenceSnapshot() {
     if (state.presenceData) {
       if (!Array.isArray(state.presenceData.myRecentDms)) state.presenceData.myRecentDms = [];
       syncLastReadFromServer();
+      injectTestMessages();
     }
     return state.presenceData;
   } catch {
@@ -10526,9 +10553,9 @@ function startPresencePolling() {
       return;
     }
     const snap = await fetchPresenceSnapshot();
+    state.presenceData = snap;
     if (state.presenceModalOpen) {
       renderPresenceModal(snap);
-      // While a DM thread is open, refresh its log so read receipts (and any new replies) update live
       if (state.presenceSelectedUserId) {
         presenceFetch(`/api/presence/dm?with=${encodeURIComponent(state.presenceSelectedUserId)}`)
           .then(r => r.json())
@@ -10541,8 +10568,9 @@ function startPresencePolling() {
     }
     if (state.hasPresenceTile) {
       renderPresenceTileCompact(snap);
+      updatePresenceTileBadge();
+      updatePresenceTileAdminButton();
     }
-    updatePresenceHeaderIndicators(snap);
   }, PRESENCE_POLL_MS);
 }
 
@@ -10557,21 +10585,52 @@ function startPresenceHeartbeats() {
   stopPresenceHeartbeats();
   // Send a heartbeat on visibility + periodic when the dashboard is visible
   const send = () => {
-    // Fire and forget; the server updates lastHeartbeat
     presenceFetch(`/api/presence/heartbeat`, { method: "POST" }).catch(() => {});
-    noteDashboardActivity(); // also keep the existing idle machinery happy
+    noteDashboardActivity();
   };
-  // Initial
-  send();
-  // Quick follow-up snapshot so self-online indicator appears promptly on header icon
-  setTimeout(() => {
-    fetchPresenceSnapshot().then(s => updatePresenceHeaderIndicators(s)).catch(() => {});
-  }, 800);
-  // Periodic
+  // Fire-and-forget heartbeat for background tabs (not throttled by browsers)
+  const sendBeacon = () => {
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon("/api/presence/heartbeat");
+      noteDashboardActivity();
+    } else {
+      send();
+    }
+  };
+  // Initial heartbeat → then snapshot (sequential to ensure online status immediately)
+  presenceFetch(`/api/presence/heartbeat`, { method: "POST" })
+    .then(() => fetchPresenceSnapshot())
+    .then(s => {
+      state.presenceData = s;
+      renderPresenceTileCompact(s);
+      updatePresenceTileBadge();
+      updatePresenceTileAdminButton();
+    })
+    .catch(() => {
+      // Fallback: try snapshot even if heartbeat failed
+      fetchPresenceSnapshot().then(s => {
+        state.presenceData = s;
+        renderPresenceTileCompact(s);
+        updatePresenceTileBadge();
+        updatePresenceTileAdminButton();
+      }).catch(() => {});
+    });
+  noteDashboardActivity();
+  // Periodic: 30s when visible, sendBeacon every 2min regardless
   state.presenceHeartbeatTimer = setInterval(() => {
-    if (document.visibilityState === "visible") send();
-  }, PRESENCE_HEARTBEAT_MS);
-  // On visibility change — ensure singleton to avoid accumulation after repeated open/close of team viewer.
+    if (document.visibilityState === "visible") {
+      send();
+    } else {
+      sendBeacon();
+    }
+  }, PRESENCE_HEARTBEAT_VISIBLE_MS);
+  // Slower background beacon interval
+  state.presenceHeartbeatBgTimer = setInterval(() => {
+    if (document.visibilityState !== "visible") {
+      sendBeacon();
+    }
+  }, PRESENCE_HEARTBEAT_BG_MS);
+  // On visibility change — immediate heartbeat when returning to foreground
   if (state._presenceVisHandler) {
     document.removeEventListener("visibilitychange", state._presenceVisHandler);
   }
@@ -10587,6 +10646,10 @@ function stopPresenceHeartbeats() {
     clearInterval(state.presenceHeartbeatTimer);
     state.presenceHeartbeatTimer = null;
   }
+  if (state.presenceHeartbeatBgTimer) {
+    clearInterval(state.presenceHeartbeatBgTimer);
+    state.presenceHeartbeatBgTimer = null;
+  }
   if (state._presenceVisHandler) {
     document.removeEventListener("visibilitychange", state._presenceVisHandler);
     state._presenceVisHandler = null;
@@ -10594,36 +10657,96 @@ function stopPresenceHeartbeats() {
 }
 
 function setupPresenceIdleAndAutoLogout() {
-  // Extend the existing activity tracking.
-  // We already call noteDashboardActivity() from various places and visibility.
-  // Add a 3h auto-logout timer that resets on activity.
   if (state.presenceIdleTimer) {
     clearTimeout(state.presenceIdleTimer);
+  }
+  if (state.presenceIdleStatusTimer) {
+    clearTimeout(state.presenceIdleStatusTimer);
   }
 
   const checkAndMaybeLogout = () => {
     const idleMs = Date.now() - lastDashboardActivityAt;
     if (idleMs >= PRESENCE_AUTO_LOGOUT_3H_MS) {
-      // Auto logout (best effort)
       (async () => {
         try {
           await fetch("/api/logout", { method: "POST", credentials: "same-origin" });
         } catch {}
         try { showToast("Logged out due to 3 hours of inactivity"); } catch {}
-        // Show login screen
         try { showLogin(); } catch {}
       })();
       return;
     }
-    // Re-arm
     const remaining = Math.max(30000, PRESENCE_AUTO_LOGOUT_3H_MS - idleMs);
     state.presenceIdleTimer = setTimeout(checkAndMaybeLogout, remaining);
   };
 
-  // Seed the timer
-  state.presenceIdleTimer = setTimeout(checkAndMaybeLogout, PRESENCE_AUTO_LOGOUT_3H_MS);
+  // Auto-derived idle status: set "Idle" after 15 min of no activity
+  const checkIdleStatus = () => {
+    const idleMs = Date.now() - lastDashboardActivityAt;
+    if (idleMs >= PRESENCE_IDLE_15M_MS) {
+      // Only set idle if current status isn't already AFK
+      const curStatus = state.presenceData?.me?.status || "";
+      if (!curStatus.startsWith("AFK")) {
+        updateInferredStatus("idle", "");
+      }
+    }
+    const remaining = Math.max(30000, PRESENCE_IDLE_15M_MS - idleMs);
+    state.presenceIdleStatusTimer = setTimeout(checkIdleStatus, remaining);
+  };
 
-  // Also surface a 2h "idle" visual in the presence UI when we render (see render functions)
+  state.presenceIdleTimer = setTimeout(checkAndMaybeLogout, PRESENCE_AUTO_LOGOUT_3H_MS);
+  state.presenceIdleStatusTimer = setTimeout(checkIdleStatus, PRESENCE_IDLE_15M_MS);
+}
+
+function updateInferredStatus(action, detail) {
+  let text = "";
+  switch (action) {
+    case "edit": text = `Working on: ${detail}`; break;
+    case "preview": text = `Reviewing: ${detail}`; break;
+    case "note": text = `Just noted: ${detail}`; break;
+    case "idle": text = "Idle"; break;
+    case "available": text = ""; break;
+  }
+  if (text === undefined) return;
+  if (state._suppressAutoStatus) return;
+  presenceFetch("/api/presence/status", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: text, autoStatus: text, inferred: true }),
+  }).then(() => {
+    state.presenceData = null;
+    fetchPresenceSnapshot().then(s => {
+      state.presenceData = s;
+      if (state.hasPresenceTile) {
+        renderPresenceTileCompact(s);
+        updatePresenceTileBadge();
+        updatePresenceTileAdminButton();
+      }
+    }).catch(() => {});
+  }).catch(() => {});
+
+  // Schedule auto-status timeout: if user doesn't open/edit another deal within 5 min,
+  // clear the auto-status so it doesn't look like they're still on that deal.
+  // Only schedule for meaningful activities (not idle/available).
+  if (action !== "idle" && action !== "available") {
+    if (state._autoStatusTimeout) clearTimeout(state._autoStatusTimeout);
+    state._autoStatusTimeout = setTimeout(() => {
+      state._autoStatusTimeout = null;
+      presenceFetch("/api/presence/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ autoStatus: "" }),
+      }).then(() => {
+        if (state.hasPresenceTile) {
+          fetchPresenceSnapshot().then(s => {
+            state.presenceData = s;
+            renderPresenceTileCompact(s);
+            updatePresenceTileBadge();
+          }).catch(() => {});
+        }
+      }).catch(() => {});
+    }, PRESENCE_AUTO_STATUS_TIMEOUT_MS);
+  }
 }
 
 function updatePresenceHeaderBadge(snapshot = null) {
@@ -10831,12 +10954,12 @@ function ensureNotesToolbarRows(section) {
   }
 }
 
-function renderPresenceStatusPicker(container, currentStatus = "", onChange) {
+function renderPresenceStatusPicker(container, currentStatus = "", onChange, inferred = false) {
   if (!container) return;
   container.innerHTML = "";
 
   const templates = [
-    "Estimating - Do Not Disturb",
+    "DND - Estimating",
     "AFK - Lunch",
     "AFK - Pesky In-laws",
   ];
@@ -10854,8 +10977,9 @@ function renderPresenceStatusPicker(container, currentStatus = "", onChange) {
   const sel = document.createElement("select");
   sel.className = "presence-status-select";
 
-  // Default to "Online"
-  const effectiveStatus = currentStatus || "Online";
+  // If the server status is auto-derived (inferred=true), treat as "Online" in picker.
+  // undefined means old server (no distinction) — show the status directly.
+  const effectiveStatus = (inferred !== true && currentStatus) ? currentStatus : "Online";
 
   const onlineOpt = document.createElement("option");
   onlineOpt.value = "Online";
@@ -10894,14 +11018,15 @@ function renderPresenceStatusPicker(container, currentStatus = "", onChange) {
     let val = sel.value;
     if (val === "__custom__") {
       val = (ta.value || "").trim().slice(0, PRESENCE_CUSTOM_MAX);
-    } else if (val === "") {
-      val = "";
     }
+    const isClear = !val || val === "Online";
+    // Suppress auto-status when setting a manual status; re-enable on clear
+    state._suppressAutoStatus = !isClear;
     try {
       const res = await presenceFetch(`/api/presence/status`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: val }),
+        body: JSON.stringify(isClear ? { status: "Online" } : { status: val, inferred: false, autoStatus: "" }),
       });
       if (!res.ok) {
         let errMsg = `HTTP ${res.status}`;
@@ -10997,10 +11122,29 @@ function renderPresenceUserList(container, snapshot, usersCache, onUserClick) {
     nm.className = "presence-name";
     nm.textContent = name;
 
+    // Detect server version: new server sends inferred/autoStatus fields
+    const serverHasInferred = typeof p.inferred !== 'undefined';
+
+    // Manual status next to name, bold, wrapped in parentheses (like the tile)
+    const manualStatus = document.createElement("span");
+    manualStatus.className = "presence-manual-status";
+    if (serverHasInferred && p.status && p.inferred === false && p.status !== "Online") {
+      manualStatus.textContent = `(${p.status})`;
+    }
+
     const st = document.createElement("span");
     st.className = "presence-status";
-    let statusText = p.status || "";
-    if (statusText === "Online") statusText = ""; // default, keep list clean
+    let statusText = "";
+    if (p.autoStatus) {
+      statusText = p.autoStatus;
+    } else if (serverHasInferred) {
+      if (p.inferred && p.status) {
+        statusText = p.status;
+      }
+    } else if (p.status && p.status !== "Online") {
+      // Old server fallback: show all non-Online statuses on the right
+      statusText = p.status;
+    }
     if (!isOnline) {
       const last = p.lastSeen || "";
       if (last) {
@@ -11011,7 +11155,7 @@ function renderPresenceUserList(container, snapshot, usersCache, onUserClick) {
     }
     st.textContent = statusText;
 
-    row.append(dot, nm, st);
+    row.append(dot, nm, manualStatus, st);
 
     if (typeof onUserClick === "function") {
       row.addEventListener("click", () => onUserClick(id, name, p));
@@ -11169,7 +11313,7 @@ function renderPresenceInbox(container, recentDms, cache, snap) {
  * - read receipts on my sent messages
  * - click to reply to any message
  */
-function renderDMLog(logEl, msgs) {
+function renderDMLog(logEl, msgs, onReplyClick) {
   if (!logEl) return;
   logEl.innerHTML = '';
   if (!msgs || !msgs.length) {
@@ -11181,6 +11325,7 @@ function renderDMLog(logEl, msgs) {
   }
   const msgByTs = new Map();
   msgs.forEach(m => { if (m && m.ts) msgByTs.set(String(m.ts), m); });
+  const replyHandler = typeof onReplyClick === "function" ? onReplyClick : setPresenceReplyTo;
 
   msgs.forEach(m => {
     const div = document.createElement("div");
@@ -11231,7 +11376,7 @@ function renderDMLog(logEl, msgs) {
 
     // Click anywhere on the bubble to reply to this message
     div.addEventListener("click", () => {
-      setPresenceReplyTo(m);
+      replyHandler(m);
     });
 
     logEl.appendChild(div);
@@ -11297,6 +11442,30 @@ function clearPresenceReplyTo() {
   if (preview && preview.parentNode) preview.parentNode.removeChild(preview);
 }
 
+/* --- Inline DM reply support (inside tile) --- */
+let presenceInlineReplyTo = null;
+
+function setPresenceInlineReplyTo(msg) {
+  presenceInlineReplyTo = msg;
+  const tile = document.querySelector('[data-tile-id="tile-presence"]');
+  if (!tile) return;
+  let preview = tile.querySelector("#presence-tile-dm-reply-preview");
+  if (!preview) return;
+  const short = (msg.text || "").slice(0, 50) + ((msg.text || "").length > 50 ? "…" : "");
+  preview.innerHTML = `Replying to: <span>${escapeHtml(short)}</span> <button type="button" class="btn btn-ghost btn-tiny">×</button>`;
+  preview.style.display = "";
+  const cancel = preview.querySelector("button");
+  if (cancel) cancel.onclick = clearPresenceInlineReplyTo;
+}
+
+function clearPresenceInlineReplyTo() {
+  presenceInlineReplyTo = null;
+  const tile = document.querySelector('[data-tile-id="tile-presence"]');
+  if (!tile) return;
+  const preview = tile.querySelector("#presence-tile-dm-reply-preview");
+  if (preview) preview.style.display = "none";
+}
+
 function insertEmoji(textarea, emoji) {
   if (!textarea) return;
   const start = textarea.selectionStart || textarea.value.length;
@@ -11308,10 +11477,12 @@ function insertEmoji(textarea, emoji) {
   textarea.focus();
 }
 
-function showEmojiPicker() {
-  let picker = $("#presence-emoji-picker");
-  if (picker) { picker.remove(); return; }
-  picker = document.createElement("div");
+function showEmojiPicker(textarea, container) {
+  if (!textarea || !container) return;
+  // Remove any existing picker
+  const existing = container.querySelector("#presence-emoji-picker");
+  if (existing) { existing.remove(); return; }
+  const picker = document.createElement("div");
   picker.id = "presence-emoji-picker";
   picker.className = "presence-emoji-picker";
   const emojis = ["😀","😃","😄","😁","😆","😅","😂","🤣","😊","😇","🙂","🙃","😉","😌","😍","🥰","😘","😗","😙","😚","😋","😛","😝","😜","🤪","🤨","🧐","🤓","😎","🤩","🥳","😏","😒","😞","😔","😟","😕","🙁","☹️","😣","😖","😫","😩","🥺","😢","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🤗","🤔","🤭","🤫","🤥","😶","😐","😑","😬","🙄","😯","😦","😧","😮","😲","🥱","😴","🤤","😪","😵","🤐","🥴","🤢","🤮","🤧","😷","🤒","🤕","🤑","🤠","😈","👿","👹","👺","🤡","💩","👻","💀","☠️","👽","👾","🤖","🎃","😺","😸","😹","😻","😼","😽","🙀","😿","😾","🙈","🙉","🙊","💋","💌","💘","💝","💖","💗","💓","💞","💕","💟","❣️","💔","❤️","🧡","💛","💚","💙","💜","🤎","🖤","🤍","💯","💢","💥","💫","💦","💨","🕳️","💣","💬","👁️‍🗨️","🗨️","🗯️","💭","💤","👍","👎","👌","✌️","🤞","🤟","🤘","🤙","👈","👉","👆","👇","☝️","✋","🤚","🖐️","🖖","👋","🤙","💪","🦾","🦿","🦵","🦶","👂","🦻","👃","🧠","🦷","🦴","👀","👁️","👅","👄","💋"];
@@ -11322,16 +11493,64 @@ function showEmojiPicker() {
     b.className = "presence-emoji-btn";
     b.onclick = (e) => {
       e.stopPropagation();
-      const ta = $("#presence-dm-text");
+      insertEmoji(textarea, em);
+      picker.remove();
+    };
+    picker.appendChild(b);
+  });
+  container.appendChild(picker);
+}
+
+function showPopupEmojiPicker() {
+  const ta = $("#presence-dm-text");
+  const container = $("#presence-dm").querySelector(".presence-dm-input");
+  showEmojiPicker(ta, container);
+}
+
+function showInlineEmojiPicker() {
+  const tile = document.querySelector('[data-tile-id="tile-presence"]');
+  if (!tile) return;
+  const ta = tile.querySelector("#presence-tile-dm-text");
+  if (!ta) return;
+  // Toggle existing picker
+  const existing = document.getElementById("presence-inline-emoji-picker");
+  if (existing) { existing.remove(); return; }
+  const picker = document.createElement("div");
+  picker.id = "presence-inline-emoji-picker";
+  picker.className = "presence-emoji-picker presence-emoji-picker-overlay";
+  const emojis = ["😀","😃","😄","😁","😆","😅","😂","🤣","😊","😇","🙂","🙃","😉","😌","😍","🥰","😘","😗","😙","😚","😋","😛","😝","😜","🤪","🤨","🧐","🤓","😎","🤩","🥳","😏","😒","😞","😔","😟","😕","🙁","☹️","😣","😖","😫","😩","🥺","😢","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🤗","🤔","🤭","🤫","🤥","😶","😐","😑","😬","🙄","😯","😦","😧","😮","😲","🥱","😴","🤤","😪","😵","🤐","🥴","🤢","🤮","🤧","😷","🤒","🤕","🤑","🤠","😈","👿","👹","👺","🤡","💩","👻","💀","☠️","👽","👾","🤖","🎃","😺","😸","😹","😻","😼","😽","🙀","😿","😾","🙈","🙉","🙊","💋","💌","💘","💝","💖","💗","💓","💞","💕","💟","❣️","💔","❤️","🧡","💛","💚","💙","💜","🤎","🖤","🤍","💯","💢","💥","💫","💦","💨","🕳️","💣","💬","👁️‍🗨️","🗨️","🗯️","💭","💤","👍","👎","👌","✌️","🤞","🤟","🤘","🤙","👈","👉","👆","👇","☝️","✋","🤚","🖐️","🖖","👋","🤙","💪","🦾","🦿","🦵","🦶","👂","🦻","👃","🧠","🦷","🦴","👀","👁️","👅","👄","💋"];
+  emojis.forEach(em => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = em;
+    b.className = "presence-emoji-btn";
+    b.onclick = (e) => {
+      e.stopPropagation();
       insertEmoji(ta, em);
       picker.remove();
     };
     picker.appendChild(b);
   });
-  const inputDiv = $("#presence-dm").querySelector(".presence-dm-input");
-  if (inputDiv) {
-    inputDiv.appendChild(picker);
+  // Position picker below the emoji button
+  const emojiBtn = tile.querySelector("#presence-tile-dm-emoji");
+  if (emojiBtn) {
+    const rect = emojiBtn.getBoundingClientRect();
+    picker.style.position = "fixed";
+    picker.style.left = rect.left + "px";
+    picker.style.top = (rect.bottom + 4) + "px";
+    picker.style.zIndex = "99999";
+    picker.style.width = "auto";
+    picker.style.minWidth = "200px";
   }
+  document.body.appendChild(picker);
+  // Click away to close
+  const closePicker = (e) => {
+    if (!picker.contains(e.target) && e.target !== emojiBtn && !emojiBtn?.contains(e.target)) {
+      picker.remove();
+      document.removeEventListener("click", closePicker, true);
+    }
+  };
+  setTimeout(() => document.addEventListener("click", closePicker, true), 0);
 }
 
 function enhanceDMInputForCurrentThread() {
@@ -11348,7 +11567,7 @@ function enhanceDMInputForCurrentThread() {
   emBtn.className = "btn btn-ghost btn-tiny";
   emBtn.textContent = "😊";
   emBtn.title = "Insert emoji";
-  emBtn.addEventListener("click", showEmojiPicker);
+  emBtn.addEventListener("click", showPopupEmojiPicker);
   // Buttons wrapper for the right column (emoji + send, horizontal)
   const btnWrap = document.createElement("div");
   btnWrap.className = "presence-dm-input-buttons";
@@ -11635,10 +11854,18 @@ function renderPresenceModal(snapshot = null, usersCache = null) {
   // My status picker (top)
   const me = (snap.me || {});
   const myStatus = me.status || (snap.users || []).find(u => u.id === state.currentUserId)?.status || "";
+  const myInferred = me.inferred !== undefined ? me.inferred : (snap.users || []).find(u => u.id === state.currentUserId)?.inferred;
   renderPresenceStatusPicker(myEl, myStatus, (newStatus) => {
-    // After save, re-fetch and re-render
-    fetchPresenceSnapshot().then(s => renderPresenceModal(s, cache));
-  });
+    fetchPresenceSnapshot().then(s => {
+      renderPresenceModal(s, cache);
+      if (state.hasPresenceTile) {
+        renderPresenceTileCompact(s);
+        updatePresenceTileBadge();
+        updatePresenceTileAdminButton();
+        syncTileStatusSelect(s);
+      }
+    });
+  }, myInferred);
 
   // Tabs (Team roster / Messages inbox). Wire clicks and active state.
   const tabsContainer = $("#presence-tabs");
@@ -11719,52 +11946,100 @@ function renderPresenceModal(snapshot = null, usersCache = null) {
 }
 
 function renderPresenceTileCompact(snapshot = null) {
-  // The tile body is created by the mount / renderPresenceTile logic below.
-  // This function just updates the inner list when we have fresh data.
-  const body = $("#presence-tile-body");
+  const body = $("#presence-tile-team-body");
   if (!body) return;
   const snap = snapshot || state.presenceData || { users: [] };
-  const users = (snap.users || []).slice(0, 12); // keep the compact view small
+  const allUsers = snap.users || [];
+
+  // Split into online vs offline groups
+  const onlineUsers = allUsers.filter(u => u.online || u.idle);
+  const offlineUsers = allUsers.filter(u => !u.online && !u.idle);
 
   body.innerHTML = "";
   const list = document.createElement("div");
   list.className = "presence-list-compact";
 
-  users.forEach(u => {
+  const renderUserRow = (u) => {
     const row = document.createElement("div");
     row.className = "presence-user";
+
     const dot = document.createElement("span");
     let dcls = "offline";
-    if (u.online) dcls = u.idle ? "idle" : "online";
+    // Treat client-side idle (15 min) as idle dot too
+    const isClientIdle = u.online && (u.autoStatus === "Idle" || (u.inferred && u.status === "Idle"));
+    if (u.online) dcls = (u.idle || isClientIdle) ? "idle" : "online";
     else if (u.afd) dcls = "afd";
     dot.className = "presence-dot " + dcls;
+
     const nm = document.createElement("span");
+    nm.className = "presence-name";
     nm.textContent = u.displayName || u.id || "";
-    nm.style.marginLeft = "0.35rem";
+
+    // Detect server version: new server sends inferred/autoStatus fields
+    const serverHasInferred = typeof u.inferred !== 'undefined';
+
+    // Manual status: directly right of name, bold, wrapped in parentheses
+    const manualStatus = document.createElement("span");
+    manualStatus.className = "presence-manual-status";
+    if (serverHasInferred && u.status && u.inferred === false && u.status !== "Online") {
+      manualStatus.textContent = `(${u.status})`;
+    }
+
+    // Auto/inferred status: stays on right side, muted
     const st = document.createElement("span");
     st.className = "presence-status";
-    st.style.fontSize = "0.7rem";
-    st.textContent = u.status ? (" · " + u.status) : "";
-    row.append(dot, nm, st);
-    list.appendChild(row);
-  });
+    let statusText = "";
+    if (u.autoStatus) {
+      statusText = u.autoStatus;
+    } else if (serverHasInferred) {
+      if (u.inferred && u.status) {
+        statusText = u.status;
+      }
+    } else if (u.status && u.status !== "Online") {
+      // Old server fallback: show all non-Online statuses on the right
+      statusText = u.status;
+    }
+    // Last seen for offline users
+    if (!u.online && !u.afd && u.lastSeen) {
+      statusText = (statusText ? statusText + " · " : "") + "last seen " + formatTimeAgo(u.lastSeen);
+    }
+    st.textContent = statusText;
 
-  if (!users.length) {
+    row.append(dot, nm, manualStatus, st);
+    row.addEventListener("click", () => {
+      switchToPresenceMessagesTab();
+      openDMInline(u.id, u.displayName);
+    });
+    list.appendChild(row);
+  };
+
+  // Online users first
+  onlineUsers.forEach(renderUserRow);
+
+  // Divider between online and offline
+  if (onlineUsers.length && offlineUsers.length) {
+    const divider = document.createElement("div");
+    divider.className = "presence-tile-divider";
+    list.appendChild(divider);
+  }
+
+  // Offline users
+  offlineUsers.forEach(renderUserRow);
+
+  if (!allUsers.length) {
     const empty = document.createElement("div");
     empty.style.color = "var(--muted)";
     empty.style.fontSize = "0.75rem";
     empty.textContent = "No team data yet.";
     body.appendChild(empty);
+    syncTileStatusSelect(snap);
     return;
   }
 
   body.appendChild(list);
-
-  // Optional: click the tile body to open the full modal
-  body.onclick = () => openPresenceModal();
+  syncTileStatusSelect(snap);
 }
 
-// Called from mount logic (similar to renderFeedTile / renderTasksTile)
 function renderPresenceTile() {
   const tileId = "tile-presence";
   let tile = document.querySelector(`[data-tile-id="${tileId}"]`);
@@ -11774,140 +12049,787 @@ function renderPresenceTile() {
     tile.dataset.tileId = tileId;
     tile.dataset.tileLabel = "Team";
     tile.innerHTML = `
-      <div class="panel-header">
-        <span class="panel-sub">Team presence</span>
+      <div class="panel-header panel-header-presence">
+        <div class="presence-tile-toolbar">
+          <select id="presence-tile-status" class="presence-status-select-tile" title="Set your status">
+            <option value="Online">Online</option>
+            <option value="DND - Estimating">DND - Estimating</option>
+            <option value="AFK - Lunch">AFK - Lunch</option>
+            <option value="AFK - Other">AFK - Other</option>
+            <option value="__custom__">Custom...</option>
+          </select>
+          <div id="presence-tile-custom-wrap" class="presence-custom-wrap" style="display:none;">
+            <input type="text" id="presence-tile-custom-input" class="presence-custom-input" placeholder="Custom status…" maxlength="120" />
+            <button type="button" id="presence-tile-custom-ok" class="presence-custom-ok">✓</button>
+            <button type="button" id="presence-tile-custom-cancel" class="presence-custom-cancel">✕</button>
+          </div>
+          <button type="button" id="presence-tile-admin-btn" class="presence-admin-toggle-tile hidden" title="Admin view">Admin</button>
+        </div>
+        <span id="presence-tile-unread-flash" class="presence-unread-flash hidden" title="Unread messages">✉</span>
+        <button type="button" id="presence-tile-popup-btn" class="presence-popup-btn" title="Open team viewer in popup">⤢</button>
       </div>
-      <div id="presence-tile-body" class="presence-tile-body"></div>
+      <div class="presence-tile-tabs">
+        <button type="button" class="presence-tile-tab active" data-tab="team">Team</button>
+        <button type="button" class="presence-tile-tab" data-tab="messages">Messages<span id="presence-tile-msg-badge" class="msg-badge hidden">0</span></button>
+      </div>
+      <div id="presence-tile-team-body" class="presence-tile-body presence-tile-tab-content active"></div>
+      <div id="presence-tile-messages-body" class="presence-tile-body presence-tile-tab-content" style="display:none;"></div>
+      <div id="presence-tile-dm-inline" class="presence-tile-body" style="display:none;">
+        <div class="presence-dm-inline-header">
+          <button type="button" id="presence-tile-dm-back" class="presence-dm-inline-back">← Back</button>
+          <span id="presence-tile-dm-title" class="presence-dm-inline-title">Chat</span>
+        </div>
+        <div id="presence-tile-dm-log" class="presence-dm-inline-log"></div>
+        <div id="presence-tile-dm-reply-preview" class="presence-reply-preview" style="display:none;"></div>
+        <div class="presence-dm-inline-input">
+          <input type="text" id="presence-tile-dm-text" class="presence-dm-inline-field" placeholder="Type a message…" />
+          <div class="presence-dm-inline-buttons">
+            <button type="button" id="presence-tile-dm-emoji" class="presence-emoji-inline-btn" title="Insert emoji">😊</button>
+            <button type="button" id="presence-tile-dm-send" class="presence-dm-inline-send">Send</button>
+          </div>
+        </div>
+      </div>
+      <div id="presence-tile-admin" class="presence-admin hidden" style="padding:0.5rem 0.75rem;font-size:0.78rem;color:var(--muted);"></div>
     `;
-    // Append initially to panel row (will be moved by mount if needed)
-    $("#dashboard-panel-row")?.appendChild(tile);
+    $("#dashboard-tiles")?.appendChild(tile);
     bindTileChrome(tile, tileId);
+    bindPresenceTileControls(tile);
   }
-  // Initial compact render (will be refreshed by polling)
   renderPresenceTileCompact();
   return tile;
 }
 
+function bindPresenceTileControls(tile) {
+  const statusSel = tile.querySelector("#presence-tile-status");
+  const customWrap = tile.querySelector("#presence-tile-custom-wrap");
+  const customInput = tile.querySelector("#presence-tile-custom-input");
+  const customOk = tile.querySelector("#presence-tile-custom-ok");
+  const customCancel = tile.querySelector("#presence-tile-custom-cancel");
+
+  function confirmCustomStatus(val) {
+    statusSel.value = val || "Online";
+    customWrap.style.display = "none";
+    statusSel.style.display = "";
+    // Clear to Online — re-enable auto-status
+    if (!val || val === "Online") {
+      state._suppressAutoStatus = false;
+      presenceFetch("/api/presence/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "Online" }),
+      }).then(() => {
+        fetchPresenceSnapshot().then(s => {
+          state.presenceData = s;
+          renderPresenceTileCompact(s);
+          updatePresenceTileBadge();
+          updatePresenceTileAdminButton();
+        }).catch(() => {});
+      }).catch(() => {});
+      return;
+    }
+    // Set manual status — suppress auto-status updates, clear accumulated autoStatus
+    state._suppressAutoStatus = true;
+    presenceFetch("/api/presence/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: val, inferred: false, autoStatus: "" }),
+    }).then(() => {
+      fetchPresenceSnapshot().then(s => {
+        state.presenceData = s;
+        renderPresenceTileCompact(s);
+        updatePresenceTileBadge();
+        updatePresenceTileAdminButton();
+      }).catch(() => {});
+    }).catch(() => {});
+  }
+
+  function cancelCustomStatus() {
+    customWrap.style.display = "none";
+    statusSel.style.display = "";
+    statusSel.value = "";
+  }
+
+  if (statusSel && !statusSel.dataset.bound) {
+    statusSel.dataset.bound = "1";
+    statusSel.addEventListener("change", () => {
+      if (statusSel.value === "__custom__") {
+        statusSel.style.display = "none";
+        customWrap.style.display = "";
+        customInput.value = "";
+        customInput.focus();
+        return;
+      }
+      confirmCustomStatus(statusSel.value);
+    });
+  }
+
+  if (customOk && !customOk.dataset.bound) {
+    customOk.dataset.bound = "1";
+    customOk.addEventListener("click", () => {
+      confirmCustomStatus(customInput.value.trim().slice(0, PRESENCE_CUSTOM_MAX));
+    });
+  }
+
+  if (customCancel && !customCancel.dataset.bound) {
+    customCancel.dataset.bound = "1";
+    customCancel.addEventListener("click", cancelCustomStatus);
+  }
+
+  if (customInput && !customInput.dataset.bound) {
+    customInput.dataset.bound = "1";
+    customInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        confirmCustomStatus(customInput.value.trim().slice(0, PRESENCE_CUSTOM_MAX));
+      } else if (e.key === "Escape") {
+        cancelCustomStatus();
+      }
+    });
+  }
+
+  // Tab switching
+  const tabBar = tile.querySelector(".presence-tile-tabs");
+  if (tabBar && !tabBar.dataset.bound) {
+    tabBar.dataset.bound = "1";
+    tabBar.addEventListener("click", (e) => {
+      const tabBtn = e.target.closest(".presence-tile-tab");
+      if (!tabBtn) return;
+      const tabId = tabBtn.dataset.tab;
+      if (!tabId) return;
+
+      // Update active tab
+      tabBar.querySelectorAll(".presence-tile-tab").forEach(b => b.classList.remove("active"));
+      tabBtn.classList.add("active");
+
+      // Switch content
+      const teamBody = tile.querySelector("#presence-tile-team-body");
+      const msgBody = tile.querySelector("#presence-tile-messages-body");
+      if (tabId === "messages") {
+        if (teamBody) teamBody.style.display = "none";
+        if (msgBody) {
+          msgBody.style.display = "";
+          renderPresenceTileMessages();
+        }
+        tile.classList.add("presence-tile-expanded");
+      } else {
+        if (teamBody) teamBody.style.display = "";
+        if (msgBody) msgBody.style.display = "none";
+        tile.classList.remove("presence-tile-expanded");
+      }
+    });
+  }
+
+  const adminBtn = tile.querySelector("#presence-tile-admin-btn");
+  if (adminBtn && !adminBtn.dataset.bound) {
+    adminBtn.dataset.bound = "1";
+    adminBtn.addEventListener("click", () => {
+      const adminEl = tile.querySelector("#presence-tile-admin");
+      if (!adminEl) return;
+      if (adminEl.classList.contains("hidden")) {
+        adminEl.classList.remove("hidden");
+        renderPresenceAdminInTile(adminEl);
+        adminBtn.textContent = "Hide Admin";
+      } else {
+        adminEl.classList.add("hidden");
+        adminBtn.textContent = "Admin";
+      }
+    });
+  }
+
+  // Popup button - opens full team viewer modal
+  const popupBtn = tile.querySelector("#presence-tile-popup-btn");
+  if (popupBtn && !popupBtn.dataset.bound) {
+    popupBtn.dataset.bound = "1";
+    popupBtn.addEventListener("click", () => {
+      openPresenceModal();
+    });
+  }
+
+  // Inline DM controls
+  const dmBack = tile.querySelector("#presence-tile-dm-back");
+  if (dmBack && !dmBack.dataset.bound) {
+    dmBack.dataset.bound = "1";
+    dmBack.addEventListener("click", closeDMInline);
+  }
+  const dmSend = tile.querySelector("#presence-tile-dm-send");
+  if (dmSend && !dmSend.dataset.bound) {
+    dmSend.dataset.bound = "1";
+    dmSend.addEventListener("click", sendDMInlineMessage);
+  }
+  const dmEmoji = tile.querySelector("#presence-tile-dm-emoji");
+  if (dmEmoji && !dmEmoji.dataset.bound) {
+    dmEmoji.dataset.bound = "1";
+    dmEmoji.addEventListener("click", showInlineEmojiPicker);
+  }
+  const dmText = tile.querySelector("#presence-tile-dm-text");
+  if (dmText && !dmText.dataset.bound) {
+    dmText.dataset.bound = "1";
+    dmText.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendDMInlineMessage();
+      }
+    });
+  }
+}
+
+function renderPresenceAdminInTile(container) {
+  if (!container) return;
+  container.innerHTML = "";
+  const snap = state.presenceData || { users: [] };
+  const people = Array.isArray(snap.users) ? snap.users : [];
+  let html = "";
+  people.forEach(p => {
+    if (!p.admin) return;
+    const name = p.displayName || p.id;
+    html += `<div style="margin-bottom:0.25rem;"><strong>${escapeHtml(name)}</strong>`;
+    if (p.admin.lastHeartbeatMinutesAgo != null) html += ` · HB: ${p.admin.lastHeartbeatMinutesAgo}m`;
+    if (p.admin.lastCrmMinutesAgo != null) html += ` · CRM: ${p.admin.lastCrmMinutesAgo}m`;
+    if (p.admin.lastDashMinutesAgo != null) html += ` · Dash: ${p.admin.lastDashMinutesAgo}m`;
+    html += `</div>`;
+  });
+  if (!html) html = '<div style="color:var(--muted);">No admin activity recorded yet.</div>';
+  container.innerHTML = html;
+}
+
+function renderPresenceTileMessages() {
+  const body = $("#presence-tile-messages-body");
+  if (!body) return;
+  const snap = state.presenceData || {};
+  const recentDms = Array.isArray(snap.myRecentDms) ? snap.myRecentDms : [];
+
+  body.innerHTML = "";
+
+  if (!recentDms.length) {
+    const empty = document.createElement("div");
+    empty.className = "presence-empty";
+    empty.style.padding = "0.5rem";
+    empty.style.color = "var(--muted)";
+    empty.style.fontSize = "0.78rem";
+    empty.textContent = "No messages yet.";
+    body.appendChild(empty);
+    return;
+  }
+
+  const meId = String(state.currentUserId || "");
+  const byOther = new Map();
+  recentDms.forEach(m => {
+    const otherId = String(m.from) === meId ? String(m.to) : String(m.from);
+    if (!byOther.has(otherId) || new Date(m.ts) > new Date(byOther.get(otherId).ts)) {
+      byOther.set(otherId, m);
+    }
+  });
+
+  const users = Array.isArray(snap.users) ? snap.users : [];
+  byOther.forEach((m, otherId) => {
+    const row = document.createElement("div");
+    row.className = "presence-recent-row";
+
+    const userEntry = users.find(u => String(u.id) === otherId);
+    const disp = userEntry ? (userEntry.displayName || userEntry.id) : otherId;
+
+    const rawTxt = String(m.text || "");
+    const short = rawTxt.length > 48 ? rawTxt.slice(0, 48) + "…" : rawTxt;
+
+    const otherLastRead = presenceLastRead[otherId] || (snap.lastReadDms && snap.lastReadDms[otherId] ? new Date(snap.lastReadDms[otherId]).getTime() : 0);
+    const msgTsNum = new Date(m.ts).getTime();
+    const isIncomingLatest = String(m.from) !== meId;
+    let isUnread = isIncomingLatest && msgTsNum > otherLastRead;
+
+    if (isUnread) row.classList.add("unread");
+    else row.classList.add("read");
+
+    const who = document.createElement("span");
+    who.className = "presence-recent-who";
+    who.textContent = disp;
+
+    const snip = document.createElement("span");
+    snip.className = "presence-recent-snip";
+    snip.textContent = (String(m.from) === meId ? "you: " : "") + short;
+
+    const tm = document.createElement("span");
+    tm.className = "presence-recent-time";
+    tm.textContent = m.ts ? formatTimeAgo(m.ts) : "";
+
+    row.append(who, snip, tm);
+    row.addEventListener("click", () => {
+      openDMInline(otherId, disp);
+    });
+    body.appendChild(row);
+  });
+}
+
+function switchToPresenceMessagesTab() {
+  const tile = document.querySelector('[data-tile-id="tile-presence"]');
+  if (!tile) return;
+  const tabBar = tile.querySelector(".presence-tile-tabs");
+  if (!tabBar) return;
+  const teamBody = tile.querySelector("#presence-tile-team-body");
+  const msgBody = tile.querySelector("#presence-tile-messages-body");
+  const dmInline = tile.querySelector("#presence-tile-dm-inline");
+
+  tabBar.querySelectorAll(".presence-tile-tab").forEach(b => b.classList.remove("active"));
+  const msgTab = tabBar.querySelector('[data-tab="messages"]');
+  if (msgTab) msgTab.classList.add("active");
+
+  if (teamBody) teamBody.style.display = "none";
+  if (msgBody) msgBody.style.display = "";
+  if (dmInline) dmInline.style.display = "none";
+  tile.classList.add("presence-tile-expanded");
+  renderPresenceTileMessages();
+}
+
+function openDMInline(userId, userName) {
+  const tile = document.querySelector('[data-tile-id="tile-presence"]');
+  if (!tile) return;
+  const msgBody = tile.querySelector("#presence-tile-messages-body");
+  const dmInline = tile.querySelector("#presence-tile-dm-inline");
+  const dmTitle = tile.querySelector("#presence-tile-dm-title");
+  const dmLog = tile.querySelector("#presence-tile-dm-log");
+  if (!dmInline || !dmLog) return;
+
+  state.presenceSelectedUserId = userId;
+  markPresenceDMRead(userId);
+  updatePresenceTileBadge();
+  clearPresenceInlineReplyTo();
+
+  if (msgBody) msgBody.style.display = "none";
+  dmInline.style.display = "";
+  if (dmTitle) dmTitle.textContent = userName || userId;
+  dmLog.innerHTML = '<div class="presence-loading">Loading…</div>';
+
+  presenceFetch(`/api/presence/dm?with=${encodeURIComponent(userId)}`)
+    .then(res => res.json())
+    .then(d => {
+      const msgs = (d && d.messages) || [];
+      renderDMLog(dmLog, msgs, setPresenceInlineReplyTo);
+    })
+    .catch(err => {
+      dmLog.innerHTML = `<div class="presence-empty">Could not load messages: ${escapeHtml(err.message || "Unknown error")}</div>`;
+    });
+}
+
+function closeDMInline() {
+  const tile = document.querySelector('[data-tile-id="tile-presence"]');
+  if (!tile) return;
+  const msgBody = tile.querySelector("#presence-tile-messages-body");
+  const dmInline = tile.querySelector("#presence-tile-dm-inline");
+  if (dmInline) dmInline.style.display = "none";
+  if (msgBody) {
+    msgBody.style.display = "";
+    renderPresenceTileMessages();
+  }
+  state.presenceSelectedUserId = null;
+  clearPresenceInlineReplyTo();
+}
+
+function sendDMInlineMessage() {
+  const uid = state.presenceSelectedUserId;
+  const tile = document.querySelector('[data-tile-id="tile-presence"]');
+  const textEl = tile?.querySelector("#presence-tile-dm-text");
+  if (!uid || !textEl) return;
+  const text = (textEl.value || "").trim();
+  if (!text) return;
+
+  const body = { to: uid, text };
+  if (presenceInlineReplyTo) {
+    body.reply_to = presenceInlineReplyTo.ts;
+    body.reply_text = (presenceInlineReplyTo.text || "").slice(0, 100);
+  }
+
+  presenceFetch("/api/presence/dm", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).then(res => {
+    if (!res.ok) throw new Error("Failed to send");
+    textEl.value = "";
+    clearPresenceInlineReplyTo();
+    // Refresh the inline log
+    presenceFetch(`/api/presence/dm?with=${encodeURIComponent(uid)}`)
+      .then(r => r.json())
+      .then(d => {
+        const tile = document.querySelector('[data-tile-id="tile-presence"]');
+        const log = tile?.querySelector("#presence-tile-dm-log");
+        if (log) renderDMLog(log, (d && d.messages) || [], setPresenceInlineReplyTo);
+      })
+      .catch(() => {});
+    // Update badge
+    fetchPresenceSnapshot().then(s => {
+      state.presenceData = s;
+      updatePresenceTileBadge();
+    }).catch(() => {});
+  }).catch(err => {
+    showToast(`Could not send message: ${err.message}`, true);
+  });
+}
+
+function updatePresenceTileBadge() {
+  const snap = state.presenceData;
+  if (!snap) return;
+  const recent = Array.isArray(snap.myRecentDms) ? snap.myRecentDms : [];
+  const unread = computeUnreadMessagesCount(recent);
+  const badge = $("#presence-tile-msg-badge");
+  if (badge) {
+    if (unread > 0) {
+      badge.textContent = String(unread);
+      badge.classList.remove("hidden");
+    } else {
+      badge.classList.add("hidden");
+    }
+  }
+  // Flashing indicator in team title bar
+  const flashEl = $("#presence-tile-unread-flash");
+  if (flashEl) {
+    if (unread > 0) {
+      flashEl.classList.remove("hidden");
+      flashEl.title = `${unread} unread message${unread > 1 ? "s" : ""}`;
+    } else {
+      flashEl.classList.add("hidden");
+    }
+  }
+  // Document title indicator
+  const baseTitle = window.__presenceBaseTitle || "CRM Kanban";
+  if (!window.__presenceBaseTitle) {
+    window.__presenceBaseTitle = document.title || baseTitle;
+  }
+  if (unread > 0) {
+    document.title = `(${unread}) ${window.__presenceBaseTitle}`;
+  } else {
+    document.title = window.__presenceBaseTitle;
+  }
+  // Update toolbar count badge with online user count
+  const users = Array.isArray(snap.users) ? snap.users : [];
+  const onlineCount = users.filter(u => u.online).length;
+  updatePanelTileCount("tile-presence", onlineCount);
+
+  // Refresh messages tab if visible
+  const msgBody = $("#presence-tile-messages-body");
+  if (msgBody && msgBody.style.display !== "none") {
+    renderPresenceTileMessages();
+  }
+}
+
+function updatePresenceTileAdminButton() {
+  const btn = $("#presence-tile-admin-btn");
+  if (!btn) return;
+  const isKenc = (state.currentUserEmail || "").toLowerCase() === "kenc@vanguardadj.com";
+  const snap = state.presenceData || {};
+  const hasAdminData = Array.isArray(snap.users) && snap.users.some(u => u.admin);
+  btn.classList.toggle("hidden", !(isKenc && hasAdminData));
+}
+
+function syncTileStatusSelect(snap) {
+  const sel = $("#presence-tile-status");
+  if (!sel) return;
+  const data = snap || state.presenceData || {};
+  const me = data.me || {};
+  const cur = me.status || (data.users || []).find(u => u.id === state.currentUserId)?.status || "";
+  const inferred = me.inferred !== undefined ? me.inferred : (data.users || []).find(u => u.id === state.currentUserId)?.inferred;
+  // Ensure custom input is closed on re-sync
+  const customWrap = $("#presence-tile-custom-wrap");
+  if (customWrap && customWrap.style.display !== "none") {
+    customWrap.style.display = "none";
+    sel.style.display = "";
+  }
+  // If inferred is undefined (old server), let cur decide; never show auto-derived statuses
+  if (inferred === true || !cur || cur === "Online") {
+    sel.value = "Online";
+  } else {
+    sel.value = cur;
+  }
+}
+
+// Temporary test helper: inject a fake unread DM to show the badge
+window.__testUnreadMessages = [];
+window.testUnreadMessage = function testUnreadMessage() {
+  if (!state.presenceData) state.presenceData = { users: [], myRecentDms: [] };
+  if (!Array.isArray(state.presenceData.myRecentDms)) state.presenceData.myRecentDms = [];
+  const snap = state.presenceData;
+  const otherUser = (snap.users || []).find(u => u.id !== state.currentUserId) || { id: "dummy", displayName: "Test User" };
+  const otherId = String(otherUser.id);
+  // Clear any stored last-read for this user so the message appears unread
+  delete presenceLastRead[otherId];
+  savePresenceLastRead();
+  const fakeMsg = {
+    from: otherId,
+    to: String(state.currentUserId || ""),
+    text: "This is a test unread message! 🎉",
+    ts: new Date().toISOString(),
+  };
+  // Store in a safe place that survives snapshot refreshes
+  window.__testUnreadMessages.push(fakeMsg);
+  snap.myRecentDms.push(fakeMsg);
+  updatePresenceTileBadge();
+  showToast("Test unread message added from " + (otherUser.displayName || otherId), false);
+  // Re-inject after any snapshot fetch (which overwrites myRecentDms)
+  injectTestMessages();
+};
+function injectTestMessages() {
+  if (!window.__testUnreadMessages.length) return;
+  if (state.presenceData && Array.isArray(state.presenceData.myRecentDms)) {
+    // Don't re-add if already present (check ts)
+    const existingTs = new Set(state.presenceData.myRecentDms.map(m => m.ts));
+    for (const msg of window.__testUnreadMessages) {
+      if (!existingTs.has(msg.ts)) {
+        state.presenceData.myRecentDms.push(msg);
+      }
+    }
+  }
+}
+
+// Called from mount logic (similar to renderFeedTile / renderTasksTile)
+// Note: renderPresenceTile() is now defined above with full toolbar
+
 function updatePresenceInstalledFlagFromLayout() {
-  // Simple persistence: if "tile-presence" is present in the current order and marked pinnedTop, consider it installed.
   const order = (state.tileLayout && state.tileLayout.order) || [];
   const pinned = (state.tileLayout && state.tileLayout.pinned) || {};
   state.hasPresenceTile = order.includes("tile-presence") && !!pinned["tile-presence"];
 }
 
-// Extend the existing mount to support the presence tile in the top area when hasPresenceTile.
-const _origMountDashboardTiles = mountDashboardTiles;
-mountDashboardTiles = function mountDashboardTiles() {
-  // First let the normal logic run (it will handle feed/tasks and regular tiles)
-  _origMountDashboardTiles.apply(this, arguments);
+// Called from the post-login / refresh path
+function ensurePresenceOnLogin() {
+  ensurePresenceUsersCache().catch(() => {});
+  loadPresenceLastRead();
+  // Always enable the team tile
+  state.hasPresenceTile = true;
+  try {
+    const layout = state.tileLayout || {};
+    if (!layout.pinned) layout.pinned = {};
+    layout.pinned["tile-presence"] = true;
+    if (!layout.order.includes("tile-presence")) layout.order.push("tile-presence");
+    state.tileLayout = layout;
+    saveLayoutToStorage();
+  } catch {}
+  startPresenceHeartbeats();
+  if (presenceHeaderPollTimer) clearInterval(presenceHeaderPollTimer);
+  presenceHeaderPollTimer = setInterval(() => {
+    fetchPresenceSnapshot().then(s => {
+      state.presenceData = s;
+      renderPresenceTileCompact(s);
+      updatePresenceTileBadge();
+      updatePresenceTileAdminButton();
+    }).catch(() => {});
+  }, 30000);
+  setupPresenceIdleAndAutoLogout();
+}
 
-  // After the normal mount, if the user has the presence tile "installed", make sure it is in the top panel.
-  if (!state.hasPresenceTile) return;
+/* ==================== DM Popup Modal ==================== */
 
-  const panelRow = $("#dashboard-panel-row");
-  const pinnedRoot = $("#dashboard-tiles-pinned");
-  if (!panelRow) return;
+function openDMPopup(userId, userName) {
+  const modal = $("#dm-popup-modal");
+  if (!modal) return;
+  state.presenceSelectedUserId = userId;
+  markPresenceDMRead(userId);
+  updatePresenceTileBadge();
 
-  let pTile = document.querySelector('[data-tile-id="tile-presence"]');
-  if (!pTile) {
-    pTile = renderPresenceTile(); // creates and appends
-  }
+  $("#dm-popup-title").textContent = `Chat with ${userName || userId}`;
+  $("#dm-popup-log").innerHTML = '<div class="presence-loading">Loading…</div>';
+  modal.classList.remove("hidden");
+  modal.classList.remove("dm-popup-large");
 
-  // Move it into the top area (after the existing pinned items or according to order)
-  // For simplicity we append it to the panel row (the recent pinnedToRender logic already handles ordering of feed/tasks;
-  // presence will sit at the end of the top row or can be reordered via the normal drag if we allow it).
-  if (pTile.parentNode !== panelRow) {
-    panelRow.appendChild(pTile);
-  }
+  presenceFetch(`/api/presence/dm?with=${encodeURIComponent(userId)}`)
+    .then(res => res.json())
+    .then(d => {
+      const log = $("#dm-popup-log");
+      const msgs = (d && d.messages) || [];
+      renderDMLog(log, msgs);
+    })
+    .catch(err => {
+      const log = $("#dm-popup-log");
+      if (log) log.innerHTML = `<div class="presence-empty">Could not load messages: ${escapeHtml(err.message || "Unknown error")}</div>`;
+    });
+}
 
-  // Apply basic panel classes so it participates in the flex row sizing
-  pTile.classList.add("panel-tile");
-  // Optional: give it a slot class if you want fixed left/middle/right ordering among the three
-  // (left feed, middle presence, right tasks) – can be driven by order in pinnedToRender later.
-};
+function closeDMPopup() {
+  const modal = $("#dm-popup-modal");
+  if (modal) modal.classList.add("hidden");
+  state.presenceSelectedUserId = null;
+}
 
-// Make sure the presence tile participates in the "pinned" decision if the user has it.
-const _origIsTilePinnedToTop = isTilePinnedToTop;
-isTilePinnedToTop = function isTilePinnedToTop(tileId) {
-  if (tileId === "tile-presence") return !!state.hasPresenceTile;
-  return _origIsTilePinnedToTop.apply(this, arguments);
-};
+function bindDMPopup() {
+  const modal = $("#dm-popup-modal");
+  if (!modal || modal.dataset.bound) return;
+  modal.dataset.bound = "1";
 
-const _origSetTilePinnedToTop = setTilePinnedToTop;
-setTilePinnedToTop = function setTilePinnedToTop(tileId, pinned) {
-  if (tileId === "tile-presence") {
-    state.hasPresenceTile = !!pinned;
-    // Persist the choice (the mount will pick it up via updatePresenceInstalledFlagFromLayout on next load)
-    try {
-      const layout = state.tileLayout || {};
-      if (!layout.pinned) layout.pinned = {};
-      layout.pinned["tile-presence"] = !!pinned;
-      if (!layout.order.includes("tile-presence")) layout.order.unshift("tile-presence");
-      state.tileLayout = layout;
-    } catch {}
-    return;
-  }
-  return _origSetTilePinnedToTop.apply(this, arguments);
-};
+  modal.querySelectorAll("[data-dm-popup-dismiss]").forEach(el => {
+    el.addEventListener("click", closeDMPopup);
+  });
 
-// When loading layout after login, pick up a previously pinned presence tile
-const _origEnsureTileLayout = ensureTileLayout;
-ensureTileLayout = function ensureTileLayout() {
-  _origEnsureTileLayout.apply(this, arguments);
-  updatePresenceInstalledFlagFromLayout();
-};
+  $("#dm-popup-back")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    closeDMPopup();
+    openMessagesPopup();
+  });
 
-// Wire the header button (called from init / bind after login)
-function bindPresenceButton() {
-  const btn = $("#presence-btn");
-  if (!btn || btn.dataset.bound) return;
-  btn.dataset.bound = "1";
-  btn.addEventListener("click", () => {
-    openPresenceModal();
+  $("#dm-popup-clear")?.addEventListener("click", () => {
+    const uid = state.presenceSelectedUserId;
+    if (!uid) return;
+    if (!confirm("Clear this conversation history?")) return;
+    clearPresenceConversation(uid, () => {
+      $("#dm-popup-log").innerHTML = '<div class="presence-empty">Conversation cleared.</div>';
+    });
+  });
+
+  $("#dm-popup-send")?.addEventListener("click", () => sendDMPopupMessage());
+  $("#dm-popup-text")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendDMPopupMessage();
+    }
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && modal && !modal.classList.contains("hidden")) {
+      closeDMPopup();
+    }
   });
 }
 
-// Called from the post-login / refresh path (similar to bindAddTileModal)
-function ensurePresenceOnLogin() {
-  // Prime the user list cache (the "initial poll")
-  ensurePresenceUsersCache().catch(() => {});
-  loadPresenceLastRead();
-  // Tile support removed for now (pure popup via header button); force flag off
-  state.hasPresenceTile = false;
-  // Start light heartbeats so we appear online
-  startPresenceHeartbeats();
-  // Optimistic: mark self as online on the header icon immediately (we just heartbeated).
-  // Real snapshot below (and the 800ms follow-up in startPresenceHeartbeats) will confirm with server data.
-  const _btn = $("#presence-btn");
-  if (_btn) _btn.classList.add("is-online");
-  // If the user previously had the tile pinned, render it
-  updatePresenceInstalledFlagFromLayout();
-  if (state.hasPresenceTile) {
-    // The mountDashboardTiles (called elsewhere) will pick it up.
-    // We also render a first compact view in case the mount hasn't run yet.
-    setTimeout(() => {
-      fetchPresenceSnapshot().then(s => {
-        renderPresenceTileCompact(s);
-        updatePresenceHeaderIndicators(s);
-      });
-    }, 50);
+function sendDMPopupMessage() {
+  const uid = state.presenceSelectedUserId;
+  const textEl = $("#dm-popup-text");
+  if (!uid || !textEl) return;
+  const text = (textEl.value || "").trim();
+  if (!text) return;
+
+  presenceFetch("/api/presence/dm", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ to: uid, text }),
+  }).then(res => {
+    if (!res.ok) throw new Error("Failed to send");
+    textEl.value = "";
+    // Refresh the log
+    presenceFetch(`/api/presence/dm?with=${encodeURIComponent(uid)}`)
+      .then(r => r.json())
+      .then(d => {
+        const log = $("#dm-popup-log");
+        if (log) renderDMLog(log, (d && d.messages) || []);
+      })
+      .catch(() => {});
+    // Update badge
+    fetchPresenceSnapshot().then(s => {
+      state.presenceData = s;
+      updatePresenceTileBadge();
+    }).catch(() => {});
+  }).catch(err => {
+    showToast(`Could not send message: ${err.message}`, true);
+  });
+}
+
+/* ==================== Messages Inbox Popup ==================== */
+
+function openMessagesPopup() {
+  const modal = $("#messages-popup-modal");
+  if (!modal) return;
+  modal.classList.remove("hidden");
+  renderMessagesPopupList();
+}
+
+function closeMessagesPopup() {
+  const modal = $("#messages-popup-modal");
+  if (modal) modal.classList.add("hidden");
+}
+
+function renderMessagesPopupList() {
+  const list = $("#messages-popup-list");
+  if (!list) return;
+  const snap = state.presenceData || {};
+  const recentDms = Array.isArray(snap.myRecentDms) ? snap.myRecentDms : [];
+
+  if (!recentDms.length) {
+    list.innerHTML = '<div class="search-popup-results-empty">No messages yet.</div>';
+    return;
   }
-  // Wire the header button
-  bindPresenceButton();
 
-  // Immediate badge + self-online + waiting indicators update
+  list.innerHTML = "";
+  const meId = String(state.currentUserId || "");
 
+  // Group by other user
+  const byOther = new Map();
+  recentDms.forEach(m => {
+    const otherId = String(m.from) === meId ? String(m.to) : String(m.from);
+    if (!byOther.has(otherId) || new Date(m.ts) > new Date(byOther.get(otherId).ts)) {
+      byOther.set(otherId, m);
+    }
+  });
 
-  fetchPresenceSnapshot().then(s => updatePresenceHeaderIndicators(s)).catch(() => {});
-  // Light periodic poll for header indicators (badge, self-online dot, waiting flash) so they are live
-  // even without opening the modal. (Full poll only when modal open.)
-  if (presenceHeaderPollTimer) clearInterval(presenceHeaderPollTimer);
-  presenceHeaderPollTimer = setInterval(() => {
-    fetchPresenceSnapshot().then(s => updatePresenceHeaderIndicators(s)).catch(() => {});
-  }, 30000);
-  // Idle / auto-logout safety net
-  setupPresenceIdleAndAutoLogout();
-  // Load mail dashboard read IDs from localStorage for session survival
+  byOther.forEach((m, otherId) => {
+    const row = document.createElement("div");
+    row.className = "presence-recent-row";
+
+    // Find display name
+    const users = Array.isArray(snap.users) ? snap.users : [];
+    const userEntry = users.find(u => String(u.id) === otherId);
+    const disp = userEntry ? (userEntry.displayName || userEntry.id) : otherId;
+
+    const rawTxt = String(m.text || "");
+    const short = rawTxt.length > 48 ? rawTxt.slice(0, 48) + "…" : rawTxt;
+
+    const otherLastRead = presenceLastRead[otherId] || (snap.lastReadDms && snap.lastReadDms[otherId] ? new Date(snap.lastReadDms[otherId]).getTime() : 0);
+    const msgTsNum = new Date(m.ts).getTime();
+    const isIncomingLatest = String(m.from) !== meId;
+    let isUnread = isIncomingLatest && msgTsNum > otherLastRead;
+
+    if (isUnread) row.classList.add("unread");
+    else row.classList.add("read");
+
+    const who = document.createElement("span");
+    who.className = "presence-recent-who";
+    who.textContent = disp;
+
+    const snip = document.createElement("span");
+    snip.className = "presence-recent-snip";
+    snip.textContent = (String(m.from) === meId ? "you: " : "") + short;
+
+    const tm = document.createElement("span");
+    tm.className = "presence-recent-time";
+    tm.textContent = m.ts ? formatTimeAgo(m.ts) : "";
+
+    row.append(who, snip, tm);
+    row.addEventListener("click", () => {
+      closeMessagesPopup();
+      switchToPresenceMessagesTab();
+      openDMInline(otherId, disp);
+    });
+    list.appendChild(row);
+  });
+}
+
+function bindMessagesPopup() {
+  const modal = $("#messages-popup-modal");
+  if (!modal || modal.dataset.bound) return;
+  modal.dataset.bound = "1";
+
+  modal.querySelectorAll("[data-messages-popup-dismiss]").forEach(el => {
+    el.addEventListener("click", closeMessagesPopup);
+  });
+
+  $("#messages-popup-popout")?.addEventListener("click", () => {
+    closeMessagesPopup();
+    const dmModal = $("#dm-popup-modal");
+    if (dmModal) {
+      dmModal.classList.add("dm-popup-large");
+      dmModal.classList.remove("hidden");
+      $("#dm-popup-title").textContent = "Messages";
+      $("#dm-popup-log").innerHTML = '<div class="presence-loading">Loading…</div>';
+      // Load all recent DMs into the log
+      const snap = state.presenceData || {};
+      const recentDms = Array.isArray(snap.myRecentDms) ? snap.myRecentDms : [];
+      if (recentDms.length) {
+        renderDMLog($("#dm-popup-log"), recentDms);
+      } else {
+        $("#dm-popup-log").innerHTML = '<div class="presence-empty">No messages yet.</div>';
+      }
+    }
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && modal && !modal.classList.contains("hidden")) {
+      closeMessagesPopup();
+    }
+  });
 }
 
 // Expose a tiny helper so other code (e.g. after a successful login) can kick the feature
@@ -14554,6 +15476,17 @@ function restoreSideBySideCards() {
   }
 }
 
+function updatePreviewModalBookmarkButton(oppId) {
+  const btn = $("#opp-preview-bookmark");
+  if (!btn) return;
+  const id = Number(oppId);
+  const bookmarked = isDealBookmarked(id);
+  btn.classList.toggle("bookmarked", bookmarked);
+  btn.title = bookmarked ? "Remove bookmark" : "Bookmark deal";
+  btn.setAttribute("aria-label", btn.title);
+  btn.innerHTML = bookmarkRibbonSvg(bookmarked);
+}
+
 async function openOpportunityPreviewModal(oppId, titleHint = "", group = null, force = false) {
   const modal = $("#opp-preview-modal");
   const body = $("#opp-preview-body");
@@ -14567,6 +15500,7 @@ async function openOpportunityPreviewModal(oppId, titleHint = "", group = null, 
   body.innerHTML = '<p class="opp-preview-loading">Loading opportunity…</p>';
   setOpportunityPreviewCrmLink(id);
   modal.classList.remove("hidden");
+  updatePreviewModalBookmarkButton(id);
 
   try {
     const data = await fetchOpportunityPreviewData(id, force);
@@ -14575,6 +15509,7 @@ async function openOpportunityPreviewModal(oppId, titleHint = "", group = null, 
     titleEl.textContent = data.opp.title || data.opp.Title || titleHint || `Opportunity #${id}`;
     renderOpportunityPreviewBody(data);
     linkifyPhonesAndEmails(body);
+    updateInferredStatus("preview", data.opp.title || data.opp.Title || titleHint || "");
   } catch (err) {
     body.innerHTML = `<p class="opp-preview-error">${escapeHtml(err.message)}</p>`;
     showToast(err.message, true);
@@ -14601,6 +15536,20 @@ function bindOpportunityPreviewModal() {
     e.preventDefault();
     e.stopPropagation();
     openDealEditFromOpportunityPreview();
+  });
+  $("#opp-preview-bookmark")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const ctx = oppPreviewContext;
+    if (!ctx || ctx.oppId == null) return;
+    const id = Number(ctx.oppId);
+    const title = ctx.opp ? (ctx.opp.title || ctx.opp.Title || "") : "";
+    if (isDealBookmarked(id)) {
+      removeBookmarkDeal(id);
+    } else {
+      addBookmarkDeal(id, title);
+    }
+    updatePreviewModalBookmarkButton(id);
   });
   modal.querySelectorAll("[data-opp-preview-dismiss]").forEach((el) => {
     el.addEventListener("click", closeOpportunityPreviewModal);
@@ -14720,6 +15669,21 @@ function openSearchPopupModal() {
     input.focus();
     input.select();
   }
+  populateSearchTagDropdown();
+}
+
+function populateSearchTagDropdown() {
+  const select = $("#search-popup-tag-select");
+  if (!select) return;
+  select.innerHTML = '<option value="">— Select tag —</option>';
+  const tags = state.allTags || [];
+  const sorted = tags.map((t) => normalizeTagTitle(t.title ?? t)).filter(Boolean).sort((a, b) => a.localeCompare(b));
+  for (const title of sorted) {
+    const opt = document.createElement("option");
+    opt.value = title;
+    opt.textContent = title;
+    select.appendChild(opt);
+  }
 }
 
 function closeSearchPopupModal() {
@@ -14732,6 +15696,8 @@ function closeSearchPopupModal() {
   }
   const input = $("#search-popup-input");
   if (input) input.value = "";
+  const tagSelect = $("#search-popup-tag-select");
+  if (tagSelect) tagSelect.value = "";
   const results = $("#search-popup-results");
   if (results) results.innerHTML = "";
   hideSearchPopupError();
@@ -14784,6 +15750,15 @@ function bindSearchPopupModal() {
         e.preventDefault();
         performSearchPopupQuery();
       }
+    });
+  }
+
+  // Tag search button
+  const tagSearchBtn = $("#search-popup-tag-search");
+  if (tagSearchBtn) {
+    tagSearchBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      performSearchPopupTagQuery();
     });
   }
 
@@ -14841,13 +15816,53 @@ async function performSearchPopupQuery() {
   }
 }
 
-function renderSearchPopupResults(opps) {
+async function performSearchPopupTagQuery() {
+  const select = $("#search-popup-tag-select");
+  const results = $("#search-popup-results");
+  if (!select || !results) return;
+  hideSearchPopupError();
+  const tagTitle = select.value.trim();
+  if (!tagTitle) {
+    showSearchPopupError("Please select a tag first");
+    return;
+  }
+
+  results.innerHTML = '<p class="search-popup-results-empty">Searching…</p>';
+  try {
+    const params = new URLSearchParams({
+      startIndex: "0",
+      count: "100",
+      stageType: "0",
+    });
+    const data = await api(`/api/2.0/crm/opportunity/filter?${params}`);
+    let opps = unwrap(data);
+    if (opps.length) {
+      opps = await enrichOpportunitiesTags(opps);
+      const catalog = buildTagCatalog();
+      opps = opps.filter((o) => oppMatchesSelectedTags(o, [tagTitle], catalog));
+    }
+    renderSearchPopupResults(opps, tagTitle);
+  } catch (err) {
+    results.innerHTML = `<p class="search-popup-results-empty">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function renderSearchPopupResults(opps, tagFilterLabel = null) {
   const results = $("#search-popup-results");
   if (!results) return;
   results.innerHTML = "";
   if (!opps.length) {
-    results.innerHTML = '<p class="search-popup-results-empty">No open deals found</p>';
+    results.innerHTML = tagFilterLabel
+      ? `<p class="search-popup-results-empty">No open deals with tag "${escapeHtml(tagFilterLabel)}"</p>`
+      : '<p class="search-popup-results-empty">No open deals found</p>';
     return;
+  }
+
+  if (tagFilterLabel) {
+    const header = document.createElement("div");
+    header.className = "search-popup-results-header";
+    header.innerHTML = `<span class="search-popup-results-header-label">Deals tagged:</span> <span class="search-popup-results-header-tag">${escapeHtml(tagFilterLabel)}</span> <span class="search-popup-results-header-count">(${opps.length})</span>`;
+    results.appendChild(header);
   }
 
   for (const o of opps) {
@@ -14908,6 +15923,7 @@ async function openSearchPreviewTab(oppId, titleHint) {
   // If already open, just activate
   if (searchPopupPreviewTabs.has(id)) {
     activateSearchPopupTab(`preview-${id}`);
+    updateInferredStatus("preview", searchPopupPreviewTabs.get(id).title || titleHint);
     return;
   }
 
@@ -15016,6 +16032,7 @@ async function openSearchPreviewTab(oppId, titleHint) {
       body.innerHTML = "";
       renderOpportunityPreviewContent(body, data);
       linkifyPhonesAndEmails(body);
+      updateInferredStatus("preview", data.opp?.title || data.opp?.Title || titleHint);
     }
     // Update title if loaded
     const fullTitle = data.opp?.title || data.opp?.Title || titleHint;
@@ -15214,6 +16231,14 @@ function initBookmarkSidebar() {
       openDealEditModal(deal._cachedData.opp, null).catch(() => {});
     });
   }
+
+  // Preview collapse chevron — same behavior as clicking the deal name tab
+  const collapseBtn = $("#bookmark-preview-collapse");
+  if (collapseBtn) {
+    collapseBtn.addEventListener("click", () => {
+      closeBookmarkPreview();
+    });
+  }
 }
 
 function hideBookmarkSidebar() {
@@ -15364,6 +16389,7 @@ async function activateBookmarkTab(oppId) {
     bodyEl.innerHTML = "";
     renderOpportunityPreviewContent(bodyEl, deal._cachedData);
     linkifyPhonesAndEmails(bodyEl);
+    updateInferredStatus("preview", deal.title || `Opportunity #${id}`);
   } else {
     titleEl.textContent = deal?.title || `Opportunity #${id}`;
     bodyEl.innerHTML = '<p class="opp-preview-loading">Loading opportunity…</p>';
@@ -15380,6 +16406,7 @@ async function activateBookmarkTab(oppId) {
       bodyEl.innerHTML = "";
       renderOpportunityPreviewContent(bodyEl, data);
       linkifyPhonesAndEmails(bodyEl);
+      updateInferredStatus("preview", data.opp?.title || data.opp?.Title || deal?.title || `Opportunity #${id}`);
       // Update tab's stage/due info
       renderBookmarkTabs();
     } catch (err) {
@@ -15478,6 +16505,10 @@ function refreshAllBookmarkButtonStates() {
     btn.setAttribute("aria-label", btn.title);
     btn.innerHTML = bookmarkRibbonSvg(bookmarked);
   });
+  const ctx = oppPreviewContext;
+  if (ctx && ctx.oppId != null) {
+    updatePreviewModalBookmarkButton(ctx.oppId);
+  }
 }
 
 /* ================================================================================
@@ -16756,6 +17787,8 @@ async function init() {
   bindOpportunityPreviewModal();
   bindSearchPopupBtn();
   bindSearchPopupModal();
+  bindDMPopup();
+  bindMessagesPopup();
   bindDashboardActivityTracking();
   bindFeedHiddenModal();
   bindNotesArchiveRestoreModal();

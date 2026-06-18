@@ -51,6 +51,8 @@ def _empty_presence() -> dict[str, Any]:
         "version": PRESENCE_VERSION,
         "updatedAt": "",
         "status": "",  # template string or custom text (shown next to name)
+        "inferred": False,  # True if status was auto-derived (not manually set)
+        "autoStatus": "",  # auto-derived activity (e.g. "Working on: Deal X"), displayed separately
         "lastHeartbeat": "",  # last client heartbeat (for online / idle calc)
         "lastCrmActivity": "",  # last time a CRM-ish request was proxied for this user
         "lastDashboardActivity": "",  # last explicit dashboard activity / heartbeat
@@ -90,6 +92,8 @@ def load_user_presence(portal: str, user_id: str) -> dict[str, Any]:
 
     presence = _empty_presence()
     presence["status"] = str(data.get("status") or "")[:200]  # modest cap for display
+    presence["inferred"] = bool(data.get("inferred") or False)
+    presence["autoStatus"] = str(data.get("autoStatus") or "")[:200]
     presence["lastHeartbeat"] = str(data.get("lastHeartbeat") or "")[:80]
     presence["lastCrmActivity"] = str(data.get("lastCrmActivity") or "")[:80]
     presence["lastDashboardActivity"] = str(data.get("lastDashboardActivity") or "")[:80]
@@ -111,6 +115,8 @@ def save_user_presence(portal: str, user_id: str, payload: dict[str, Any]) -> di
         "version": PRESENCE_VERSION,
         "updatedAt": updated_at,
         "status": str(payload.get("status") or "")[:200],
+        "inferred": bool(payload.get("inferred") or False),
+        "autoStatus": str(payload.get("autoStatus") or "")[:200],
         "lastHeartbeat": str(payload.get("lastHeartbeat") or "")[:80],
         "lastCrmActivity": str(payload.get("lastCrmActivity") or "")[:80],
         "lastDashboardActivity": str(payload.get("lastDashboardActivity") or "")[:80],
@@ -143,10 +149,19 @@ def touch_crm_activity(portal: str, user_id: str) -> dict[str, Any]:
     return save_user_presence(portal, user_id, existing)
 
 
-def set_status(portal: str, user_id: str, status: str) -> dict[str, Any]:
-    """Set the user's current status string (template or custom)."""
+def set_status(portal: str, user_id: str, status: str = None, inferred: bool = False, autoStatus: str = None) -> dict[str, Any]:
+    """Set the user's current status string (template or custom).
+    Pass status=None to leave the existing status field unchanged.
+    Pass status="" to clear the manual status (set to Online).
+    Pass autoStatus (including "") to update the separate auto-derived status field.
+    Pass autoStatus=None to leave the existing autoStatus unchanged.
+    """
     existing = load_user_presence(portal, user_id)
-    existing["status"] = str(status or "")[:200]
+    if status is not None:
+        existing["status"] = str(status or "")[:200]
+        existing["inferred"] = bool(inferred)
+    if autoStatus is not None:
+        existing["autoStatus"] = str(autoStatus or "")[:200]
     existing["updatedAt"] = _now_iso()
     return save_user_presence(portal, user_id, existing)
 
@@ -168,6 +183,8 @@ def get_portal_presence_snapshot(portal: str) -> dict[str, dict[str, Any]]:
                 # Return a clean view (no secrets)
                 result[uid] = {
                     "status": str(data.get("status") or "")[:200],
+                    "inferred": bool(data.get("inferred") or False),
+                    "autoStatus": str(data.get("autoStatus") or "")[:200],
                     "lastHeartbeat": str(data.get("lastHeartbeat") or "")[:80],
                     "lastCrmActivity": str(data.get("lastCrmActivity") or "")[:80],
                     "lastDashboardActivity": str(data.get("lastDashboardActivity") or "")[:80],

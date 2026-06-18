@@ -2,6 +2,30 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [1.87] — 2026-06-17
+
+### Presence auto-status fixes & enhancements
+- **Root cause — auto-status not displaying:** `updateInferredStatus` was changed to send `{ autoStatus: text }` only, but the server and rendering expected `{ status, autoStatus, inferred }`. This broke both new-server rendering (no auto-status shown) and old-server compatibility (empty string rejected as 400).
+- **Fix — dual-compat payload:** `updateInferredStatus` now sends `{ status: text, autoStatus: text, inferred: true }` — the server stores both fields, new server renders auto-status on the right, old server reads `status` directly. The tile "Online" option value was changed from `""` to `"Online"` so old server accepts it. `syncTileStatusSelect` uses strict `inferred === true` and falls through gracefully for old server (undefined).
+- **DND / manual status preservation:** `confirmCustomStatus` for a manual set now sends `{ status, inferred: false, autoStatus: "" }` and sets `state._suppressAutoStatus = true` to block auto-status overwrites. Clearing to "Online" sends `{ status: "Online" }` (no autoStatus) and re-enables auto-status. Auto-status never overwrites a manually-set DND.
+- **AFK auto-clear race condition:** `noteDashboardActivity` fires on every mousedown. When it detected AFK and sent `{ status: "Online", autoStatus: "" }`, it could race with `updateInferredStatus` and wipe out the auto-status. Fix: AFK clear now sends `{ status: "Online" }` **without** `autoStatus` so the server preserves whatever `updateInferredStatus` set. Added `_afkClearSent` debounce to only send once per AFK cycle.
+- **Auto-status timeout:** New `PRESENCE_AUTO_STATUS_TIMEOUT_MS = 300000` (5 min). When `updateInferredStatus` sets a preview/edit/note auto-status, a timeout is scheduled. If no new activity fires within 5 minutes, the auto-status is cleared (sends `{ autoStatus: "" }`) so it doesn't look like the user is still reviewing the same deal.
+- **Bookmark & search preview auto-status:** `updateInferredStatus("preview", title)` now fires when opening a deal from the bookmark sidebar (`activateBookmarkTab`) and when opening/switching search popup preview tabs (`openSearchPreviewTab`).
+- **Presence rendering adaptive:** Tile and popup rendering detect `serverHasInferred` per row. New server shows manual `(DND)` in bold next to name, auto-status on the right. Old server falls back to showing all non-"Online" statuses on the right.
+- **`set_status` preserves autoStatus:** Server-side `presence_store.set_status` now only writes `autoStatus` when explicitly provided (`autoStatus is not None`), never clobbering it with `None`/default.
+- **`_suppressAutoStatus` guard:** New state flag blocks `updateInferredStatus` when a manual status (DND, AFK) is active. Reset on AFK clear or manual clear to "Online".
+- **Popup status picker compatibility:** Uses same payload patterns as the tile (`{ status: "Online" }` for clear, `{ status, inferred: false, autoStatus: "" }` for manual). Added `_suppressAutoStatus` integration.
+- **Error toast removal:** All `showToast` calls removed from presence fetch error handlers — failures are silent.
+- **Files changed:** `public/app.js`, `public/styles.css`, `server.py`, `presence_store.py`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`
+
+### Bookmark tab card styling
+- Added `border: 1px solid var(--border)`, `border-radius: 6px`, stronger `box-shadow`, and increased `margin-bottom` to 4px on `.bookmark-tab` so each bookmark card stands out as its own card.
+- **Files changed:** `public/styles.css`
+
+### Preview collapse chevron
+- Added a right-facing chevron button (matching the bookmark sidebar toggle) to the left of the deal title in the bookmark preview header. Clicking it calls `closeBookmarkPreview()` — same behavior as clicking the active deal name tab.
+- **Files changed:** `public/index.html`, `public/app.js`
+
 ## [1.85] — 2026-06-16
 
 ### Bookmark sidebar — collapsible right sidebar with bookmarked deal previews

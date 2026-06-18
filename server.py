@@ -668,14 +668,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "idle": idle and online,
                 "afd": afd,
                 "status": status,
+                "inferred": bool(ov.get("inferred") or False),
+                "autoStatus": ov.get("autoStatus") or "",
                 "lastSeen": ov.get("lastHeartbeat") or ov.get("lastDashboardActivity") or "",
             }
 
             if is_admin:
                 # Only for the admin user – extra details (never shown on the main "Team" list)
                 row["admin"] = {
+                    "lastHeartbeat": ov.get("lastHeartbeat") or "",
                     "lastCrmActivity": ov.get("lastCrmActivity") or "",
                     "lastDashboardActivity": ov.get("lastDashboardActivity") or "",
+                    "lastHeartbeatMinutesAgo": int((now - hb).total_seconds() / 60) if hb else None,
                     "lastCrmMinutesAgo": int((now - last_crm).total_seconds() / 60) if last_crm else None,
                     "lastDashMinutesAgo": int((now - last_dash).total_seconds() / 60) if last_dash else None,
                 }
@@ -695,6 +699,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     "id": user_id,
                     "email": my_email,
                     "status": my_presence.get("status", ""),
+                    "inferred": bool(my_presence.get("inferred") or False),
+                    "autoStatus": my_presence.get("autoStatus", ""),
                     "lastHeartbeat": my_presence.get("lastHeartbeat", ""),
                 },
                 "isAdmin": is_admin,
@@ -722,12 +728,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except json.JSONDecodeError:
             _json_response(self, 400, {"error": "Invalid JSON body"})
             return
-        status_text = str(payload.get("status") or payload.get("text") or "")[:200]
-        if not status_text:
-            _json_response(self, 400, {"error": "status is required"})
-            return
-        rec = set_status(portal, user_id, status_text)
-        _json_response(self, 200, {"ok": True, "status": rec.get("status", "")})
+        # Only update status if explicitly provided in the payload
+        has_status = "status" in payload
+        status_text = str(payload.get("status") or "")[:200] if has_status else None
+        auto_status = payload.get("autoStatus")  # None if not provided
+        inferred = bool(payload.get("inferred") or False)
+        rec = set_status(portal, user_id, status_text, inferred=inferred, autoStatus=auto_status)
+        _json_response(self, 200, {"ok": True, "status": rec.get("status", ""), "inferred": rec.get("inferred", False), "autoStatus": rec.get("autoStatus", "")})
 
     def _handle_presence_last_read(self) -> None:
         """Persist a last-read timestamp for a DM conversation (cross-device read state)."""
