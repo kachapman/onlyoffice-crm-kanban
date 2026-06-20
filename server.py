@@ -160,7 +160,12 @@ def _require_auth(handler: SimpleHTTPRequestHandler) -> tuple[str, str, str] | N
     return portal, token, user_id
 
 
+_crm_user_id_cache: dict[str, str] = {}  # token -> user_id
+
 def _fetch_crm_user_id(portal: str, token: str) -> str | None:
+    cached = _crm_user_id_cache.get(token)
+    if cached is not None:
+        return cached
     url = f"{portal.rstrip('/')}/api/2.0/people/@self.json"
     req = urllib.request.Request(
         url,
@@ -178,7 +183,9 @@ def _fetch_crm_user_id(portal: str, token: str) -> str | None:
     uid = me.get("id") or me.get("ID") or me.get("userId") or me.get("UserId")
     if uid is None:
         return None
-    return str(uid)
+    user_id_str = str(uid)
+    _crm_user_id_cache[token] = user_id_str
+    return user_id_str
 
 
 def _ssl_context() -> ssl.SSLContext | None:
@@ -440,6 +447,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except Exception:
             pass
 
+        # Clear cached user ID on logout
+        _crm_user_id_cache.pop(token, None)
+
         self.send_response(200)
         cookie = cookies.SimpleCookie()
         cookie[SESSION_COOKIE] = ""
@@ -696,6 +706,42 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
             out_users.append(row)
 
+        # Include overlay-only users who have heartbeats but aren't in the CRM people list
+        # (e.g. when CRM is unreachable). Uses the user ID as display name fallback.
+        for uid, ov in overlays.items():
+            if uid == user_id: continue
+            if not any(u.get("id") == uid for u in out_users):
+                ov_hb = self._parse_iso_datetime(ov.get("lastHeartbeat") or "")
+                ov_online = False
+                ov_idle = False
+                ov_afd = False
+                if ov_hb:
+                    delta = (now - ov_hb).total_seconds()
+                    ov_online = delta < (10 * 60)
+                    ov_idle = delta > (2 * 60 * 60) and ov_online
+                    if not ov_online and delta < (3 * 60 * 60):
+                        ov_afd = True
+                ov_auto = ov.get("autoStatus") or ""
+                if ov_auto:
+                    if not ov_online:
+                        ov_auto = ""
+                    else:
+                        ov_last_dash = self._parse_iso_datetime(ov.get("lastDashboardActivity") or "")
+                        if ov_last_dash and (now - ov_last_dash).total_seconds() > PRESENCE_AUTO_STATUS_TIMEOUT_S:
+                            ov_auto = ""
+                out_users.append({
+                    "id": uid,
+                    "displayName": uid,
+                    "email": "",
+                    "online": ov_online,
+                    "idle": ov_idle and ov_online,
+                    "afd": ov_afd,
+                    "status": ov.get("status", ""),
+                    "inferred": bool(ov.get("inferred", False)),
+                    "autoStatus": ov_auto,
+                    "lastSeen": ov.get("lastHeartbeat") or ov.get("lastDashboardActivity") or "",
+                })
+
         # Also surface the caller's own presence record (for the modal to know "me")
         my_presence = load_user_presence(portal, user_id)
         my_last_read = load_user_last_read_dms(portal, user_id)
@@ -782,10 +828,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not with_id:
             _json_response(self, 400, {"error": "with=<userId> is required"})
             return
+        offset_str = (query.get("offset") or [""])[0]
+        offset = 0
+        if offset_str:
+            try:
+                offset = int(offset_str)
+            except ValueError:
+                pass
         # Mark incoming messages as read (for read receipts) before returning
         mark_messages_read(portal, user_id, with_id)
-        msgs = get_conversation(portal, user_id, with_id)
-        _json_response(self, 200, {"messages": msgs})
+        msgs, has_more = get_conversation(portal, user_id, with_id, offset=offset)
+        _json_response(self, 200, {"messages": msgs, "has_more": has_more})
 
     def _handle_presence_dm_post(self) -> None:
         auth = _require_auth(self)

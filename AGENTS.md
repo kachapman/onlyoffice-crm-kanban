@@ -1,7 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
-**Current version:** 1.87.2 (see CHANGELOG.md)  
-**Last session summary (for next resume):** v1.87.2: Mobile emoji picker positioning (opens left/below input on <480px), server-side auto-status expiration (strips stale autoStatus when offline or >5min idle), bookmark preview backdrop (dim overlay when preview is active), batch tag fetch endpoint (eliminates N+1 tag search bottleneck), search result bookmark ribbon + CSV export. See CHANGELOG.md for details.
+**Current version:** 1.87.3 (see CHANGELOG.md)  
+**Last session summary (for next resume):** v1.87.3: CRM-down resilience (cached user ID so presence/DMs work when CRM unreachable, overlay-only users in snapshot), inbox shows all conversations (per-conversation latest message instead of global top-50), stale tag columns filtered against `state.allTags`, null-guard in updateAllCardCopies, back button + tab switch fixes for DM thread/inbox overlap. See CHANGELOG.md for details.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 

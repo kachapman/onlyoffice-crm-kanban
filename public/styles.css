@@ -3161,6 +3161,24 @@ body {
   align-self: flex-end;
 }
 
+/* ---------- DM pagination ---------- */
+.presence-dm-load-more {
+  display: block;
+  width: 100%;
+  text-align: center;
+  padding: 10px;
+  background: rgba(255,255,255,0.04);
+  border: 1px dashed rgba(255,255,255,0.12);
+  border-radius: 6px;
+  cursor: pointer;
+  color: rgba(255,255,255,0.6);
+  font-size: 13px;
+  margin-bottom: 8px;
+  transition: background 0.15s, color 0.15s;
+}
+.presence-dm-load-more:hover { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.9); }
+.presence-dm-load-more:disabled { opacity: 0.4; cursor: not-allowed; }
+
 /* CRM Mail Inbox modal styles */
 .mail-inbox-card {
   width: 96vw;

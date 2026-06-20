@@ -131,11 +131,12 @@ def save_user_presence(portal: str, user_id: str, payload: dict[str, Any]) -> di
 
 
 def touch_heartbeat(portal: str, user_id: str) -> dict[str, Any]:
-    """Update lastHeartbeat (and lastDashboardActivity) for the user. Called on client heartbeats/activity."""
+    """Update lastHeartbeat for the user. Called on client heartbeats.
+    Does NOT bump lastDashboardActivity — that field controls autoStatus expiry
+    and is updated separately by set_status() and touch_crm_activity()."""
     existing = load_user_presence(portal, user_id)
     now = _now_iso()
     existing["lastHeartbeat"] = now
-    existing["lastDashboardActivity"] = now
     return save_user_presence(portal, user_id, existing)
 
 
@@ -155,14 +156,17 @@ def set_status(portal: str, user_id: str, status: str = None, inferred: bool = F
     Pass status="" to clear the manual status (set to Online).
     Pass autoStatus (including "") to update the separate auto-derived status field.
     Pass autoStatus=None to leave the existing autoStatus unchanged.
+    Bumps lastDashboardActivity so autoStatus expiry is reset on explicit user actions.
     """
     existing = load_user_presence(portal, user_id)
+    now = _now_iso()
     if status is not None:
         existing["status"] = str(status or "")[:200]
         existing["inferred"] = bool(inferred)
     if autoStatus is not None:
         existing["autoStatus"] = str(autoStatus or "")[:200]
-    existing["updatedAt"] = _now_iso()
+    existing["updatedAt"] = now
+    existing["lastDashboardActivity"] = now
     return save_user_presence(portal, user_id, existing)
 
 
@@ -258,37 +262,62 @@ def append_dm(portal: str, from_id: str, to_id: str, text: str, reply_to: str = 
     return msg
 
 
-def get_conversation(portal: str, user_a: str, user_b: str, limit: int = DM_HISTORY_LIMIT) -> list[dict[str, Any]]:
-    """Return the most recent messages between user_a and user_b (chronological)."""
+def get_conversation(portal: str, user_a: str, user_b: str, limit: int = DM_HISTORY_LIMIT, offset: int = 0) -> tuple[list[dict[str, Any]], bool]:
+    """Return a page of messages between user_a and user_b plus a has_more flag.
+
+    offset=0 returns the most recent `limit` messages.
+    offset=N skips the N newest messages and returns the next `limit`.
+    Returns (page, has_more) where has_more is True if older messages exist.
+    """
     if not user_a or not user_b:
-        return []
+        return [], False
     path = conversation_file_path(portal, user_a, user_b)
-    return _load_conversation(path, limit)
+    msgs = _load_conversation(path)
+    total = len(msgs)
+    if offset >= total:
+        return [], False
+    end = total - offset
+    start = max(0, end - limit)
+    page = msgs[start:end]
+    has_more = start > 0
+    return page, has_more
 
 
-def get_recent_dms_for_user(portal: str, user_id: str, limit: int = 20) -> list[dict[str, Any]]:
-    """Best-effort: scan recent conversations involving this user and return the latest messages.
-    For v1 this is a simple scan of the messages dir (fine for small teams).
-    Returns messages newest-first limited to `limit`.
+def get_recent_dms_for_user(portal: str, user_id: str, limit: int = 50) -> list[dict[str, Any]]:
+    """Return the latest message per conversation partner, sorted by recency.
+    Ensures every conversation appears in the inbox even if one thread has many messages.
     """
     portal_dir = MESSAGES_DIR / _safe_segment(portal, "portal")
     if not portal_dir.is_dir():
         return []
-    all_msgs: list[dict[str, Any]] = []
     uid = str(user_id)
+    per_other: dict[str, dict[str, Any]] = {}
     for p in portal_dir.glob("*.json"):
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
             msgs = data.get("messages") if isinstance(data, dict) else []
             if isinstance(msgs, list):
                 for m in msgs:
-                    if isinstance(m, dict) and (m.get("from") == uid or m.get("to") == uid):
-                        all_msgs.append(m)
+                    if not isinstance(m, dict):
+                        continue
+                    f = m.get("from")
+                    t = m.get("to")
+                    if f == uid:
+                        other = str(t) if t is not None else None
+                    elif t == uid:
+                        other = str(f) if f is not None else None
+                    else:
+                        continue
+                    if other is None:
+                        continue
+                    ts = str(m.get("ts") or "")
+                    prev = per_other.get(other)
+                    if prev is None or ts > str(prev.get("ts") or ""):
+                        per_other[other] = m
         except (json.JSONDecodeError, OSError):
             continue
-    # Sort by ts desc, take top N
-    all_msgs.sort(key=lambda m: str(m.get("ts") or ""), reverse=True)
-    return all_msgs[:limit]
+    out = sorted(per_other.values(), key=lambda m: str(m.get("ts") or ""), reverse=True)
+    return out[:limit]
 
 
 def clear_conversation(portal: str, user_a: str, user_b: str) -> None:
@@ -354,3 +383,4 @@ def set_last_read_dm(portal: str, user_id: str, other_id: str, at: str = None) -
     existing["lastReadDms"][str(other_id)] = str(ts)[:80]
     existing["updatedAt"] = _now_iso()
     return save_user_presence(portal, user_id, existing)
+

@@ -2,6 +2,18 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [1.87.3] — 2026-06-19
+
+### Hotfix: CRM-down resilience + inbox shows all conversations + tag-column/stale-column fixes
+
+- **CRM-down resilience — presence user ID cache:** `_fetch_crm_user_id` called the CRM on every request — when CRM goes down, `_require_auth` fails for all presence endpoints, killing team view and messaging entirely. Added `_crm_user_id_cache` dict (token → user_id) so the first call caches the result; subsequent requests bypass CRM. Logout clears the cache entry.
+- **CRM-down resilience — overlay-only users in snapshot:** When the CRM people API is unreachable, the presence snapshot now includes users with heartbeat records in the local store (with `displayName: uid` fallback), so the team view shows active users even without CRM data.
+- **Inbox shows all conversations:** `get_recent_dms_for_user` previously returned the 50 most-recent messages globally — a single thread with 50+ messages after "Load earlier" would crowd out every other conversation. Rewritten to return the **latest message per conversation partner**, ensuring each distinct person appears at most once in the inbox regardless of thread depth.
+- **DM back button + tab switching:** Back button now renders inbox instantly from cached snapshot then background-refreshes. Messages tab hides the DM thread and clears `presenceSelectedUserId` before rendering inbox, fixing overlap/empty-state issues.
+- **Stale tag columns:** `groupOpportunities` auto-detect path filters out tags not in `state.allTags` before creating columns; opps with only stale tags fall to "Untagged".
+- **Null-guard in `updateAllCardCopies`:** Added `if (!boardEl) return;` guard to prevent crash when the group tile DOM is not present during targeted card update.
+- **Files changed:** `presence_store.py`, `public/app.js`, `server.py`, `VERSION`, `CHANGELOG.md`
+
 ## [1.87.2] — 2026-06-18
 
 ### Hotfix: Mobile emoji picker + auto-status server expiration + bookmark backdrop + batch tag search + search result enhancements

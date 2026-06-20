@@ -5905,13 +5905,17 @@ function groupOpportunities(group) {
         untagged.items.push(opp);
         continue;
       }
+      let anyValid = false;
       for (const tag of tags) {
         const key = normalizeTagTitle(tag).toLowerCase();
+        if (!state.allTags.some(t => tagsEqual(t.title || t, tag))) continue;
+        anyValid = true;
         if (!map.has(key)) {
           map.set(key, { id: tag, title: columnTitle(tag), color: "#4f8cff", items: [], stageId: null });
         }
         map.get(key).items.push(opp);
       }
+      if (!anyValid) untagged.items.push(opp);
     }
 
     const out = [...map.values()].filter((c) => c.items.length > 0);
@@ -6319,6 +6323,9 @@ function renderGroupBoard(group, container) {
     const column = document.createElement("section");
     column.className = "column" + (col.items.length === 0 ? " column-empty" : "");
     if (col.stageId != null) column.dataset.stageId = String(col.stageId);
+    if (group.groupBy === "tag" && col.id) {
+      column.dataset.tagKey = col.id === "_untagged" ? "_untagged" : normalizeTagTitle(col.id).toLowerCase();
+    }
 
     const header = document.createElement("div");
     header.className = "column-header";
@@ -8961,11 +8968,20 @@ async function submitDealEditForm(e) {
         await enrichOpportunitiesTags([updatedOpp]);
         indexOpportunity(updatedOpp);
         const oppIdx = group.opportunities.findIndex(o => Number(o.id ?? o.ID) === oppId);
+        const oldStageId = oppIdx >= 0 ? Number(group.opportunities[oppIdx].stage?.id ?? group.opportunities[oppIdx].stage?.ID) : null;
         if (oppIdx >= 0) group.opportunities[oppIdx] = updatedOpp;
         else group.opportunities.push(updatedOpp);
-        if (stageChanged || tagsChanged) {
+        if (stageChanged && group.groupBy === "stage") {
+          updateOpportunityCardDom(updatedOpp, group);
           const boardEl = groupDomEl(group)?.querySelector('.board');
-          if (boardEl) renderGroupBoard(group, boardEl);
+          if (boardEl) moveCardToColumnSorted(updatedOpp, group, boardEl, oldStageId);
+        } else if (tagsChanged && group.groupBy === "tag") {
+          const boardEl = groupDomEl(group)?.querySelector('.board');
+          updateAllCardCopies(updatedOpp, group, boardEl);
+          if (boardEl) rebuildAffectedTagColumns(group, boardEl, ctx.initialTags, updatedOpp);
+        } else if (group.groupBy === "tag") {
+          const boardEl = groupDomEl(group)?.querySelector('.board');
+          if (boardEl) updateAllCardCopies(updatedOpp, group, boardEl);
         } else {
           updateOpportunityCardDom(updatedOpp, group);
         }
@@ -10557,6 +10573,7 @@ async function fetchPresenceSnapshot() {
       syncLastReadFromServer();
       injectTestMessages();
     }
+    checkAndNotifyNewDms(state.presenceData);
     return state.presenceData;
   } catch {
     showCrmCrashBanner();
@@ -10579,11 +10596,20 @@ function startPresencePolling() {
     if (state.presenceModalOpen) {
       renderPresenceModal(snap);
       if (state.presenceSelectedUserId) {
-        presenceFetch(`/api/presence/dm?with=${encodeURIComponent(state.presenceSelectedUserId)}`)
+        const uid = state.presenceSelectedUserId;
+        presenceFetch(`/api/presence/dm?with=${encodeURIComponent(uid)}`)
           .then(r => r.json())
           .then(d => {
             const log = $("#presence-dm-log");
-            if (log) renderDMLog(log, (d && d.messages) || []);
+            if (log) {
+              const msgs = (d && d.messages) || [];
+              const hasMore = d.has_more || false;
+              _dmLoadState[uid] = { offset: msgs.length, hasMore, replyHandler: setPresenceReplyTo };
+              renderDMLog(log, msgs, undefined, {
+                hasMore,
+                onLoadMore: hasMore ? () => loadMoreDMs(uid, log, setPresenceReplyTo) : null,
+              });
+            }
           })
           .catch(() => {});
       }
@@ -11335,9 +11361,98 @@ function renderPresenceInbox(container, recentDms, cache, snap) {
  * - read receipts on my sent messages
  * - click to reply to any message
  */
-function renderDMLog(logEl, msgs, onReplyClick) {
+// ---------- DM pagination, reactions, and module-level state ----------
+
+const _dmLoadState = {};       // { [userId]: { offset, hasMore, replyHandler } }
+const _lastNotifiedDmTs = {};  // { [userId]: latestTs }
+
+async function loadMoreDMs(userId, logEl, replyHandler) {
+  const st = _dmLoadState[userId];
+  if (!st || !st.hasMore) return;
+  try {
+    const res = await presenceFetch(`/api/presence/dm?with=${encodeURIComponent(userId)}&offset=${st.offset}`);
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || "Failed to load");
+    const msgs = (d && d.messages) || [];
+    const hasMore = d.has_more || false;
+
+    const btn = logEl.querySelector(".presence-dm-load-more");
+    if (btn) btn.remove();
+
+    const anchor = logEl.firstChild;
+    const frag = document.createDocumentFragment();
+    msgs.forEach(m => { frag.appendChild(createMessageElement(m, replyHandler)); });
+    if (anchor) {
+      logEl.insertBefore(frag, anchor);
+    } else {
+      logEl.appendChild(frag);
+    }
+
+    st.offset += msgs.length;
+    st.hasMore = hasMore;
+
+    if (hasMore) {
+      const newBtn = document.createElement("button");
+      newBtn.className = "presence-dm-load-more";
+      newBtn.textContent = "Load earlier messages…";
+      newBtn.addEventListener("click", () => loadMoreDMs(userId, logEl, replyHandler));
+      logEl.insertBefore(newBtn, logEl.firstChild);
+    }
+  } catch (err) {
+    showToast("Failed to load earlier messages: " + (err.message || "Unknown error"), true);
+  }
+}
+
+function createMessageElement(m, replyHandler) {
+  const div = document.createElement("div");
+  const isMe = state.currentUserId != null && String(m.from) === String(state.currentUserId);
+  div.className = "presence-msg " + (isMe ? "me" : "");
+
+  // Reply context (quoted message)
+  if (m.reply_to || m.reply_text) {
+    const short = m.reply_text || "previous message";
+    const ctx = document.createElement("div");
+    ctx.className = "presence-reply-context";
+    ctx.innerHTML = `<span class="presence-reply-label">Replying to:</span> ${escapeHtml(short)}`;
+    div.appendChild(ctx);
+  }
+
+  // Main message text
+  const textEl = document.createElement("div");
+  textEl.className = "presence-msg-text";
+  textEl.textContent = m.text || "";
+  div.appendChild(textEl);
+
+  // Status under sent messages (me)
+  if (isMe) {
+    const status = document.createElement("div");
+    status.className = "presence-msg-status";
+    if (m.read) {
+      let txt = "read";
+      if (m.read_at) txt += ` ${formatTimeAgo(m.read_at)}`;
+      status.textContent = txt;
+      status.style.color = "#22c55e";
+    } else {
+      status.textContent = "sent";
+      status.style.color = "#888";
+    }
+    div.appendChild(status);
+  }
+
+  // Click to reply
+  div.addEventListener("click", () => { replyHandler(m); });
+
+  return div;
+}
+
+function renderDMLog(logEl, msgs, onReplyClick, options) {
   if (!logEl) return;
   logEl.innerHTML = '';
+  const replyHandler = typeof onReplyClick === "function" ? onReplyClick : setPresenceReplyTo;
+  const opts = options || {};
+  const hasMore = opts.hasMore === true;
+  const onLoadMore = typeof opts.onLoadMore === "function" ? opts.onLoadMore : null;
+
   if (!msgs || !msgs.length) {
     const empty = document.createElement("div");
     empty.className = "presence-empty";
@@ -11345,66 +11460,56 @@ function renderDMLog(logEl, msgs, onReplyClick) {
     logEl.appendChild(empty);
     return;
   }
-  const msgByTs = new Map();
-  msgs.forEach(m => { if (m && m.ts) msgByTs.set(String(m.ts), m); });
-  const replyHandler = typeof onReplyClick === "function" ? onReplyClick : setPresenceReplyTo;
+
+  if (hasMore && onLoadMore) {
+    const btn = document.createElement("button");
+    btn.className = "presence-dm-load-more";
+    btn.textContent = "Load earlier messages…";
+    btn.addEventListener("click", () => {
+      btn.disabled = true;
+      btn.textContent = "Loading…";
+      onLoadMore();
+    });
+    logEl.appendChild(btn);
+  }
 
   msgs.forEach(m => {
-    const div = document.createElement("div");
-    const isMe = state.currentUserId != null && String(m.from) === String(state.currentUserId);
-    div.className = "presence-msg " + (isMe ? "me" : "");
-
-    // Reply context (quoted message) in smaller font
-    // Prefer embedded reply_text (sent with the reply) so it always shows even for fresh sends or trimmed history.
-    if (m.reply_to || m.reply_text) {
-      let short = m.reply_text || "previous message";
-      if (!m.reply_text && m.reply_to) {
-        const key = String(m.reply_to);
-        if (msgByTs.has(key)) {
-          const orig = msgByTs.get(key);
-          short = (orig.text || "").slice(0, 70) + ((orig.text || "").length > 70 ? "…" : "");
-        }
-      }
-      const ctx = document.createElement("div");
-      ctx.className = "presence-reply-context";
-      ctx.innerHTML = `<span class="presence-reply-label">Replying to:</span> ${escapeHtml(short)}`;
-      div.appendChild(ctx);
-    }
-
-    // Main message text
-    const textEl = document.createElement("div");
-    textEl.className = "presence-msg-text";
-    textEl.textContent = m.text || "";
-    div.appendChild(textEl);
-
-    // Status under sent messages (me): "sent" (discreet, gray) if not yet read by recipient;
-    // "read" (+ time if available) once read. Appears underneath the bubble text.
-    if (isMe) {
-      const status = document.createElement("div");
-      status.className = "presence-msg-status";
-      if (m.read) {
-        let txt = "read";
-        if (m.read_at) {
-          txt += ` ${formatTimeAgo(m.read_at)}`;
-        }
-        status.textContent = txt;
-        status.style.color = "#22c55e";
-      } else {
-        status.textContent = "sent";
-        status.style.color = "#888";
-      }
-      div.appendChild(status);
-    }
-
-    // Click anywhere on the bubble to reply to this message
-    div.addEventListener("click", () => {
-      replyHandler(m);
-    });
-
-    logEl.appendChild(div);
+    logEl.appendChild(createMessageElement(m, replyHandler));
   });
+
   logEl.scrollTop = logEl.scrollHeight;
   linkifyUrls(logEl);
+}
+
+function checkAndNotifyNewDms(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.myRecentDms)) return;
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  if (document.visibilityState === "visible") return;
+  const isFirstRun = Object.keys(_lastNotifiedDmTs).length === 0;
+  for (const m of snapshot.myRecentDms) {
+    if (!m || !m.from || !m.ts) continue;
+    const fromId = String(m.from);
+    if (fromId === String(state.currentUserId)) continue;
+    const ts = String(m.ts);
+    if (!_lastNotifiedDmTs[fromId]) { _lastNotifiedDmTs[fromId] = ts; continue; }
+    if (ts > _lastNotifiedDmTs[fromId]) {
+      _lastNotifiedDmTs[fromId] = ts;
+      if (isFirstRun) continue;
+      let displayName = fromId;
+      if (state.presenceData && Array.isArray(state.presenceData.users)) {
+        const user = state.presenceData.users.find(u => String(u.id) === fromId);
+        if (user && user.displayName) displayName = user.displayName;
+      }
+      try {
+        const notif = new Notification(`Message from ${displayName}`, {
+          body: (m.text || "").slice(0, 120),
+          icon: "/favicon.ico",
+          tag: `dm-${fromId}`,
+        });
+        notif.onclick = () => { window.focus(); notif.close(); openPresenceDMThread(fromId, displayName); };
+      } catch (_) {}
+    }
+  }
 }
 
 /** Turn bare http/https URLs in text nodes into clickable links. */
@@ -11750,6 +11855,10 @@ async function openPresenceModal() {
       const snap = state.presenceData;
       const users = state.presenceUsersCache ? state.presenceUsersCache.users : [];
       renderPresenceModal(snap, users);
+      // Background refresh so inbox is up-to-date
+      fetchPresenceSnapshot().then(s => {
+        renderPresenceModal(s, users);
+      }).catch(() => {});
     });
 
     const dmSend = $("#presence-dm-send");
@@ -11828,11 +11937,20 @@ async function sendPresenceDM() {
     renderPresenceModal(snap, users);
     // Re-load the current DM log so new message + reply contexts + read receipts appear immediately
     if (state.presenceSelectedUserId) {
-      presenceFetch(`/api/presence/dm?with=${encodeURIComponent(state.presenceSelectedUserId)}`)
+      const uid = state.presenceSelectedUserId;
+      presenceFetch(`/api/presence/dm?with=${encodeURIComponent(uid)}`)
         .then(r => r.json())
         .then(d => {
           const log = $("#presence-dm-log");
-          if (log) renderDMLog(log, (d && d.messages) || []);
+          if (log) {
+            const msgs = (d && d.messages) || [];
+            const hasMore = d.has_more || false;
+            _dmLoadState[uid] = { offset: msgs.length, hasMore, replyHandler: setPresenceReplyTo };
+            renderDMLog(log, msgs, undefined, {
+              hasMore,
+              onLoadMore: hasMore ? () => loadMoreDMs(uid, log, setPresenceReplyTo) : null,
+            });
+          }
           enhanceDMInputForCurrentThread();
         })
         .catch(() => {});
@@ -11898,8 +12016,9 @@ function openPresenceDMThread(id, name) {
   };
 
   $("#presence-dm-log").innerHTML = "<div class=\"presence-loading\">Loading…</div>";
-  // Clear any stale reply when (re)opening a thread
   clearPresenceReplyTo();
+  _dmLoadState[id] = { offset: 0, hasMore: false, replyHandler: setPresenceReplyTo };
+
   presenceFetch(`/api/presence/dm?with=${encodeURIComponent(id)}`)
     .then(async (res) => {
       if (!res.ok) {
@@ -11916,7 +12035,13 @@ function openPresenceDMThread(id, name) {
     .then(d => {
       const log = $("#presence-dm-log");
       const msgs = (d && d.messages) || [];
-      renderDMLog(log, msgs);
+      const hasMore = d.has_more || false;
+      _dmLoadState[id].offset = msgs.length;
+      _dmLoadState[id].hasMore = hasMore;
+      renderDMLog(log, msgs, undefined, {
+        hasMore,
+        onLoadMore: hasMore ? () => loadMoreDMs(id, log, setPresenceReplyTo) : null,
+      });
       enhanceDMInputForCurrentThread();
     })
     .catch((err) => {
@@ -11984,6 +12109,10 @@ function renderPresenceModal(snapshot = null, usersCache = null) {
 
   if (activeTab === 'messages') {
     // Messages tab: dedicated inbox of past/recent DMs with delete/archive
+    // Clear any open DM thread so inbox is visible
+    if (dmEl) dmEl.classList.add("hidden");
+    state.presenceSelectedUserId = null;
+    clearPresenceReplyTo();
     listEl.innerHTML = '';
     const recentDms = Array.isArray(snap.myRecentDms) ? snap.myRecentDms : [];
     renderPresenceInbox(listEl, recentDms, cache, snap);
@@ -12684,6 +12813,10 @@ function updatePresenceInstalledFlagFromLayout() {
 
 // Called from the post-login / refresh path
 function ensurePresenceOnLogin() {
+  // Request desktop notification permission once
+  if (typeof Notification !== "undefined" && Notification.permission === "default") {
+    Notification.requestPermission();
+  }
   ensurePresenceUsersCache().catch(() => {});
   loadPresenceLastRead();
   // Always enable the team tile
@@ -12722,13 +12855,20 @@ function openDMPopup(userId, userName) {
   $("#dm-popup-log").innerHTML = '<div class="presence-loading">Loading…</div>';
   modal.classList.remove("hidden");
   modal.classList.remove("dm-popup-large");
+  _dmLoadState[userId] = { offset: 0, hasMore: false, replyHandler: setPresenceReplyTo };
 
   presenceFetch(`/api/presence/dm?with=${encodeURIComponent(userId)}`)
     .then(res => res.json())
     .then(d => {
       const log = $("#dm-popup-log");
       const msgs = (d && d.messages) || [];
-      renderDMLog(log, msgs);
+      const hasMore = d.has_more || false;
+      _dmLoadState[userId].offset = msgs.length;
+      _dmLoadState[userId].hasMore = hasMore;
+      renderDMLog(log, msgs, undefined, {
+        hasMore,
+        onLoadMore: hasMore ? () => loadMoreDMs(userId, log, setPresenceReplyTo) : null,
+      });
     })
     .catch(err => {
       const log = $("#dm-popup-log");
@@ -12800,7 +12940,15 @@ function sendDMPopupMessage() {
       .then(r => r.json())
       .then(d => {
         const log = $("#dm-popup-log");
-        if (log) renderDMLog(log, (d && d.messages) || []);
+        if (log) {
+          const msgs = (d && d.messages) || [];
+          const hasMore = d.has_more || false;
+          _dmLoadState[uid] = { offset: msgs.length, hasMore, replyHandler: setPresenceReplyTo };
+          renderDMLog(log, msgs, undefined, {
+            hasMore,
+            onLoadMore: hasMore ? () => loadMoreDMs(uid, log, setPresenceReplyTo) : null,
+          });
+        }
       })
       .catch(() => {});
     // Update badge
@@ -17579,6 +17727,112 @@ function moveCardToStageColumn(oppId, stageId, boardEl) {
   const colBody = boardEl.querySelector(`.column[data-stage-id="${stageId}"] .column-body`);
   if (!colBody) return;
   colBody.appendChild(card);
+}
+
+function moveCardToColumnSorted(opp, group, boardEl, oldStageId) {
+  const card = boardEl.querySelector(`.card[data-opportunity-id="${opp.id}"]`);
+  if (!card) return;
+  const newStageId = Number(opp.stage?.id ?? opp.stage?.ID);
+  if (!Number.isFinite(newStageId) || newStageId <= 0) return;
+  const newCol = boardEl.querySelector(`.column[data-stage-id="${newStageId}"]`);
+  if (!newCol) return;
+  const colBody = newCol.querySelector(".column-body");
+  if (!colBody) return;
+
+  const targetOpps = group.opportunities.filter(o =>
+    Number(o.stage?.id ?? o.stage?.ID) === newStageId
+  );
+  const sorted = sortCards(targetOpps, group);
+  const idx = sorted.indexOf(opp);
+  const existingCards = [...colBody.querySelectorAll(":scope > .card")];
+
+  if (existingCards.length === 0 || idx >= sorted.length - 1) {
+    colBody.appendChild(card);
+  } else {
+    const nextOppId = sorted[idx + 1].id;
+    const nextCard = existingCards.find(c => c.dataset.opportunityId === String(nextOppId));
+    if (nextCard) colBody.insertBefore(card, nextCard);
+    else colBody.appendChild(card);
+  }
+
+  if (oldStageId != null && Number(oldStageId) !== newStageId) {
+    const oldCol = boardEl.querySelector(`.column[data-stage-id="${oldStageId}"]`);
+    if (oldCol) {
+      const oldCount = oldCol.querySelector(".column-count");
+      if (oldCount) {
+        const n = parseInt(oldCount.textContent, 10) - 1;
+        oldCount.textContent = String(Math.max(0, n));
+        if (n <= 0) oldCol.classList.add("column-empty");
+      }
+    }
+  }
+
+  const newCount = newCol.querySelector(".column-count");
+  if (newCount) {
+    const n = parseInt(newCount.textContent, 10) + 1;
+    newCount.textContent = String(n);
+    newCol.classList.remove("column-empty");
+  }
+}
+
+function updateAllCardCopies(opp, group, boardEl) {
+  if (!boardEl) return;
+  const showStagePill = group.groupBy !== "stage";
+  const cards = boardEl.querySelectorAll(`.card[data-opportunity-id="${opp.id}"]`);
+  if (!cards.length) return;
+  const newCard = renderCard(opp, group, showStagePill);
+  const entry = groupCardObservers.get(group.id);
+  for (const card of cards) {
+    const clone = newCard.cloneNode(true);
+    card.replaceWith(clone);
+    if (entry?.observer) entry.observer.observe(clone);
+  }
+}
+
+function rebuildTagColumn(group, boardEl, tagKey) {
+  const colEl = boardEl.querySelector(`.column[data-tag-key="${CSS.escape(tagKey)}"]`);
+  if (!colEl) return;
+  const colBody = colEl.querySelector(".column-body");
+  if (!colBody) return;
+  const catalog = buildTagCatalog();
+  const items = group.opportunities.filter(o => {
+    if (tagKey === "_untagged") return getOppTags(o).length === 0;
+    return oppHasTag(o, tagKey, catalog);
+  });
+  const sorted = sortCards(items, group);
+  colBody.innerHTML = "";
+  if (sorted.length === 0) {
+    colBody.innerHTML = '<p class="empty-column">No deals</p>';
+  } else {
+    for (const opp of sorted) {
+      colBody.appendChild(renderCard(opp, group, true));
+    }
+  }
+  const countEl = colEl.querySelector(".column-count");
+  if (countEl) countEl.textContent = String(sorted.length);
+  colEl.classList.toggle("column-empty", sorted.length === 0);
+}
+
+function rebuildAffectedTagColumns(group, boardEl, initialTags, updatedOpp) {
+  const catalog = buildTagCatalog();
+  const newTags = getOppTags(updatedOpp);
+  const oldSet = new Set(initialTags.map(t => tagLookupKey(t, catalog)).filter(Boolean));
+  const newSet = new Set(newTags.map(t => tagLookupKey(t, catalog)).filter(Boolean));
+  const changedKeys = new Set();
+  for (const k of oldSet) if (!newSet.has(k)) changedKeys.add(k);
+  for (const k of newSet) if (!oldSet.has(k)) changedKeys.add(k);
+  if ((oldSet.size === 0) !== (newSet.size === 0)) {
+    changedKeys.add("_untagged");
+  }
+  for (const key of changedKeys) {
+    const colEl = boardEl.querySelector(`.column[data-tag-key="${CSS.escape(key)}"]`);
+    if (colEl) {
+      rebuildTagColumn(group, boardEl, key);
+    } else {
+      renderGroupBoard(group, boardEl);
+      return;
+    }
+  }
 }
 
 async function drainOppCustomFieldEnrichQueue() {
