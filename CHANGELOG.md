@@ -14,6 +14,25 @@ All notable changes to the CRM Kanban dashboard are documented here.
 - **Server timeout:** `urllib.request.urlopen` timeout increased to 120s for large file uploads.
 - **Files changed:** `public/app.js`, `public/index.html`, `public/styles.css`, `server.py`, `VERSION`, `CHANGELOG.md`
 
+## [1.87.5] — 2026-06-23
+
+### Presence hardening — smart heartbeat + beforeunload + auto-status write-back + stale cleanup
+
+- **Smart heartbeat (visible flag):** Heartbeats now include a `visible` flag — `send()` sends `{visible: true}` when the tab is focused, `sendBeacon()` sends `{visible: false}` on background tab / beforeunload. Server only bumps `lastDashboardActivity` when `visible=True`, so auto-status expires naturally after 5 min of background-tab inactivity instead of staying alive indefinitely.
+- **Beforeunload handler:** Tab/window close now sends `navigator.sendBeacon` with `{offline: true}` so the server marks the user offline immediately instead of 10+ min later. Cleaned up in `stopPresenceHeartbeats`.
+- **Auto-status write-back:** When the server filters out a stale `autoStatus` (>5 min) from the response, it now also writes the cleared value to disk via `clear_auto_status()`. Prevents stale values from persisting across sessions when the client's 5-min timeout never fires (browser closed unexpectedly).
+- **Stale record cleanup:** `clean_stale_presence_records()` iterates all presence files and clears `lastHeartbeat` + `autoStatus` for records with heartbeats >3h old. Called on each presence GET. Handles edge cases from closed browsers that never sent beforeunload.
+- **High Priority amber styling on bookmark sidebar tabs:** `.bookmark-tab--high-priority` CSS class with same amber treatment as card tiles — `rgba(240,180,41,0.08)` background, `var(--warn)` border, 3px amber left accent. `renderBookmarkTabs()` detects High Priority tag via `oppHasTag()`, checking deal `_cachedData` then falling back to group opportunities.
+- **Files changed:** `presence_store.py`, `public/app.js`, `public/styles.css`, `server.py`, `VERSION`, `CHANGELOG.md`
+
+## [1.87.6] — 2026-06-23
+
+### Chunked card rendering + initial-load responsiveness
+
+- **Chunked card rendering:** `renderGroupBoard` now renders cards in batches of 20 with `setTimeout(0)` between batches, yielding the main thread so the event loop can service clicks (e.g. changelog modal close button) during initial load. Column shells (headers + empty bodies) are appended to the DOM immediately so the kanban layout is visible before cards populate progressively. Previously, all cards in a group were created in one synchronous loop — with 3 groups × 500 deals this blocked the main thread for seconds, triggering the browser's "page unresponsive" warning.
+- **Changelog delay increased:** `maybeShowChangelog` delay raised from 300ms to 1500ms so the modal appears after the worst of the tile rendering is underway, not competing for main thread time during the initial render burst.
+- **Files changed:** `public/app.js`, `public/index.html`, `VERSION`, `CHANGELOG.md`
+
 ## [1.87.3] — 2026-06-19
 
 ### Hotfix: CRM-down resilience + inbox shows all conversations + tag-column/stale-column fixes

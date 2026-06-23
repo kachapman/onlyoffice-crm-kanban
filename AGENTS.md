@@ -1,7 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
-**Current version:** 1.87.4 (see CHANGELOG.md)  
-**Last session summary (for next resume):** v1.87.4: Event log (clipboard-list button, localStorage persistence), indicator stacking fix (toast at 1.5rem, sync-status at 3.5rem, note-queue at 5.5rem — no overlap when sidebar/modal open), optimized deal-edit (single bulk PUT, parallel uploads, dynamic close timer, tag throttle), refreshing spinner during deferred refresh after deal-edit/note-save. See CHANGELOG.md for details.
+**Current version:** 1.87.6 (see CHANGELOG.md)  
+**Last session summary (for next resume):** v1.87.6: Chunked card rendering (20/batch with setTimeout(0) yielding) so event loop stays responsive during initial load — column shells appear immediately, cards populate progressively. Chelog delay increased to 1500ms. Presence hardening: smart heartbeat (visible flag — only bumps lastDashboardActivity when tab focused), beforeunload sendBeacon for instant offline, auto-status write-back to disk on stale filter, stale record cleanup >3h. High Priority amber styling on bookmark sidebar tabs. See CHANGELOG.md for details.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 
