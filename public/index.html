@@ -19,7 +19,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=1.8.0" />
+  <link rel="stylesheet" href="styles.css?v=1.87.4" />
 </head>
 <body>
   <!-- Early vanilla script for error handling and fallback in case main app.js fails to parse/execute (prevents blank screen) -->
@@ -83,6 +83,14 @@
        the sign-in form is still visible instead of a blank page. -->
   <div id="app" class="app hidden">
     <header class="hero">
+      <button type="button" id="event-log-btn" class="btn btn-secondary btn-icon-only event-log-btn" title="Event log" aria-label="Event log">
+        <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+          <line x1="8" y1="9" x2="16" y2="9"/>
+          <line x1="8" y1="13" x2="16" y2="13"/>
+          <line x1="8" y1="17" x2="12" y2="17"/>
+        </svg>
+      </button>
       <button type="button" id="logout-btn" class="btn btn-ghost hero-sign-out">Sign out</button>
       <div class="hero-inner">
         <div class="hero-copy">
@@ -152,8 +160,6 @@
       <span id="app-version" class="app-version"></span>
       <!-- Minimal mutation queue sync status (added for offline resilience). Hidden when empty. -->
       <span id="mutation-sync-status" class="mutation-sync-status hidden" title="Actions waiting to sync with CRM"></span>
-      <!-- Note attachments queue: right-side list of recent note sends (with attachments). Shows pending + completed (clears 10s after done). -->
-      <div id="note-queue-list" class="note-queue-list" aria-live="polite" aria-label="Recent note attachments status"></div>
       <!-- Right-side column: daily quote + CRM warning stacked vertically -->
       <div class="global-meta-right">
         <span id="daily-focus" class="daily-focus" aria-label="Daily inspiration"></span>
@@ -209,6 +215,9 @@
   </div>
 
   <div id="toast" class="toast hidden" role="status"></div>
+
+  <!-- Note attachments queue: fixed bottom-left, always visible (never behind sidebar/modals) -->
+  <div id="note-queue-list" class="note-queue-list" aria-live="polite" aria-label="Recent note attachments status"></div>
 
   <div id="add-tile-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="add-tile-modal-title">
     <div class="modal-backdrop" data-add-tile-dismiss></div>
@@ -817,6 +826,19 @@
     </div>
   </div>
 
-  <script src="app.js?v=1.87.2" type="module"></script>
+  <!-- Event log modal -->
+  <div id="event-log-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="event-log-title">
+    <div class="modal-backdrop" data-event-log-dismiss></div>
+    <div class="modal-card modal-card-event-log">
+      <h2 id="event-log-title" class="modal-title">Event log</h2>
+      <div id="event-log-list" class="event-log-list"></div>
+      <div class="modal-actions">
+        <button type="button" id="event-log-clear" class="btn btn-danger btn-sm">Clear log</button>
+        <button type="button" id="event-log-close" class="btn btn-secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js?v=1.87.4" type="module"></script>
 </body>
 </html>

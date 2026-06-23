@@ -384,6 +384,7 @@ const state = {
   hasPresenceTile: false,   // persisted via tileLayout or a small flag; controls whether the tile is in the top panel
   bookmarkedDeals: [],      // [{ oppId, title, addedAt }]
   activeBookmarkTab: null,  // oppId of the expanded preview
+  eventLog: [],             // persistent event log (loaded from localStorage)
 };
 
 function crmOpportunityUrl(id) {
@@ -449,6 +450,29 @@ function updateGroupFilterSummary(group) {
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
+function isRightIndicatorBlocked() {
+  // Check if bookmark sidebar is open
+  const sidebar = $("#bookmark-sidebar");
+  if (sidebar && !sidebar.classList.contains("sidebar-hidden") && state.activeBookmarkTab != null) return true;
+  // Check if any modal is open (has backdrop, z-index 2000, overlays fixed indicators)
+  const modals = document.querySelectorAll(".modal:not(.hidden)");
+  for (const m of modals) {
+    if (m.querySelector(".modal-backdrop")) return true;
+  }
+  return false;
+}
+
+function repositionRightIndicator(el) {
+  if (!el) return;
+  if (isRightIndicatorBlocked()) {
+    el.style.right = "";
+    el.style.left = "1.5rem";
+  } else {
+    el.style.right = "1.5rem";
+    el.style.left = "";
+  }
+}
+
 function showToast(message, type = null) {
   const el = $("#toast");
   el.textContent = message;
@@ -459,6 +483,7 @@ function showToast(message, type = null) {
     el.classList.add("warning");
   }
   el.classList.remove("hidden");
+  repositionRightIndicator(el);
   clearTimeout(showToast._t);
   showToast._t = setTimeout(() => el.classList.add("hidden"), 5000);
 }
@@ -2208,6 +2233,7 @@ function showCRMSyncStatus(text, isWarning = false) {
     el.classList.remove("warning");
   }
   el.style.display = "";
+  repositionRightIndicator(el);
 }
 
 function hideCRMSyncStatus() {
@@ -2229,6 +2255,16 @@ function clearConnectingTimer() {
     clearTimeout(connectingTimer);
     connectingTimer = null;
   }
+}
+
+function showRefreshingStatus(text = 'Refreshing CRM data\u2026') {
+  const el = getSyncStatusEl();
+  el.innerHTML = `<span class="refreshing-spinner"></span><span>${text}</span>`;
+  el.classList.remove("warning");
+  el.style.display = "";
+}
+function hideRefreshingStatus() {
+  hideCRMSyncStatus();
 }
 
 function setConnectionState(newState) {
@@ -3602,6 +3638,13 @@ function loadLocalUserProfileBundle() {
       } catch { /* ignore */ }
       return [];
     })(),
+    eventLog: (() => {
+      try {
+        const raw = localStorage.getItem(EVENT_LOG_KEY);
+        if (raw) return JSON.parse(raw);
+      } catch { /* ignore */ }
+      return [];
+    })(),
   };
 }
 
@@ -3753,6 +3796,45 @@ function saveBookmarkedDealsToStorage() {
   const slim = state.bookmarkedDeals.map((d) => stripBookmarkedRuntimeFields(d));
   localStorage.setItem(BOOKMARKED_STORAGE_KEY, JSON.stringify(slim));
   scheduleUserProfileSave();
+}
+
+const EVENT_LOG_KEY = "eventLog";
+const MAX_EVENT_LOG = 200;
+
+function loadEventLogFromStorage() {
+  try {
+    const raw = localStorage.getItem(EVENT_LOG_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) state.eventLog = parsed;
+    }
+  } catch {}
+}
+
+function saveEventLogToStorage() {
+  try {
+    localStorage.setItem(EVENT_LOG_KEY, JSON.stringify(state.eventLog.slice(0, MAX_EVENT_LOG)));
+  } catch {}
+}
+
+function addEventLogEntry(type, oppId, oppTitle, message, success) {
+  state.eventLog.unshift({
+    id: Date.now() + Math.random(),
+    timestamp: new Date().toISOString(),
+    type,
+    oppId: oppId != null ? Number(oppId) : null,
+    oppTitle: oppTitle || "",
+    message: String(message || ""),
+    success: !!success,
+  });
+  if (state.eventLog.length > MAX_EVENT_LOG) state.eventLog.length = MAX_EVENT_LOG;
+  saveEventLogToStorage();
+}
+
+function updateBookmarkBodyClass() {
+  const sidebar = $("#bookmark-sidebar");
+  const hasOpenBookmark = sidebar && !sidebar.classList.contains("sidebar-hidden") && state.activeBookmarkTab != null;
+  document.body.classList.toggle("bookmark-open", hasOpenBookmark);
 }
 
 function renderBasicMarkdown(text) {
@@ -5562,6 +5644,41 @@ async function updateOpportunityStage(oppId, stageId) {
     }
   );
   if (res && res.queued) return;
+}
+
+async function updateOpportunityBulk(oppId, { dueDate, stageId, customFieldValues }) {
+  const opp = await fetchOpportunityForUpdate(oppId);
+  const overrides = {};
+  if (dueDate !== undefined) overrides.expectedCloseDate = dueDate || null;
+  if (stageId !== undefined) {
+    const sid = Number(stageId);
+    overrides.stageid = sid;
+    const stage = state.stages.find(s => Number(s.id ?? s.ID) === sid);
+    const sp = stage?.successProbability ?? stage?.SuccessProbability;
+    if (sp != null && !Number.isNaN(Number(sp))) overrides.successProbability = Number(sp);
+  }
+  const body = buildOpportunityPutBody(opp, overrides);
+  if (customFieldValues?.length) {
+    const existing = extractOpportunityCustomFieldList(opp);
+    const merged = mergeCustomFieldValues(existing, customFieldValues);
+    body.customFieldList = buildCustomFieldListForApi(merged);
+  }
+  return withCrmQueueOnTransient(
+    () => api(`/api/2.0/crm/opportunity/${oppId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      showCrashBanner: false,
+    }),
+    {
+      method: "PUT",
+      path: `/api/2.0/crm/opportunity/${oppId}`,
+      body: JSON.stringify(body),
+      description: `Update opportunity ${oppId}`,
+      opType: "oppUpdate",
+      targetId: String(oppId),
+    }
+  );
 }
 
 async function addOpportunityTag(oppId, tagTitle) {
@@ -8610,18 +8727,29 @@ async function uploadAttachmentForNote(file) {
   });
   if (!res.ok) throw new Error(`Upload failed for ${file.name} (${res.status})`);
   const text = await res.text();
-  // The handler returns a small object literal in text (from native capture)
-  let data = {};
-  try {
-    const m = text.match(/\{[\s\S]*?\}/);
-    if (m) data = Function('"use strict";return (' + m[0] + ")")();
-  } catch {}
-  if (!data || !data.Success || data.Data == null) {
-    throw new Error(data && data.Message ? data.Message : `Upload failed for ${file.name}`);
+  // The handler returns a small object literal (may be HTML-wrapped or raw JSON).
+  // Try multiple extraction strategies in order of robustness.
+  let data = null;
+  // Strategy 1: raw JSON parse (if server returns clean JSON)
+  try { data = JSON.parse(text); } catch {}
+  // Strategy 2: extract outermost {...} block (handles HTML-wrapped responses)
+  if (!data || !data.Success) {
+    try {
+      const m = text.match(/\{[\s\S]*\}/);
+      if (m) data = Function('"use strict";return (' + m[0] + ")")();
+    } catch {}
+  }
+  if (!data || !data.Success) {
+    const msg = (data && data.Message) || (data && data.message) || `Upload failed for ${file.name}`;
+    throw new Error(msg);
+  }
+  const fileId = data.Data || data.data || data.id || data.Id || null;
+  if (fileId == null) {
+    throw new Error(`Upload response missing file ID for ${file.name}`);
   }
   return {
-    id: data.Data,
-    title: data.FileName || file.name,
+    id: fileId,
+    title: data.FileName || data.fileName || data.name || file.name,
   };
 }
 
@@ -8823,10 +8951,12 @@ async function applyDealTagChanges(oppId, initialTags, nextTags) {
 
   for (const title of toAdd) {
     await addOpportunityTag(oppId, title);
+    await new Promise(r => setTimeout(r, 150));
   }
 
   for (const title of toRemove) {
     await removeOpportunityTag(oppId, title);
+    await new Promise(r => setTimeout(r, 150));
   }
 }
 
@@ -8848,9 +8978,12 @@ async function submitDealEditForm(e) {
 
   const connectStart = Date.now();
 
+  // Dynamic close timer: base 2.5s + 0.5s per MB of attachments to keep modal open during uploads
+  const totalFileSize = (ctx.selectedAttachments || []).reduce((sum, f) => sum + (f.size || 0), 0);
+  const extraCloseMs = Math.min(totalFileSize / (1024 * 1024) * 500, 5000);
   const closeTimer = setTimeout(() => {
     closeDealEditModal();
-  }, 2500);
+  }, 2500 + extraCloseMs);
 
   try {
     const oppId = ctx.oppId;
@@ -8866,22 +8999,6 @@ async function submitDealEditForm(e) {
       : [];
     const dueChanged = dueVal !== ctx.initialDue;
     const stageChanged = stageId && stageId !== ctx.initialStageId;
-
-    if (dueChanged) {
-      try {
-        await updateOpportunityDueDate(oppId, dueVal);
-      } catch (err) {
-        throw dealEditStepError("Due date", err);
-      }
-    }
-
-    if (stageChanged) {
-      try {
-        await updateOpportunityStage(oppId, stageId);
-      } catch (err) {
-        throw dealEditStepError("Stage", err);
-      }
-    }
 
     const tagsChanged = dealTagsChanged(ctx.initialTags, ctx.tags);
     if (tagsChanged) {
@@ -8902,17 +9019,29 @@ async function submitDealEditForm(e) {
           try { await loadCurrentUser(); } catch {}
         }
         const files = Array.isArray(ctx.selectedAttachments) ? ctx.selectedAttachments : [];
+        // Upload all files in parallel to avoid sequential blocking (each upload is a full HTTP round-trip)
+        const uploads = files.map(async (f) => {
+          try {
+            const up = await uploadAttachmentForNote(f);
+            return { file: f, up, error: null };
+          } catch (e) {
+            return { file: f, up: null, error: e };
+          }
+        });
+        const uploadResults = await Promise.all(uploads);
         const successfulIds = [];
         const successfulNames = [];
         const failedNames = [];
-        for (const f of files) {
-          try {
-            const up = await uploadAttachmentForNote(f);
+        for (const { file, up, error } of uploadResults) {
+          if (up) {
             successfulIds.push(up.id);
-            successfulNames.push(up.title || f.name);
-          } catch (e) {
-            failedNames.push(f.name);
-            showToast(`Failed to upload ${f.name}: ${e && e.message ? e.message : e}`, true);
+            successfulNames.push(up.title || file.name);
+            addEventLogEntry("attach", oppId, ctx.oppTitle || "", `Uploaded ${up.title || file.name}`, true);
+          } else {
+            failedNames.push(file.name);
+            const errMsg = error && error.message ? error.message : error || "Upload failed";
+            showToast(`Failed to upload ${file.name}: ${errMsg}`, true);
+            addEventLogEntry("attach", oppId, ctx.oppTitle || "", `Failed to upload ${file.name}: ${errMsg}`, false);
           }
         }
 
@@ -8932,79 +9061,106 @@ async function submitDealEditForm(e) {
       }
     }
 
-    // Custom user fields
+    // Combined: due date + stage (single PUT — avoids 3 separate GET+PUT cycles)
+    if (dueChanged || stageChanged) {
+      try {
+        await updateOpportunityBulk(oppId, {
+          dueDate: dueChanged ? serializeCrmTimestamp(dueVal) : undefined,
+          stageId: stageChanged ? stageId : undefined,
+        });
+      } catch (err) {
+        throw dealEditStepError("Opportunity update", err);
+      }
+    }
+
+    // Custom user fields (best-effort, queue-aware via withCrmQueueOnTransient)
     const dealEditFieldValues = collectDealEditCustomFieldValues();
     if (dealEditFieldValues.length) {
       try {
-        await updateOpportunityCustomFieldsViaPut(oppId, dealEditFieldValues);
+        await updateOpportunityBulk(oppId, {
+          customFieldValues: dealEditFieldValues,
+        });
         state.oppCustomFieldCache?.invalidate(oppId);
       } catch (err) {
         showToast("User fields not saved: " + (err.message || err).slice(0, 100), true);
+        addEventLogEntry("customField", oppId, ctx.oppTitle || "", "User fields not saved: " + (err.message || err), false);
       }
     }
 
     const group = ctx.group;
     clearTimeout(closeTimer);
-    hideCRMSyncStatus();  // clear any "Connecting..." immediately on successful response
+    hideCRMSyncStatus();
+    clearConnectingTimer();
+    setConnectionState('connected');
     closeDealEditModal();
-    // Once the CRM server has successfully received the push, go straight to success.
-    // No lingering "Connected & Syncing..." after the event.
     onCRMSuccess();
-    showCRMSyncStatus('Deal edit sent successfully');
-    setTimeout(() => {
-      hideCRMSyncStatus();
-    }, 1500);
+    showCRMSyncStatus('Deal edit sent');
     showToast("Deal updated");
     updateInferredStatus("edit", ctx.oppTitle || "");
-    // Targeted single-opp refresh instead of full group refetch (~200ms vs 5-10s).
-    // Fetches just the one changed opportunity and updates its card DOM in-place.
-    // For stage/tag changes that affect board layout, re-renders the board from in-memory data (no CRM filter call).
-    setTimeout(async () => {
-      if (!group) { refreshAll(); return; }
-      try {
-        const updatedOpp = await fetchOpportunityForUpdate(oppId);
-        if (!updatedOpp) { refreshGroup(group, { force: true }); return; }
-        // Ensure tags are present so card styling (amber border) applies correctly.
-        await enrichOpportunitiesTags([updatedOpp]);
-        indexOpportunity(updatedOpp);
-        const oppIdx = group.opportunities.findIndex(o => Number(o.id ?? o.ID) === oppId);
-        const oldStageId = oppIdx >= 0 ? Number(group.opportunities[oppIdx].stage?.id ?? group.opportunities[oppIdx].stage?.ID) : null;
-        if (oppIdx >= 0) group.opportunities[oppIdx] = updatedOpp;
-        else group.opportunities.push(updatedOpp);
-        if (stageChanged && group.groupBy === "stage") {
-          updateOpportunityCardDom(updatedOpp, group);
-          const boardEl = groupDomEl(group)?.querySelector('.board');
-          if (boardEl) moveCardToColumnSorted(updatedOpp, group, boardEl, oldStageId);
-        } else if (tagsChanged && group.groupBy === "tag") {
-          const boardEl = groupDomEl(group)?.querySelector('.board');
-          updateAllCardCopies(updatedOpp, group, boardEl);
-          if (boardEl) rebuildAffectedTagColumns(group, boardEl, ctx.initialTags, updatedOpp);
-        } else if (group.groupBy === "tag") {
-          const boardEl = groupDomEl(group)?.querySelector('.board');
-          if (boardEl) updateAllCardCopies(updatedOpp, group, boardEl);
-        } else {
-          updateOpportunityCardDom(updatedOpp, group);
-        }
-      } catch (e) {
-        refreshGroup(group, { force: true });
-      }
-    }, 40);
+    addEventLogEntry("edit", ctx.oppId, ctx.oppTitle || "", "Deal updated", true);
 
-    // Preview persistence: if the preview modal is still open for this same opp (we launched edit without closing it),
-    // refresh its content so the user sees the just-saved changes without having to re-open.
-    // Also deferred (was causing perceived hangs on prod after deal edits / notes).
+    // Brief "sent" flash, then transition to persistent "Refreshing CRM data..." through
+    // the deferred board and preview refresh work. Sequential to avoid main-thread contention.
     setTimeout(() => {
+      showRefreshingStatus();
       const previewEl = $("#opp-preview-modal");
       const previewId = oppPreviewContext && oppPreviewContext.oppId;
-      if (previewEl && !previewEl.classList.contains("hidden") && previewId != null && Number(previewId) === Number(ctx.oppId)) {
-        openOpportunityPreviewModal(previewId, ctx.oppTitle || "", group || ctx.group).catch(() => {});
-      }
-    }, 30);
+      const needPreview = previewEl && !previewEl.classList.contains("hidden") && previewId != null && Number(previewId) === Number(ctx.oppId);
+      const needBoard = Boolean(group);
+      Promise.resolve()
+        .then(() => {
+          if (needPreview) {
+            return openOpportunityPreviewModal(previewId, ctx.oppTitle || "", group || ctx.group).catch(() => {});
+          }
+        })
+        .then(() => {
+          if (needBoard) {
+            return (async () => {
+              try {
+                const updatedOpp = await fetchOpportunityForUpdate(oppId);
+                if (!updatedOpp) { await refreshGroup(group, { force: true }); return; }
+                await enrichOpportunitiesTags([updatedOpp]);
+                indexOpportunity(updatedOpp);
+                const oppIdx = group.opportunities.findIndex(o => Number(o.id ?? o.ID) === oppId);
+                const oldStageId = oppIdx >= 0 ? Number(group.opportunities[oppIdx].stage?.id ?? group.opportunities[oppIdx].stage?.ID) : null;
+                if (oppIdx >= 0) group.opportunities[oppIdx] = updatedOpp;
+                else group.opportunities.push(updatedOpp);
+                if (stageChanged && group.groupBy === "stage") {
+                  updateOpportunityCardDom(updatedOpp, group);
+                  const boardEl = groupDomEl(group)?.querySelector('.board');
+                  if (boardEl) moveCardToColumnSorted(updatedOpp, group, boardEl, oldStageId);
+                } else if (tagsChanged && group.groupBy === "tag") {
+                  const boardEl = groupDomEl(group)?.querySelector('.board');
+                  updateAllCardCopies(updatedOpp, group, boardEl);
+                  if (boardEl) rebuildAffectedTagColumns(group, boardEl, ctx.initialTags, updatedOpp);
+                } else if (group.groupBy === "tag") {
+                  const boardEl = groupDomEl(group)?.querySelector('.board');
+                  if (boardEl) updateAllCardCopies(updatedOpp, group, boardEl);
+                } else {
+                  updateOpportunityCardDom(updatedOpp, group);
+                }
+              } catch (e) {
+                await refreshGroup(group, { force: true });
+              }
+            })();
+          }
+          return refreshAll().catch(() => {});
+        })
+        .then(() => {
+          if (state.activeBookmarkTab && Number(state.activeBookmarkTab) === Number(ctx.oppId)) {
+            return refreshBookmarkTab(ctx.oppId, false).catch(() => {});
+          }
+        })
+        .finally(() => {
+          hideRefreshingStatus();
+        });
+    }, 800);
   } catch (err) {
     clearTimeout(closeTimer);
     const msg = err instanceof Error ? err.message : String(err);
     setDealEditError(msg || "Could not save deal");
     hideCRMSyncStatus();
+    addEventLogEntry("edit", ctx?.oppId, ctx?.oppTitle || "", msg || "Could not save deal", false);
   } finally {
     clearTimeout(closeTimer);
     if (submitBtn) submitBtn.disabled = false;
@@ -9208,9 +9364,12 @@ async function submitQuickNoteForm(e) {
 
   const connectStart = Date.now();
 
+  // Dynamic close timer: base 2.5s + 0.5s per MB of attachments
+  const totalFileSize = (ctx.selectedAttachments || []).reduce((sum, f) => sum + (f.size || 0), 0);
+  const extraCloseMs = Math.min(totalFileSize / (1024 * 1024) * 500, 5000);
   const closeTimer = setTimeout(() => {
     closeQuickNoteModal();
-  }, 2500);
+  }, 2500 + extraCloseMs);
 
   try {
     const oppId = ctx.oppId;
@@ -9245,17 +9404,29 @@ async function submitQuickNoteForm(e) {
         try { await loadCurrentUser(); } catch {}
       }
       const files = Array.isArray(ctx.selectedAttachments) ? ctx.selectedAttachments : [];
+      // Upload all files in parallel to avoid sequential blocking
+      const uploads = files.map(async (f) => {
+        try {
+          const up = await uploadAttachmentForNote(f);
+          return { file: f, up, error: null };
+        } catch (e) {
+          return { file: f, up: null, error: e };
+        }
+      });
+      const uploadResults = await Promise.all(uploads);
       const successfulIds = [];
       const successfulNames = [];
       const failedNames = [];
-      for (const f of files) {
-        try {
-          const up = await uploadAttachmentForNote(f);
+      for (const { file, up, error } of uploadResults) {
+        if (up) {
           successfulIds.push(up.id);
-          successfulNames.push(up.title || f.name);
-        } catch (e) {
-          failedNames.push(f.name);
-          showToast(`Failed to upload ${f.name}: ${e && e.message ? e.message : e}`, true);
+          successfulNames.push(up.title || file.name);
+          addEventLogEntry("attach", oppId, ctx.oppTitle || "", `Uploaded ${up.title || file.name}`, true);
+        } else {
+          failedNames.push(file.name);
+          const errMsg = error && error.message ? error.message : error || "Upload failed";
+          showToast(`Failed to upload ${file.name}: ${errMsg}`, true);
+          addEventLogEntry("attach", oppId, ctx.oppTitle || "", `Failed to upload ${file.name}: ${errMsg}`, false);
         }
       }
 
@@ -9276,62 +9447,76 @@ async function submitQuickNoteForm(e) {
 
     const group = ctx.group;
     clearTimeout(closeTimer);
-    hideCRMSyncStatus();  // clear any "Connecting..." immediately on successful response
+    hideCRMSyncStatus();
+    clearConnectingTimer();
+    setConnectionState('connected');
     closeQuickNoteModal();
-    // Once the CRM server has successfully received the push, go straight to success.
-    // No lingering "Connected & Syncing..." after the event.
     onCRMSuccess();
-    showCRMSyncStatus('Note sent successfully');
-    setTimeout(() => {
-      hideCRMSyncStatus();
-    }, 1500);
+    showCRMSyncStatus('Note saved');
     showToast("Note saved");
     updateInferredStatus("note", ctx.oppTitle || "");
+    addEventLogEntry("note", ctx.oppId, ctx.oppTitle || "", "Note saved", true);
 
-    // Defer all post-submit refreshes to keep the UI responsive (prevents the "hangs, nothing clickable, then full re-render"
-    // after quick notes and similar pushes). Quick notes only affect history (in preview) or due/tags (board).
-    // Never do heavy refreshAll synchronously right after the note create.
     const needsBoardUpdate = dueChanged || tagsChanged;
     const previewEl = $("#opp-preview-modal");
     const isSidePreviewCase = previewEl && !previewEl.classList.contains("hidden") && ctx && ctx.oppId != null &&
       (oppPreviewContext && Number(oppPreviewContext.oppId) === Number(ctx.oppId));
 
-    if (isSidePreviewCase) {
-      // Targeted: just refresh the open preview so new note appears (and any due/tag changes reflected)
-      setTimeout(() => {
-        const titleHint = ctx.oppTitle || "";
-        openOpportunityPreviewModal(ctx.oppId, titleHint, ctx.group || null).catch(() => {});
-      }, 20);
-    }
-    if (needsBoardUpdate && !isSidePreviewCase) {
-      // Targeted single-opp refresh instead of full group refetch.
-      setTimeout(async () => {
-        if (!group) { refreshAll(); return; }
-        try {
-          const updatedOpp = await fetchOpportunityForUpdate(oppId);
-          if (!updatedOpp) { refreshGroup(group, { force: true }); return; }
-          // Ensure tags are present so card styling (amber border) applies correctly.
-          await enrichOpportunitiesTags([updatedOpp]);
-          indexOpportunity(updatedOpp);
-          const oppIdx = group.opportunities.findIndex(o => Number(o.id ?? o.ID) === oppId);
-          if (oppIdx >= 0) group.opportunities[oppIdx] = updatedOpp;
-          else group.opportunities.push(updatedOpp);
-          if (tagsChanged) {
-            const boardEl = groupDomEl(group)?.querySelector('.board');
-            if (boardEl) renderGroupBoard(group, boardEl);
-          } else {
-            updateOpportunityCardDom(updatedOpp, group);
+    // Brief "saved" flash, then transition to persistent "Refreshing CRM data..." through deferred work.
+    setTimeout(() => {
+      showRefreshingStatus();
+      Promise.resolve()
+        .then(() => {
+          if (isSidePreviewCase) {
+            const titleHint = ctx.oppTitle || "";
+            return openOpportunityPreviewModal(ctx.oppId, titleHint, ctx.group || null).catch(() => {});
           }
-        } catch (e) {
-          refreshGroup(group, { force: true });
-        }
-      }, 60);
-    }
+        })
+        .then(() => {
+          if (needsBoardUpdate && !isSidePreviewCase) {
+            return (async () => {
+              try {
+                const updatedOpp = await fetchOpportunityForUpdate(oppId);
+                if (!updatedOpp) { await refreshGroup(group, { force: true }); return; }
+                await enrichOpportunitiesTags([updatedOpp]);
+                indexOpportunity(updatedOpp);
+                const oppIdx = group.opportunities.findIndex(o => Number(o.id ?? o.ID) === oppId);
+                if (oppIdx >= 0) group.opportunities[oppIdx] = updatedOpp;
+                else group.opportunities.push(updatedOpp);
+                if (tagsChanged && group.groupBy === "tag") {
+                  const boardEl = groupDomEl(group)?.querySelector('.board');
+                  if (boardEl) {
+                    updateAllCardCopies(updatedOpp, group, boardEl);
+                    rebuildAffectedTagColumns(group, boardEl, ctx.initialTags, updatedOpp);
+                  }
+                } else if (tagsChanged) {
+                  updateOpportunityCardDom(updatedOpp, group);
+                } else {
+                  updateOpportunityCardDom(updatedOpp, group);
+                }
+              } catch (e) {
+                await refreshGroup(group, { force: true });
+              }
+            })();
+          }
+        })
+        .then(() => {
+          if (state.activeBookmarkTab && Number(state.activeBookmarkTab) === Number(ctx.oppId)) {
+            const deal = state.bookmarkedDeals.find(d => Number(d.oppId) === Number(ctx.oppId));
+            if (deal) deal._cachedData = null;
+            return refreshBookmarkTab(ctx.oppId, false).catch(() => {});
+          }
+        })
+        .finally(() => {
+          hideRefreshingStatus();
+        });
+    }, 800);
   } catch (err) {
     clearTimeout(closeTimer);
     const msg = err instanceof Error ? err.message : String(err);
     setQuickNoteError(msg || "Could not save note");
     hideCRMSyncStatus();
+    addEventLogEntry("note", ctx?.oppId, ctx?.oppTitle || "", msg || "Could not save note", false);
   } finally {
     clearTimeout(closeTimer);
     if (submitBtn) submitBtn.disabled = false;
@@ -15056,12 +15241,24 @@ function renderHistoryEventItem(ev) {
           showCrashBanner: false,
         });
         showToast("Note deleted from history");
+        // Log the event
+        const deleteOppId = oppPreviewContext?.oppId || state.activeBookmarkTab || ev.entityId || ev.EntityId || null;
+        const deleteTitle = oppPreviewContext?.opp?.title || oppPreviewContext?.opp?.Title || "";
+        addEventLogEntry("delete", deleteOppId, deleteTitle, "History note deleted", true);
         // Refresh the open preview (re-fetches history; keeps side popups if any)
         const pmodal = $("#opp-preview-modal");
         if (pmodal && !pmodal.classList.contains("hidden") && oppPreviewContext && oppPreviewContext.oppId != null) {
           const id = oppPreviewContext.oppId;
           const titleHint = oppPreviewContext.opp ? (oppPreviewContext.opp.title || oppPreviewContext.opp.Title || "") : "";
-          openOpportunityPreviewModal(id, titleHint, oppPreviewContext.group || null).catch(() => {});
+          showRefreshingStatus();
+          openOpportunityPreviewModal(id, titleHint, oppPreviewContext.group || null)
+            .catch(() => {})
+            .finally(() => { hideRefreshingStatus(); });
+        }
+        // Also refresh bookmark preview if open for this opp — just invalidate cache
+        if (state.activeBookmarkTab) {
+          const deal = state.bookmarkedDeals.find(d => Number(d.oppId) === Number(state.activeBookmarkTab));
+          if (deal) deal._cachedData = null;
         }
       } catch (err) {
         showToast("Failed to delete note: " + (err && err.message ? err.message : err), true);
@@ -16527,7 +16724,8 @@ function initBookmarkSidebar() {
       if (!id) return;
       const deal = state.bookmarkedDeals.find((d) => Number(d.oppId) === id);
       if (!deal?._cachedData?.opp) return;
-      openDealEditModal(deal._cachedData.opp, null).catch(() => {});
+      const group = findGroupForOpportunity(id);
+      openDealEditModal(deal._cachedData.opp, group).catch(() => {});
     });
   }
 
@@ -16548,6 +16746,7 @@ function hideBookmarkSidebar() {
     sidebar.classList.add("sidebar-hidden");
   }
   if (trigger) trigger.classList.remove("trigger-hidden");
+  updateBookmarkBodyClass();
 }
 
 function renderBookmarkTabs() {
@@ -16672,6 +16871,7 @@ async function activateBookmarkTab(oppId) {
   if (!Number.isFinite(id) || id <= 0) return;
 
   state.activeBookmarkTab = id;
+  updateBookmarkBodyClass();
   const previewPanel = $("#bookmark-sidebar-preview");
   const titleEl = $("#bookmark-preview-title");
   const bodyEl = $("#bookmark-preview-body");
@@ -16722,6 +16922,7 @@ async function activateBookmarkTab(oppId) {
 
 function closeBookmarkPreview() {
   state.activeBookmarkTab = null;
+  updateBookmarkBodyClass();
   const previewPanel = $("#bookmark-sidebar-preview");
   if (previewPanel) previewPanel.classList.add("hidden");
   // Hide dimming backdrop
@@ -16765,13 +16966,13 @@ function removeBookmarkDeal(oppId) {
   refreshAllBookmarkButtonStates();
 }
 
-async function refreshBookmarkTab(oppId) {
+async function refreshBookmarkTab(oppId, showLoading = true) {
   const id = Number(oppId);
   const deal = state.bookmarkedDeals.find((d) => Number(d.oppId) === id);
   if (!deal) return;
 
   const bodyEl = $("#bookmark-preview-body");
-  if (bodyEl) bodyEl.innerHTML = '<p class="opp-preview-loading">Refreshing…</p>';
+  if (bodyEl && showLoading) bodyEl.innerHTML = '<p class="opp-preview-loading">Refreshing…</p>';
 
   try {
     const data = await fetchOpportunityPreviewData(id, true);
@@ -16822,6 +17023,72 @@ function refreshAllBookmarkButtonStates() {
   if (ctx && ctx.oppId != null) {
     updatePreviewModalBookmarkButton(ctx.oppId);
   }
+}
+
+/* ================================================================================
+   Event log
+   ================================================================================ */
+
+function renderEventLogModal() {
+  const list = $("#event-log-list");
+  if (!list) return;
+  if (!state.eventLog.length) {
+    list.innerHTML = '<div class="event-log-empty">No events logged yet.</div>';
+    return;
+  }
+  list.innerHTML = state.eventLog.map((e) => {
+    const ts = new Date(e.timestamp);
+    const timeStr = ts.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    const icons = { edit: "✏️", note: "📝", delete: "🗑️", attach: "📎" };
+    const icon = icons[e.type] || "ℹ️";
+    const cls = e.success ? "success" : "fail";
+    const statusIcon = e.success ? "✓" : "✗";
+    const oppLabel = e.oppTitle ? escapeHtml(e.oppTitle) : e.oppId ? `#${e.oppId}` : "";
+    return `<div class="event-log-entry ${cls}">
+      <span class="event-log-entry-icon">${statusIcon}</span>
+      <span class="event-log-entry-icon">${icon}</span>
+      <div class="event-log-entry-body">
+        <div class="event-log-entry-opp">${oppLabel}</div>
+        <div class="event-log-entry-msg">${escapeHtml(e.message)}</div>
+      </div>
+      <span class="event-log-entry-time">${timeStr}</span>
+    </div>`;
+  }).join("");
+}
+
+function openEventLogModal() {
+  const modal = $("#event-log-modal");
+  if (!modal) return;
+  renderEventLogModal();
+  modal.classList.remove("hidden");
+}
+
+function closeEventLogModal() {
+  $("#event-log-modal")?.classList.add("hidden");
+}
+
+function bindEventLogModal() {
+  const modal = $("#event-log-modal");
+  if (!modal || modal.dataset.bound) return;
+  modal.dataset.bound = "1";
+
+  $("#event-log-btn")?.addEventListener("click", () => {
+    openEventLogModal();
+  });
+
+  $("#event-log-close")?.addEventListener("click", closeEventLogModal);
+  $("#event-log-clear")?.addEventListener("click", () => {
+    state.eventLog = [];
+    saveEventLogToStorage();
+    renderEventLogModal();
+    showToast("Event log cleared");
+  });
+  // Dismiss on backdrop click
+  modal.querySelector("[data-event-log-dismiss]")?.addEventListener("click", closeEventLogModal);
+  // Escape
+  modal.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeEventLogModal();
+  });
 }
 
 /* ================================================================================
@@ -18211,6 +18478,7 @@ async function init() {
   bindDashboardActivityTracking();
   bindFeedHiddenModal();
   bindNotesArchiveRestoreModal();
+  bindEventLogModal();
   initBookmarkSidebar();
 
   $("#new-opportunity-btn")?.addEventListener("click", () => {

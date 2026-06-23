@@ -259,7 +259,7 @@ def _proxy_request(
 
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, context=_ssl_context()) as resp:
+        with urllib.request.urlopen(req, context=_ssl_context(), timeout=120) as resp:
             return resp.status, resp.read(), resp.headers.get_content_type()
     except urllib.error.HTTPError as exc:
         data = exc.read()
