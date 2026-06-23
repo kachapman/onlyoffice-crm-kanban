@@ -13,10 +13,11 @@ import json
 import os
 import re
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http import cookies
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -49,6 +50,21 @@ from presence_store import (
     set_status,
     touch_crm_activity,
     touch_heartbeat,
+)
+from notification_store import (
+    acquire_fetch_lock,
+    cap_events,
+    load_notifications,
+    mark_cache_stale,
+    mark_fetch_complete,
+    mark_fetch_start,
+    merge_events,
+    notification_file_path,
+    prune_old_events,
+    release_fetch_lock,
+    save_notifications,
+    NOTIFICATION_CAP,
+    NOTIFICATION_RETENTION_DAYS,
 )
 
 ROOT = Path(__file__).resolve().parent
@@ -218,6 +234,304 @@ def _json_response(handler: SimpleHTTPRequestHandler, status: int, payload: dict
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
+
+
+# ---------------------------------------------------------------------------
+# Notification helpers — mail parsing & background fetcher
+# ---------------------------------------------------------------------------
+
+# CRM notification email subjects to search for
+_MAIL_SUBJECT_SEARCHES = ["CRM. New event added to", "CRM New event added to"]
+
+# Known CRM notification markers in body text
+_CRM_NOTIFY_MARKERS = re.compile(
+    r"CRM\.\s*New event added to|has added a new event to|New event added to|notified you|notify user",
+    re.IGNORECASE,
+)
+
+# Boilerplate markers that indicate template spam, not real content
+_NOTIFY_TEMPLATE_SPAM = re.compile(
+    r"You receive this email because|was created by|CRM\.\s*$|^Products/CRM|"
+    r"Deals\.aspx|Do not reply to this notification",
+    re.IGNORECASE,
+)
+
+
+def _opportunity_id_from_text(text: str) -> int | None:
+    """Extract opportunity ID from Deals.aspx?id=XXXX in text or HTML."""
+    m = re.search(r"Deals\.aspx\?[iI][dD]=(\d+)", text or "")
+    return int(m.group(1)) if m else None
+
+
+def _is_notify_template_spam(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return True
+    if len(t) > 600:
+        return True
+    return bool(_NOTIFY_TEMPLATE_SPAM.search(t))
+
+
+def _to_plain_display_text(raw: str, max_len: int = 220) -> str:
+    """Strip HTML, wiki/markdown templates, and CRM boilerplate."""
+    if not raw:
+        return ""
+    s = raw
+    # Strip HTML tags
+    if re.search(r"<[a-z][\s\S]*>", s, re.IGNORECASE):
+        s = re.sub(r"<style[\s\S]*?</style>", " ", s, flags=re.IGNORECASE)
+        s = re.sub(r"<script[\s\S]*?</script>", " ", s, flags=re.IGNORECASE)
+        s = re.sub(r"<br\s*/?>", "\n", s, flags=re.IGNORECASE)
+        s = re.sub(r"</p>", "\n", s, flags=re.IGNORECASE)
+        s = re.sub(r"</div>", "\n", s, flags=re.IGNORECASE)
+        s = re.sub(r"<[^>]+>", " ", s)
+    # Decode HTML entities
+    s = s.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+    s = s.replace("&quot;", '"').replace("&#39;", "'").replace("&nbsp;", " ")
+    s = s.replace("\r", "")
+    s = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", s)  # markdown links
+    s = re.sub(r"https?://\S+", " ", s, flags=re.IGNORECASE)
+    s = re.sub(r"Products/CRM/\S+", " ", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s+", " ", s).strip()
+    # Skip raw JSON/mail metadata dumps
+    if re.match(r'^\{\s*(from|to|subject|cc|bcc|chain_id)\s+"', s, re.IGNORECASE):
+        return ""
+    return s[:max_len]
+
+
+def _parse_mail_notify_message(mail: dict) -> dict | None:
+    """Parse a CRM mail message into a notification dict (port of JS parseMailNotifyMessage)."""
+    subject = str(mail.get("subject") or mail.get("Subject") or "")
+    body = str(
+        mail.get("textBody")
+        or mail.get("TextBody")
+        or mail.get("plainText")
+        or mail.get("PlainText")
+        or mail.get("preview")
+        or mail.get("Preview")
+        or mail.get("introduction")
+        or mail.get("Introduction")
+        or ""
+    )
+    html_body = str(mail.get("htmlBody") or mail.get("HtmlBody") or "")
+    combined = f"{subject}\n{body}"
+
+    from_field = mail.get("from") or mail.get("From") or mail.get("fromEmail") or mail.get("FromEmail")
+    if isinstance(from_field, dict):
+        author = str(
+            from_field.get("displayName")
+            or from_field.get("title")
+            or from_field.get("email")
+            or "Another user"
+        )
+    else:
+        author = str(from_field or "Another user")
+
+    date_raw = (
+        (mail.get("dateSent") or {}).get("value")
+        if isinstance(mail.get("dateSent"), dict)
+        else mail.get("dateSent")
+        or (mail.get("DateSent") or {}).get("value")
+        if isinstance(mail.get("DateSent"), dict)
+        else mail.get("DateSent")
+        or (mail.get("receivedDate") or {}).get("value")
+        if isinstance(mail.get("receivedDate"), dict)
+        else mail.get("receivedDate")
+    )
+    date = str(date_raw or "")
+
+    # Must match CRM notification subject pattern
+    if not re.search(r"CRM\.\s*New event added to", subject, re.IGNORECASE):
+        return None
+
+    # Extract opportunity ID from body or HTML
+    opp_id = _opportunity_id_from_text(body) or _opportunity_id_from_text(html_body)
+    if not opp_id:
+        return None
+
+    # Extract title from subject
+    title = re.sub(r"^CRM\.\s*New event added to\s+", "", subject, flags=re.IGNORECASE).strip()
+    if not title:
+        title = f"Opportunity #{opp_id}"
+
+    # Extract event text — find the first meaningful line
+    plain = re.sub(r"<[^>]+>", "\n", combined).replace("\r", "").strip()
+    event_text = _to_plain_display_text(body or subject)
+    for line in plain.split("\n"):
+        line = _to_plain_display_text(line.strip())
+        if not line or len(line) < 2:
+            continue
+        if re.search(r"Deals\.aspx\?id=|Products/CRM|https?://", line, re.IGNORECASE):
+            continue
+        if _CRM_NOTIFY_MARKERS.search(line):
+            continue
+        if _is_notify_template_spam(line):
+            continue
+        event_text = line
+        break
+
+    if not event_text or _is_notify_template_spam(event_text):
+        event_text = "New opportunity event"
+
+    return {
+        "id": opp_id,
+        "title": title,
+        "author": author,
+        "text": event_text[:220],
+        "date": date,
+        "source": "mail",
+    }
+
+
+def _crm_api_get(portal: str, token: str, api_path: str, query: str = "", timeout: int = 30) -> dict | None:
+    """Make a GET request to the CRM API and return parsed JSON, or None on error."""
+    url = f"{portal.rstrip('/')}{api_path}"
+    if query:
+        url = f"{url}?{query}"
+    req = urllib.request.Request(
+        url,
+        headers={"Accept": "application/json", "Authorization": token},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, context=_ssl_context(), timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError, json.JSONDecodeError):
+        return None
+
+
+def _background_fetch_notifications(portal: str, token: str, user_id: str) -> None:
+    """Fetch CRM mail notifications in background thread and update cache."""
+    if not acquire_fetch_lock(portal, user_id):
+        # Already fetching
+        return
+    try:
+        mark_fetch_start(portal, user_id)
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=NOTIFICATION_RETENTION_DAYS)
+        cutoff_iso = cutoff.isoformat()
+
+        raw_data = _crm_api_get(portal, token, "/api/2.0/people/@self.json")
+        if not raw_data:
+            mark_fetch_complete(portal, user_id, error="Could not resolve current user for mail fetch")
+            return
+
+        all_parsed: list[dict] = []
+        for search_term in _MAIL_SUBJECT_SEARCHES:
+            page = 1
+            while page <= 10:  # safety cap
+                qs = urlencode({
+                    "search": search_term,
+                    "page_size": "100",
+                    "sortorder": "descending",
+                    "page": str(page),
+                })
+                data = _crm_api_get(portal, token, "/api/2.0/mail/messages", qs)
+                if not data:
+                    break
+                # Unwrap response
+                response = data.get("response") or data.get("result") or data
+                rows = response if isinstance(response, list) else []
+                if not rows:
+                    break
+
+                page_had_old = False
+                for mail in rows:
+                    parsed = _parse_mail_notify_message(mail)
+                    if not parsed:
+                        continue
+                    if parsed.get("date") and parsed["date"] < cutoff_iso:
+                        page_had_old = True
+                        continue
+                    all_parsed.append(parsed)
+
+                if page_had_old or len(rows) < 50:
+                    break
+                page += 1
+
+        # Also try CRM history as backup
+        history_items: list[dict] = []
+        start_index = 0
+        while start_index < 500:
+            qs = urlencode({
+                "startIndex": str(start_index),
+                "count": "100",
+                "entityType": "opportunity",
+            })
+            data = _crm_api_get(portal, token, "/api/2.0/crm/history/filter", qs)
+            if not data:
+                break
+            response = data.get("response") or data.get("result") or data
+            rows = response if isinstance(response, list) else []
+            if not isinstance(rows, list):
+                rows = response.get("items") or response.get("events") or response.get("history") or []
+            if not rows:
+                break
+
+            for ev in rows:
+                opp_id = (
+                    (ev.get("entity") or {}).get("entityId")
+                    or (ev.get("entity") or {}).get("EntityId")
+                    or ev.get("entityId")
+                    or ev.get("EntityId")
+                )
+                if not opp_id:
+                    content = str(ev.get("content") or ev.get("Content") or "")
+                    opp_id = _opportunity_id_from_text(content)
+                if not opp_id:
+                    continue
+
+                entity = ev.get("entity") or {}
+                title = str(
+                    entity.get("entityTitle")
+                    or entity.get("EntityTitle")
+                    or ev.get("opportunityTitle")
+                    or f"Opportunity #{opp_id}"
+                )
+                content = str(ev.get("content") or ev.get("Content") or "")
+                author = str(ev.get("createdBy") or ev.get("CreatedBy") or "Another user")
+                if isinstance(author, dict):
+                    author = author.get("displayName") or author.get("title") or "Another user"
+                date = str(ev.get("created") or ev.get("Created") or "")
+                if isinstance(date, dict):
+                    date = date.get("value") or date.get("Value") or ""
+
+                if date and date < cutoff_iso:
+                    continue
+
+                event_text = _to_plain_display_text(content)
+                if not event_text or _is_notify_template_spam(event_text):
+                    event_text = "New opportunity event"
+
+                history_items.append({
+                    "id": opp_id,
+                    "title": title,
+                    "author": author,
+                    "text": event_text[:220],
+                    "date": date,
+                    "source": "history",
+                })
+
+            if len(rows) < 100:
+                break
+            start_index += 100
+
+        # Merge all events: mail takes priority over history
+        existing = load_notifications(portal, user_id)
+        existing_events = existing.get("events") or []
+        merged = merge_events(existing_events, all_parsed + history_items)
+        merged = prune_old_events({"events": merged})["events"]
+        if len(merged) > NOTIFICATION_CAP:
+            merged = merged[:NOTIFICATION_CAP]
+
+        existing["events"] = merged
+        save_notifications(portal, user_id, existing)
+        mark_fetch_complete(portal, user_id)
+
+    except Exception as exc:
+        mark_fetch_complete(portal, user_id, error=str(exc))
+    finally:
+        release_fetch_lock(portal, user_id)
 
 
 def _proxy_request(
@@ -978,6 +1292,99 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
         _json_response(self, 200, {"tags": result})
 
+    # ---------------- Notifications (server-cached CRM mail + history) ----------------
+
+    def _handle_notifications_get(self) -> None:
+        """Return cached notifications instantly; trigger background refresh if stale."""
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, token, user_id = auth
+
+        qs = parse_qs(urlparse(self.path).query)
+        keyword = (qs.get("keyword") or [""])[0].strip()
+
+        data = load_notifications(portal, user_id)
+        events = data.get("events") or []
+
+        # Apply keyword filter (AND semantics, comma-separated tokens)
+        if keyword:
+            tokens = [t.strip().lower() for t in keyword.split(",") if t.strip()]
+            if tokens:
+                filtered = []
+                for ev in events:
+                    blob = f"{ev.get('title', '')} {ev.get('text', '')} {ev.get('author', '')}".lower()
+                    if all(tok in blob for tok in tokens):
+                        filtered.append(ev)
+                events = filtered
+
+        # Exclude hidden keys (from user profile)
+        try:
+            profile = load_user_profile(portal, user_id)
+            hidden = profile.get("hiddenFeedKeys") or {}
+            if isinstance(hidden, dict):
+                hidden_keys = set(hidden.keys())
+                events = [e for e in events if e.get("key") not in hidden_keys]
+        except Exception:
+            pass
+
+        # Assign stable keys for hide/unhide
+        for ev in events:
+            if not ev.get("key"):
+                ev["key"] = f"{ev.get('id', '')}-{ev.get('date', '')[:19]}-{ev.get('author', '')}"
+
+        # Trigger background refresh if stale (>5 min) and not already fetching
+        last_fetch = data.get("lastFetchAt") or ""
+        is_fetching = data.get("isFetching", False)
+        if not is_fetching and not last_fetch:
+            # Never fetched — start immediately
+            threading.Thread(
+                target=_background_fetch_notifications,
+                args=(portal, token, user_id),
+                daemon=True,
+            ).start()
+        elif not is_fetching and last_fetch:
+            try:
+                last_dt = datetime.fromisoformat(last_fetch.replace("Z", "+00:00"))
+                if (datetime.now(timezone.utc) - last_dt).total_seconds() > 300:
+                    threading.Thread(
+                        target=_background_fetch_notifications,
+                        args=(portal, token, user_id),
+                        daemon=True,
+                    ).start()
+            except Exception:
+                pass
+
+        _json_response(self, 200, {"events": events, "count": len(events)})
+
+    def _handle_notifications_refresh(self) -> None:
+        """Trigger background refresh immediately, return 202."""
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, token, user_id = auth
+        threading.Thread(
+            target=_background_fetch_notifications,
+            args=(portal, token, user_id),
+            daemon=True,
+        ).start()
+        _json_response(self, 202, {"ok": True, "message": "Refresh started"})
+
+    def _handle_notifications_status(self) -> None:
+        """Return fetch status for the notification cache."""
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, _token, user_id = auth
+        data = load_notifications(portal, user_id)
+        _json_response(self, 200, {
+            "isFetching": data.get("isFetching", False),
+            "lastFetchAt": data.get("lastFetchAt", ""),
+            "lastSuccessfulFetchAt": data.get("lastSuccessfulFetchAt", ""),
+            "eventCount": len(data.get("events") or []),
+            "fetchError": data.get("fetchError"),
+        })
+
     def _handle_api_get(self) -> None:
         api_path = urlparse(self.path).path
 
@@ -1036,6 +1443,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/session":
             jar = cookies.SimpleCookie(self.headers.get("Cookie", ""))
             _json_response(self, 200, {"authenticated": SESSION_COOKIE in jar})
+            return
+
+        if api_path == "/api/notifications":
+            self._handle_notifications_get()
+            return
+        if api_path == "/api/notifications/status":
+            self._handle_notifications_status()
             return
 
         route = self._api_route()
@@ -1110,6 +1524,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/dashboard-notes" and method == "PUT":
             self._handle_dashboard_notes_put()
             return
+        if api_path == "/api/notifications/refresh" and method == "POST":
+            self._handle_notifications_refresh()
+            return
 
         route = self._api_route()
         if not route:
@@ -1151,6 +1568,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _proxy_cache.invalidate_prefix(f"GET:{api_path}")
             elif "/crm/history" in p:
                 _proxy_cache.invalidate_prefix("GET:/api/2.0/crm/history")
+                # Also mark notification cache stale so next read triggers background refresh
+                try:
+                    uid = _fetch_crm_user_id(portal, token)
+                    if uid:
+                        mark_cache_stale(portal, uid)
+                except Exception:
+                    pass
         self.send_response(status)
         self.send_header("Content-Type", ctype or "application/json")
         self.send_header("Content-Length", str(len(resp_body)))

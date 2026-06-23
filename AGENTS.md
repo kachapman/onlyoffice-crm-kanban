@@ -1,7 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
-**Current version:** 1.87.6 (see CHANGELOG.md)  
-**Last session summary (for next resume):** v1.87.6: Chunked card rendering (20/batch with setTimeout(0) yielding) so event loop stays responsive during initial load — column shells appear immediately, cards populate progressively. Chelog delay increased to 1500ms. Presence hardening: smart heartbeat (visible flag — only bumps lastDashboardActivity when tab focused), beforeunload sendBeacon for instant offline, auto-status write-back to disk on stale filter, stale record cleanup >3h. High Priority amber styling on bookmark sidebar tabs. See CHANGELOG.md for details.
+**Current version:** 1.88.0 (see CHANGELOG.md)  
+**Last session summary (for next resume):** v1.88.0: Server-side notification cache — new `notification_store.py` stores parsed CRM mail notifications per user (30 days, 500 cap). Background fetcher fetches `/api/2.0/mail/messages` with subject search "CRM. New event added to" + CRM history backup. Three new endpoints: `GET /api/notifications` (instant cached response with keyword+hidden filtering), `POST /api/notifications/refresh` (background trigger), `GET /api/notifications/status`. Client feed tile now calls `/api/notifications` instead of CRM directly. 60s polling. Debounced keyword re-fetch. Mutation invalidation on `/crm/history*`. See CHANGELOG.md for details.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 

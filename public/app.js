@@ -1780,15 +1780,6 @@ function renderFeedTile() {
     $("#dashboard-panel-row")?.appendChild(tile);
     bindTileChrome(tile, tileId);
     bindFeedInfiniteScroll();
-    const kw = $("#feed-keyword-filter", tile);
-    if (kw) {
-      kw.value = state.feedKeywordFilter || "";
-      kw.addEventListener("input", () => {
-        state.feedKeywordFilter = kw.value;
-        saveFeedKeywordToStorage();
-        renderFeedNotificationList();
-      });
-    }
   }
   applyTileLayoutClasses(tile, tileId);
   ensurePanelToolbarCount(tile, tileId);
@@ -1800,10 +1791,12 @@ function renderFeedTile() {
     kw.value = state.feedKeywordFilter || "";
     if (!kw.dataset.bound) {
       kw.dataset.bound = "1";
+      let kwTimer;
       kw.addEventListener("input", () => {
         state.feedKeywordFilter = kw.value;
         saveFeedKeywordToStorage();
-        renderFeedNotificationList();
+        clearTimeout(kwTimer);
+        kwTimer = setTimeout(() => loadNotificationFeed({ force: true }), 400);
       });
     }
   }
@@ -7407,7 +7400,7 @@ function renderFeedNotificationList() {
   const list = $("#notification-feed");
   if (!list) return;
 
-  let items = applyFeedKeywordFilter(state.feedNotificationsCache || []);
+  let items = state.feedNotificationsCache || [];
   updatePanelTileCount("tile-feed", items.length);
   updateFeedLoadingUi();
 
@@ -8100,7 +8093,7 @@ async function loadNotificationFeed({ force = false } = {}) {
     pruneHiddenFeedEntries();
   }
 
-  if (!force && isFeedCacheFresh() && state.feedRawItems.length) {
+  if (!force && isFeedCacheFresh() && state.feedNotificationsCache.length) {
     renderFeedNotificationList();
     return;
   }
@@ -8110,17 +8103,23 @@ async function loadNotificationFeed({ force = false } = {}) {
   list.innerHTML = '<li class="feed-loading">Loading notifications…</li>';
   updatePanelTileCount("tile-feed", 0);
 
-  const periodFrom = feedWindowStart();
-  const pagination = newFeedPagination();
-  state.feedPagination = pagination;
-
   try {
-    const historyItems = await loadCrmRelationshipNotifyEventsBulk(periodFrom, pagination);
-    pagination.rawItems.push(...historyItems);
-
-    if (!tileBodyCollapsed("tile-feed")) commitFeedRawItems(pagination.rawItems);
-  } catch {
-    if (!tileBodyCollapsed("tile-feed")) commitFeedRawItems(pagination.rawItems);
+    const keyword = encodeURIComponent(state.feedKeywordFilter || "");
+    const res = await fetch(`/api/notifications?keyword=${keyword}`, {
+      headers: { Accept: "application/json", ...(state.portalUrl ? { "X-OnlyOffice-Portal": state.portalUrl } : {}) },
+      credentials: "same-origin",
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const events = data.events || [];
+    state.feedNotificationsCache = events;
+    state.feedFetchedAt = Date.now();
+    pruneHiddenFeedEntries();
+    if (!tileBodyCollapsed("tile-feed")) renderFeedNotificationList();
+  } catch (err) {
+    if (!tileBodyCollapsed("tile-feed")) {
+      list.innerHTML = `<li class="feed-error">${escapeHtml(err.message || "Could not load notifications")}</li>`;
+    }
   } finally {
     state.feedLoading = false;
     updateFeedLoadingUi();
@@ -8355,6 +8354,18 @@ function startPanelTileAutoRefresh() {
   panelTileAutoRefreshTimer = setInterval(() => {
     refreshAutoRefreshTilesQuietly().catch((err) => showToast(err.message, true));
   }, PANEL_TILE_AUTO_REFRESH_MS);
+}
+
+let _notificationPollTimer;
+function startNotificationPolling() {
+  stopNotificationPolling();
+  _notificationPollTimer = setInterval(() => {
+    if (document.visibilityState !== "visible") return;
+    loadNotificationFeed({ force: true }).catch(() => {});
+  }, 60000);
+}
+function stopNotificationPolling() {
+  clearInterval(_notificationPollTimer);
 }
 
 function bindDashboardActivityTracking() {
@@ -18389,6 +18400,7 @@ function showApp() {
   renderDailyFocus();
   noteDashboardActivity();
   startPanelTileAutoRefresh();
+  startNotificationPolling();
   // Load mail dashboard read IDs from localStorage for session survival
   // No periodic global unreachable poller (removed per request to avoid spurious "unreachable" indicators during normal use).
   // The marquee / status only appears for actual queued/stale push failures.

@@ -2,6 +2,21 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [1.88.0] — 2026-06-23
+
+### Server-side notification cache — reliable CRM mail-based feed
+
+- **New `notification_store.py`:** Per-user persistent cache at `data/notifications/<portal>/<user_id>.json`. Stores parsed CRM notification emails for 30 days, capped at 500 per user. Atomic writes, deduplication, pruning.
+- **Background fetcher:** Server fetches CRM mail messages (`/api/2.0/mail/messages`) with subject search `"CRM. New event added to"` in a background daemon thread. Falls back to CRM history events as backup. Runs every 5 minutes and on mutation invalidation. Per-user threading lock prevents concurrent fetches.
+- **New server endpoints:**
+  - `GET /api/notifications?keyword=...` — returns cached, keyword-filtered, hidden-filtered notifications instantly. Triggers background refresh if cache is stale (>5 min).
+  - `POST /api/notifications/refresh` — forces background refresh, returns 202 immediately.
+  - `GET /api/notifications/status` — returns `{isFetching, lastFetchAt, eventCount, fetchError}`.
+- **Mutation invalidation:** CRM history mutations (`/crm/history*`) mark the notification cache stale so the next read triggers a background refresh.
+- **Client simplification:** Feed tile now calls `/api/notifications` instead of CRM history API directly. Keyword filter is applied server-side. Client-side 5-minute cache removed (server owns freshness). 60-second polling while dashboard is visible.
+- **Keyword input:** Debounced (400ms) server re-fetch on keystroke instead of client-side filter.
+- **Files changed:** `notification_store.py` (new), `server.py`, `public/app.js`, `VERSION`, `CHANGELOG.md`
+
 ## [1.87.4] — 2026-06-23
 
 ### Event log + indicator stacking + deal-edit optimization + refreshing spinner
