@@ -10872,6 +10872,14 @@ function startPresenceHeartbeats() {
   };
   state._presenceVisHandler = onVis;
   document.addEventListener("visibilitychange", onVis, { once: false });
+  // On tab/window close — send an offline signal so the server marks the user offline immediately
+  const onUnload = () => {
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon("/api/presence/heartbeat", new Blob(['{"offline":true}'], {type:"application/json"}));
+    }
+  };
+  window.addEventListener("beforeunload", onUnload);
+  state._presenceBeforeUnloadHandler = onUnload;
 }
 
 function stopPresenceHeartbeats() {
@@ -10886,6 +10894,10 @@ function stopPresenceHeartbeats() {
   if (state._presenceVisHandler) {
     document.removeEventListener("visibilitychange", state._presenceVisHandler);
     state._presenceVisHandler = null;
+  }
+  if (state._presenceBeforeUnloadHandler) {
+    window.removeEventListener("beforeunload", state._presenceBeforeUnloadHandler);
+    state._presenceBeforeUnloadHandler = null;
   }
 }
 

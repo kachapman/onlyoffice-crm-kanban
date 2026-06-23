@@ -36,6 +36,8 @@ from user_profile_store import load_user_profile, save_user_profile
 from presence_store import (
     append_dm,
     clear_conversation,
+    clean_stale_presence_records,
+    clear_auto_status,
     get_conversation,
     get_portal_presence_snapshot,
     get_recent_dms_for_user,
@@ -640,6 +642,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
         # Presence overlays (from our store)
         overlays = get_portal_presence_snapshot(portal)
+        # Clean up stale presence records (browser closed without beforeunload)
+        clean_stale_presence_records(portal)
 
         # Build response list
         now = datetime.now(timezone.utc)
@@ -672,13 +676,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         afd = True
 
             auto_status = ov.get("autoStatus") or ""
+            needs_cleanup = False
             # Strip auto-status if user is not actively online or last dashboard activity is too old
             # (client-side 5-min timeout may not have fired if the browser was closed)
             if auto_status:
                 if not online:
                     auto_status = ""
+                    needs_cleanup = True
                 elif last_dash and (now - last_dash).total_seconds() > PRESENCE_AUTO_STATUS_TIMEOUT_S:
                     auto_status = ""
+                    needs_cleanup = True
+            if needs_cleanup:
+                clear_auto_status(portal, uid)
 
             row: dict[str, Any] = {
                 "id": uid,
@@ -722,13 +731,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     if not ov_online and delta < (3 * 60 * 60):
                         ov_afd = True
                 ov_auto = ov.get("autoStatus") or ""
+                ov_needs_cleanup = False
                 if ov_auto:
                     if not ov_online:
                         ov_auto = ""
+                        ov_needs_cleanup = True
                     else:
                         ov_last_dash = self._parse_iso_datetime(ov.get("lastDashboardActivity") or "")
                         if ov_last_dash and (now - ov_last_dash).total_seconds() > PRESENCE_AUTO_STATUS_TIMEOUT_S:
                             ov_auto = ""
+                            ov_needs_cleanup = True
+                if ov_needs_cleanup:
+                    clear_auto_status(portal, uid)
                 out_users.append({
                     "id": uid,
                     "displayName": uid,
@@ -752,6 +766,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             my_last_dash = self._parse_iso_datetime(my_presence.get("lastDashboardActivity") or "")
             if my_last_dash and (now - my_last_dash).total_seconds() > PRESENCE_AUTO_STATUS_TIMEOUT_S:
                 my_auto_status = ""
+                clear_auto_status(portal, user_id)
 
         _json_response(
             self,
@@ -777,8 +792,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not auth:
             return
         portal, _token, user_id = auth
-        # Body is optional; we just touch the times
-        touch_heartbeat(portal, user_id)
+        offline = False
+        try:
+            body = _read_body(self)
+            if body:
+                payload = json.loads(body)
+                offline = bool(payload.get("offline"))
+        except (json.JSONDecodeError, ValueError):
+            pass
+        touch_heartbeat(portal, user_id, offline=offline)
         _json_response(self, 200, {"ok": True})
 
     def _handle_presence_status(self) -> None:

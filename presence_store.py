@@ -130,13 +130,18 @@ def save_user_presence(portal: str, user_id: str, payload: dict[str, Any]) -> di
     return cleaned
 
 
-def touch_heartbeat(portal: str, user_id: str) -> dict[str, Any]:
+def touch_heartbeat(portal: str, user_id: str, offline: bool = False) -> dict[str, Any]:
     """Update lastHeartbeat for the user. Called on client heartbeats.
-    Does NOT bump lastDashboardActivity — that field controls autoStatus expiry
-    and is updated separately by set_status() and touch_crm_activity()."""
+    Also bumps lastDashboardActivity so autoStatus stays alive while the
+    dashboard tab is open and the user is actively present.
+    Pass offline=True to clear the heartbeat (tab/window closed)."""
     existing = load_user_presence(portal, user_id)
     now = _now_iso()
-    existing["lastHeartbeat"] = now
+    if offline:
+        existing["lastHeartbeat"] = ""
+    else:
+        existing["lastHeartbeat"] = now
+        existing["lastDashboardActivity"] = now
     return save_user_presence(portal, user_id, existing)
 
 
@@ -170,6 +175,44 @@ def set_status(portal: str, user_id: str, status: str = None, inferred: bool = F
     return save_user_presence(portal, user_id, existing)
 
 
+def clear_auto_status(portal: str, user_id: str) -> None:
+    """Clear autoStatus without bumping lastDashboardActivity.
+    Used by the server to clean up stale auto-status when filtering the response,
+    so the stale value doesn't persist on disk across sessions."""
+    existing = load_user_presence(portal, user_id)
+    if existing.get("autoStatus"):
+        existing["autoStatus"] = ""
+        save_user_presence(portal, user_id, existing)
+
+
+def clean_stale_presence_records(portal: str) -> None:
+    """Iterate all presence records for this portal and clear lastHeartbeat
+    + autoStatus for records with heartbeats older than 3 hours.
+    Handles the case where the browser was closed without sending beforeunload."""
+    from datetime import datetime, timezone, timedelta
+    portal_dir = DATA_DIR / _safe_segment(portal, "portal")
+    if not portal_dir.is_dir():
+        return
+    now = datetime.now(timezone.utc)
+    stale = timedelta(hours=3)
+    for p in portal_dir.glob("*.json"):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                continue
+            hb_str = data.get("lastHeartbeat") or ""
+            if not hb_str:
+                continue
+            try:
+                hb_dt = datetime.fromisoformat(hb_str)
+            except (ValueError, TypeError):
+                continue
+            if now - hb_dt > stale:
+                data["lastHeartbeat"] = ""
+                data["autoStatus"] = ""
+                p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except (json.JSONDecodeError, OSError):
+            continue
 def get_portal_presence_snapshot(portal: str) -> dict[str, dict[str, Any]]:
     """Return {user_id: presence_dict, ...} for all known presence records under this portal.
     Used by the /api/presence endpoint to build the live overlay.
