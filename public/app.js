@@ -6425,16 +6425,19 @@ function renderCard(opp, group, showStagePill) {
   return card;
 }
 
-function renderGroupBoard(group, container) {
+function renderGroupBoard(group, container, onComplete) {
   disconnectGroupCardObserver(group.id);
   container.innerHTML = "";
   const columns = groupOpportunities(group);
   const showStagePill = group.groupBy !== "stage";
 
   if (!columns.length) {
-    container.innerHTML = '<p class="board-loading">No opportunities match this group’s filters.</p>';
+    container.innerHTML = '<p class="board-loading">No opportunities match this group\'s filters.</p>';
+    if (onComplete) onComplete();
     return;
   }
+
+  const pending = [];
 
   for (const col of columns) {
     const column = document.createElement("section");
@@ -6505,17 +6508,49 @@ function renderGroupBoard(group, container) {
 
     if (!col.items.length) {
       body.innerHTML = '<p class="empty-column">No deals</p>';
-    } else {
-      for (const opp of col.items) {
-        body.appendChild(renderCard(opp, group, showStagePill));
-      }
     }
 
     column.appendChild(header);
     column.appendChild(body);
     container.appendChild(column);
+
+    if (col.items.length) {
+      pending.push({body, items: col.items});
+    }
   }
-  observeOpportunityCardsInGroup(group);
+
+  if (!pending.length) {
+    observeOpportunityCardsInGroup(group);
+    if (onComplete) onComplete();
+    return;
+  }
+
+  let colIdx = 0;
+  let cardIdx = 0;
+  const CHUNK = 20;
+
+  function renderChunk() {
+    let count = 0;
+    while (count < CHUNK && colIdx < pending.length) {
+      const col = pending[colIdx];
+      while (cardIdx < col.items.length && count < CHUNK) {
+        col.body.appendChild(renderCard(col.items[cardIdx], group, showStagePill));
+        cardIdx++;
+        count++;
+      }
+      if (cardIdx >= col.items.length) {
+        colIdx++;
+        cardIdx = 0;
+      }
+    }
+    if (colIdx < pending.length) {
+      setTimeout(renderChunk, 0);
+    } else {
+      observeOpportunityCardsInGroup(group);
+      if (onComplete) onComplete();
+    }
+  }
+  setTimeout(renderChunk, 0);
 }
 
 function tagMultiselectLabel(group) {
@@ -18449,10 +18484,10 @@ function maybeShowChangelog(version) {
   if (!version) return;
   const seen = localStorage.getItem(CHANGELOG_SEEN_KEY);
   if (seen === String(version)) return;
-  // Defer slightly so the dashboard shell paints first
+  // Defer so the dashboard shell paints first and initial tile renders get underway
   setTimeout(() => {
     showChangelogModal(version);
-  }, 300);
+  }, 1500);
 }
 
 function bindChangelogModal(version) {
