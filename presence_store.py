@@ -130,10 +130,10 @@ def save_user_presence(portal: str, user_id: str, payload: dict[str, Any]) -> di
     return cleaned
 
 
-def touch_heartbeat(portal: str, user_id: str, offline: bool = False) -> dict[str, Any]:
+def touch_heartbeat(portal: str, user_id: str, offline: bool = False, visible: bool = False) -> dict[str, Any]:
     """Update lastHeartbeat for the user. Called on client heartbeats.
-    Also bumps lastDashboardActivity so autoStatus stays alive while the
-    dashboard tab is open and the user is actively present.
+    Only bumps lastDashboardActivity when visible=True (tab is focused),
+    so auto-status expires naturally during background tab inactivity.
     Pass offline=True to clear the heartbeat (tab/window closed)."""
     existing = load_user_presence(portal, user_id)
     now = _now_iso()
@@ -141,7 +141,8 @@ def touch_heartbeat(portal: str, user_id: str, offline: bool = False) -> dict[st
         existing["lastHeartbeat"] = ""
     else:
         existing["lastHeartbeat"] = now
-        existing["lastDashboardActivity"] = now
+        if visible:
+            existing["lastDashboardActivity"] = now
     return save_user_presence(portal, user_id, existing)
 
 

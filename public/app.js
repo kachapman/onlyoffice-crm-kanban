@@ -10818,20 +10818,26 @@ function startPresenceHeartbeats() {
   stopPresenceHeartbeats();
   // Send a heartbeat on visibility + periodic when the dashboard is visible
   const send = () => {
-    presenceFetch(`/api/presence/heartbeat`, { method: "POST" }).catch(() => {});
+    presenceFetch(`/api/presence/heartbeat`, {
+      method: "POST",
+      body: JSON.stringify({visible: true}),
+    }).catch(() => {});
     noteDashboardActivity();
   };
   // Fire-and-forget heartbeat for background tabs (not throttled by browsers)
   const sendBeacon = () => {
     if (navigator.sendBeacon) {
-      navigator.sendBeacon("/api/presence/heartbeat");
+      navigator.sendBeacon("/api/presence/heartbeat", new Blob(['{"visible":false}'], {type:"application/json"}));
       noteDashboardActivity();
     } else {
       send();
     }
   };
   // Initial heartbeat → then snapshot (sequential to ensure online status immediately)
-  presenceFetch(`/api/presence/heartbeat`, { method: "POST" })
+  presenceFetch(`/api/presence/heartbeat`, {
+    method: "POST",
+    body: JSON.stringify({visible: true}),
+  })
     .then(() => fetchPresenceSnapshot())
     .then(s => {
       state.presenceData = s;

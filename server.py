@@ -793,14 +793,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         portal, _token, user_id = auth
         offline = False
+        visible = False
         try:
             body = _read_body(self)
             if body:
                 payload = json.loads(body)
                 offline = bool(payload.get("offline"))
+                visible = bool(payload.get("visible"))
         except (json.JSONDecodeError, ValueError):
             pass
-        touch_heartbeat(portal, user_id, offline=offline)
+        touch_heartbeat(portal, user_id, offline=offline, visible=visible)
         _json_response(self, 200, {"ok": True})
 
     def _handle_presence_status(self) -> None:
