@@ -16763,7 +16763,16 @@ function renderBookmarkTabs() {
     const deal = state.bookmarkedDeals[i];
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "bookmark-tab" + (state.activeBookmarkTab === deal.oppId ? " active" : "");
+    // Check if this bookmarked deal is tagged High Priority
+    const isHighPriority = (() => {
+      if (deal._cachedData?.opp && oppHasTag(deal._cachedData.opp, "High Priority")) return true;
+      for (const g of state.groups) {
+        const opp = (g.opportunities || []).find(o => Number(o.id ?? o.ID) === Number(deal.oppId));
+        if (opp && oppHasTag(opp, "High Priority")) return true;
+      }
+      return false;
+    })();
+    btn.className = "bookmark-tab" + (state.activeBookmarkTab === deal.oppId ? " active" : "") + (isHighPriority ? " bookmark-tab--high-priority" : "");
     btn.dataset.oppId = deal.oppId;
     btn.draggable = true;
     btn.dataset.index = i;

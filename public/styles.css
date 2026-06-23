@@ -6568,6 +6568,13 @@ body {
   border-radius: 6px;
 }
 
+/* High Priority tag highlight on bookmark tabs */
+.bookmark-tab--high-priority {
+  background: rgba(240, 180, 41, 0.08);
+  border-color: var(--warn);
+  border-left: 3px solid var(--warn);
+}
+
 .bookmark-tab:hover {
   background: var(--surface-2);
 }
