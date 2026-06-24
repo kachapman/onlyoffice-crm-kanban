@@ -1,7 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
-**Current version:** 1.87.6 (see CHANGELOG.md)  
-**Last session summary (for next resume):** v1.87.6: Chunked card rendering (20/batch with setTimeout(0) yielding) so event loop stays responsive during initial load — column shells appear immediately, cards populate progressively. Chelog delay increased to 1500ms. Presence hardening: smart heartbeat (visible flag — only bumps lastDashboardActivity when tab focused), beforeunload sendBeacon for instant offline, auto-status write-back to disk on stale filter, stale record cleanup >3h. High Priority amber styling on bookmark sidebar tabs. See CHANGELOG.md for details.
+**Current version:** 1.90.0 (see CHANGELOG.md)  
+**Last session summary (for next resume):** Domain migration to publicadjustermidwest.com in progress. v1.90.0 pushed and tagged; dashboard droplet is checked out at tag v1.90.0 in detached HEAD. Production .env still points to old domain so CRM access remains live. DNS already propagated. Notification mail-cache work (v1.88.0) was rolled back and removed from main. Next task: execute CRM droplet cutover — recreate onlyoffice-community-server container with LETS_ENCRYPT_DOMAIN=office.publicadjustermidwest.com and update portal domain in CRM settings. See docs/CUTOVER_RUNBOOK.md section 2 and docs/MIGRATE_DOMAINS.md Appendix A for exact commands. Ubuntu OS updates on CRM server are postponed until after migration is stable.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 
