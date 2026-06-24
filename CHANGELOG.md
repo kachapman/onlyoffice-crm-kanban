@@ -18,17 +18,13 @@ All notable changes to the CRM Kanban dashboard are documented here.
 - **Notification cache rollback:** Reverted v1.88.0 server-side CRM mail-based notification cache and the two follow-up mail-parser fixes. Feed returns to using CRM history events directly. `notification_store.py` removed.
 - **Files changed:** `AGENTS.md`, `CHANGELOG.md`, `VERSION`, `config.example.env`, `docs/CUTOVER_RUNBOOK.md`, `docs/MIGRATE_DOMAINS.md`, `public/app.js`, `server.py`
 
-## [1.87.4] — 2026-06-23
+## [1.87.6] — 2026-06-23
 
-### Event log + indicator stacking + deal-edit optimization + refreshing spinner
+### Chunked card rendering + initial-load responsiveness
 
-- **Event log:** New header button (clipboard-list icon) opens a persistent event log modal showing all recent deal edits, note saves, attachment uploads, and deletes with timestamps. Persisted in localStorage (max 200 entries). Includes clear-all button.
-- **Indicator overlap fix:** `#toast` (z-index 2003), `#note-queue-list` (z-index 2002), and `.crm-sync-status` (z-index 2001) now stack vertically without overlapping — sync-status moved to `bottom: 3.5rem` (above toast at 1.5rem), note-queue at `bottom: 5.5rem` (left side). When bookmark sidebar or a modal blocks the right side, toast and sync-status shift to the left; note-queue stays left always. CSS `.bookmark-open` rules handle the sidebar case; JS `repositionRightIndicator()` handles modals.
-- **Optimized deal-edit submission:** Replaced 3 separate GET+PUT cycles (due date, stage, custom fields) with a single `updateOpportunityBulk()` call. Attachment uploads now run in parallel (`Promise.all`) instead of sequential. Dynamic close timer: base 2.5s + 0.5s per MB of attachments (prevents premature modal close during large uploads). Tag operations throttled to 150ms between sequential calls.
-- **Refreshing indicator:** After deal-edit or quick-note save, the status bar now shows a persistent "Refreshing CRM data..." spinner during deferred board/preview refresh work (instead of going silent). Spinner hides when all deferred operations complete. Sequential promise chains prevent main-thread contention.
-- **Improved attachment upload response parsing:** Multiple extraction strategies (raw JSON, HTML-wrapped extraction, field fallbacks) with more robust error messages.
-- **Server timeout:** `urllib.request.urlopen` timeout increased to 120s for large file uploads.
-- **Files changed:** `public/app.js`, `public/index.html`, `public/styles.css`, `server.py`, `VERSION`, `CHANGELOG.md`
+- **Chunked card rendering:** `renderGroupBoard` now renders cards in batches of 20 with `setTimeout(0)` between batches, yielding the main thread so the event loop can service clicks (e.g. changelog modal close button) during initial load. Column shells (headers + empty bodies) are appended to the DOM immediately so the kanban layout is visible before cards populate progressively. Previously, all cards in a group were created in one synchronous loop — with 3 groups × 500 deals this blocked the main thread for seconds, triggering the browser's "page unresponsive" warning.
+- **Changelog delay increased:** `maybeShowChangelog` delay raised from 300ms to 1500ms so the modal appears after the worst of the tile rendering is underway, not competing for main thread time during the initial render burst.
+- **Files changed:** `public/app.js`, `public/index.html`, `VERSION`, `CHANGELOG.md`
 
 ## [1.87.5] — 2026-06-23
 
@@ -41,13 +37,17 @@ All notable changes to the CRM Kanban dashboard are documented here.
 - **High Priority amber styling on bookmark sidebar tabs:** `.bookmark-tab--high-priority` CSS class with same amber treatment as card tiles — `rgba(240,180,41,0.08)` background, `var(--warn)` border, 3px amber left accent. `renderBookmarkTabs()` detects High Priority tag via `oppHasTag()`, checking deal `_cachedData` then falling back to group opportunities.
 - **Files changed:** `presence_store.py`, `public/app.js`, `public/styles.css`, `server.py`, `VERSION`, `CHANGELOG.md`
 
-## [1.87.6] — 2026-06-23
+## [1.87.4] — 2026-06-23
 
-### Chunked card rendering + initial-load responsiveness
+### Event log + indicator stacking + deal-edit optimization + refreshing spinner
 
-- **Chunked card rendering:** `renderGroupBoard` now renders cards in batches of 20 with `setTimeout(0)` between batches, yielding the main thread so the event loop can service clicks (e.g. changelog modal close button) during initial load. Column shells (headers + empty bodies) are appended to the DOM immediately so the kanban layout is visible before cards populate progressively. Previously, all cards in a group were created in one synchronous loop — with 3 groups × 500 deals this blocked the main thread for seconds, triggering the browser's "page unresponsive" warning.
-- **Changelog delay increased:** `maybeShowChangelog` delay raised from 300ms to 1500ms so the modal appears after the worst of the tile rendering is underway, not competing for main thread time during the initial render burst.
-- **Files changed:** `public/app.js`, `public/index.html`, `VERSION`, `CHANGELOG.md`
+- **Event log:** New header button (clipboard-list icon) opens a persistent event log modal showing all recent deal edits, note saves, attachment uploads, and deletes with timestamps. Persisted in localStorage (max 200 entries). Includes clear-all button.
+- **Indicator overlap fix:** `#toast` (z-index 2003), `#note-queue-list` (z-index 2002), and `.crm-sync-status` (z-index 2001) now stack vertically without overlapping — sync-status moved to `bottom: 3.5rem` (above toast at 1.5rem), note-queue at `bottom: 5.5rem` (left side). When bookmark sidebar or a modal blocks the right side, toast and sync-status shift to the left; note-queue stays left always. CSS `.bookmark-open` rules handle the sidebar case; JS `repositionRightIndicator()` handles modals.
+- **Optimized deal-edit submission:** Replaced 3 separate GET+PUT cycles (due date, stage, custom fields) with a single `updateOpportunityBulk()` call. Attachment uploads now run in parallel (`Promise.all`) instead of sequential. Dynamic close timer: base 2.5s + 0.5s per MB of attachments (prevents premature modal close during large uploads). Tag operations throttled to 150ms between sequential calls.
+- **Refreshing indicator:** After deal-edit or quick-note save, the status bar now shows a persistent "Refreshing CRM data..." spinner during deferred board/preview refresh work (instead of going silent). Spinner hides when all deferred operations complete. Sequential promise chains prevent main-thread contention.
+- **Improved attachment upload response parsing:** Multiple extraction strategies (raw JSON, HTML-wrapped extraction, field fallbacks) with more robust error messages.
+- **Server timeout:** `urllib.request.urlopen` timeout increased to 120s for large file uploads.
+- **Files changed:** `public/app.js`, `public/index.html`, `public/styles.css`, `server.py`, `VERSION`, `CHANGELOG.md`
 
 ## [1.87.3] — 2026-06-19
 
@@ -551,4 +551,8 @@ First production-ready release on GitHub.
 ### Deploy & ops
 - Docker Compose deploy to DigitalOcean (`dashboard.vanguardadj.com`).
 - GitHub Actions deploy workflow; production server notes and estimate-nginx network in compose.
-- Documentation: `DEPLOY.md`, `docs/UPDATE_AND_DEPLOY.txt`, `docs/PRODUCTION_SERVER_NOTES.txt`.
+- Documentation: `DEPLOY.md`, `docs/UPDATE_AND_DEPLOY.txt`, `docs/PRODUCTION_SERVER_NOTES.txt`.## [Unreleased]
+
+### Fixed
+- `server.py` `do_POST` no longer crashes with `AttributeError: 'super' object has no attribute 'do_POST'` on non-API POST requests; now returns HTTP 405.
+
