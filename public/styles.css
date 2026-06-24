@@ -4788,6 +4788,12 @@ body {
   padding: 0.5rem 0.6rem;
 }
 
+/* Expanded linked email in deal preview / bookmark preview spans full history-item width */
+.opp-preview-history-item > .opp-preview-mail-embed {
+  width: 100%;
+  box-sizing: border-box;
+}
+
 .opp-preview-history-body--mail-received .opp-preview-mail-summary {
   color: var(--text);
 }

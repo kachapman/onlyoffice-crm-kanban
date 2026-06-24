@@ -15388,12 +15388,14 @@ function renderHistoryEventItem(ev) {
     });
 
     main.appendChild(mailToggle);
-    main.appendChild(mailPanel);
   }
 
   row.appendChild(main);
   renderHistoryAttachmentsAside(row, extractHistoryAttachments(ev));
   li.appendChild(row);
+  if (mailPanel) {
+    li.appendChild(mailPanel);
+  }
   return li;
 }
 
