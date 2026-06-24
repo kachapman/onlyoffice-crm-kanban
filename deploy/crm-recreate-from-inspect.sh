@@ -106,9 +106,14 @@ PY
 
 echo "Stopping/removing old community-server container..."
 docker rm -f onlyoffice-community-server 2>/dev/null || true
+sleep 5
 
 echo "Recreating community-server container..."
-bash /tmp/recreate-onlyoffice-cmd.sh
+if ! bash /tmp/recreate-onlyoffice-cmd.sh; then
+    echo "Recreate failed; cleaning up any partially-created container..."
+    docker rm -f onlyoffice-community-server 2>/dev/null || true
+    exit 1
+fi
 
 echo ""
 echo "Container recreated. Waiting 60 seconds for startup..."
