@@ -107,9 +107,11 @@ rp = hc.get("RestartPolicy", {})
 if rp.get("Name"):
     parts.append("--restart " + rp["Name"])
 
-# Privileged
+# Privileged + cgroup namespace host for systemd PID 1
 if hc.get("Privileged"):
     parts.append("--privileged")
+
+parts.append("--cgroupns host")
 
 parts.append(c["Image"])
 
