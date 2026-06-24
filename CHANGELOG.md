@@ -6,6 +6,7 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 ### Fixed
 - `server.py` `do_POST` no longer crashes with `AttributeError: 'super' object has no attribute 'do_POST'` on non-API POST requests; now returns HTTP 405.
+- Expanded linked emails in deal preview modal and bookmark preview once again fill the full available modal width. The `.opp-preview-mail-embed` panel is now appended directly to `.opp-preview-history-item` instead of inside the flex row shared with attachments.
 
 ## [1.90.0] — 2026-06-23
 
