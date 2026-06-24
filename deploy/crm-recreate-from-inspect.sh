@@ -59,6 +59,7 @@ for e in c.get("Env", []):
 
 envs["LETS_ENCRYPT_DOMAIN"] = f"LETS_ENCRYPT_DOMAIN={domain}"
 envs["LETS_ENCRYPT_MAIL"] = f"LETS_ENCRYPT_MAIL={email}"
+envs["DOCKER_ENABLED"] = "DOCKER_ENABLED=true"
 
 for e in envs.values():
     parts.append("-e " + shlex.quote(e))
