@@ -27,12 +27,21 @@ docker run --rm --entrypoint cat onlyoffice/communityserver:12.7.1.1942 /app/run
 
 echo "Patching standalone 'mysqladmin shutdown' lines..."
 sed -i 's/^[[:space:]]*mysqladmin shutdown[[:space:]]*$/# mysqladmin shutdown/' "${PATCH_SCRIPT}"
-chmod +x "${PATCH_SCRIPT}"
 
 if grep -qE '^[[:space:]]*mysqladmin shutdown[[:space:]]*$' "${PATCH_SCRIPT}"; then
     echo "ERROR: Patch failed; standalone mysqladmin shutdown lines remain." >&2
     exit 1
 fi
+
+echo "Patching Docker/cgroup detection to force DOCKER_ENABLED=true..."
+sed -i '/^if cat \/proc\/1\/cgroup/,/^fi$/c\DOCKER_ENABLED=true' "${PATCH_SCRIPT}"
+
+if ! grep -q '^DOCKER_ENABLED=true$' "${PATCH_SCRIPT}"; then
+    echo "ERROR: Patch failed; DOCKER_ENABLED=true block not inserted." >&2
+    exit 1
+fi
+
+chmod +x "${PATCH_SCRIPT}"
 
 echo "Generating docker run command..."
 python3 - "${INSPECT_FILE}" "${PATCH_SCRIPT}" "${DOMAIN}" "${EMAIL}" <<'PY' > /tmp/recreate-onlyoffice-cmd.sh
