@@ -17,11 +17,12 @@ echo "=== Pulling latest code ==="
 git pull origin main
 
 echo "=== Migrating user data ==="
-cd data
 for DIR in user-profiles user-presence dashboard-notes presence-messages; do
-  if [ -d "$DIR/$OLD_DOMAIN" ]; then
-    if [ ! -d "$DIR/$NEW_DOMAIN" ]; then
-      cp -a "$DIR/$OLD_DOMAIN" "$DIR/$NEW_DOMAIN"
+  SRC="$PROJECT_DIR/data/$DIR/$OLD_DOMAIN"
+  DST="$PROJECT_DIR/data/$DIR/$NEW_DOMAIN"
+  if [ -d "$SRC" ]; then
+    if [ ! -d "$DST" ]; then
+      cp -a "$SRC" "$DST"
       echo "Migrated $DIR"
     else
       echo "Already migrated: $DIR"
@@ -30,7 +31,6 @@ for DIR in user-profiles user-presence dashboard-notes presence-messages; do
     echo "No old data to migrate: $DIR"
   fi
 done
-cd ..
 
 echo "=== Updating .env ==="
 touch .env
