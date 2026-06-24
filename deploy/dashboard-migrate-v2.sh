@@ -23,19 +23,43 @@ echo "=== Project directory: $PROJECT_DIR ==="
 echo "=== Pulling latest code ==="
 git pull origin main
 
+
+
 echo "=== Migrating user data ==="
+
+# In production, dashboard data lives in the Docker volume mounted at /app/data.
+if docker ps --format '{{.Names}}' | grep -q '^vanguard-crm-dashboard$'; then
+  echo "Migrating data inside vanguard-crm-dashboard container..."
+  docker exec vanguard-crm-dashboard bash -c '
+    old="'"${OLD_DOMAIN}"'"
+    new="'"${NEW_DOMAIN}"'"
+    for DIR in user-profiles user-presence dashboard-notes presence-messages; do
+      for SRC in "/app/data/$DIR"/*"${old}"*; do
+        [ -d "$SRC" ] || continue
+        DST=$(echo "$SRC" | sed "s/${old}/${new}/g")
+        if [ ! -d "$DST" ]; then
+          cp -a "$SRC" "$DST"
+          echo "Migrated $SRC -> $DST"
+        else
+          echo "Already exists: $DST"
+        fi
+      done
+    done
+  '
+else
+  echo "Dashboard container not running; skipping container data migration."
+fi
+
+# Fallback: also migrate data in the project directory (dev / bind-mount setups).
 DATA_DIR="$PROJECT_DIR/data"
 for TOP in user-profiles user-presence dashboard-notes presence-messages; do
   TOP_DIR="$DATA_DIR/$TOP"
   if [ ! -d "$TOP_DIR" ]; then
-    echo "Missing $TOP_DIR"
     continue
   fi
   shopt -s nullglob
-  found=0
   for SRC in "$TOP_DIR"/*"${OLD_DOMAIN}"*; do
     [ -d "$SRC" ] || continue
-    found=1
     DST=$(echo "$SRC" | sed "s/${OLD_DOMAIN}/${NEW_DOMAIN}/g")
     if [ ! -d "$DST" ]; then
       cp -a "$SRC" "$DST"
@@ -45,9 +69,6 @@ for TOP in user-profiles user-presence dashboard-notes presence-messages; do
     fi
   done
   shopt -u nullglob
-  if [ "$found" -eq 0 ]; then
-    echo "No old-domain directories found in $TOP_DIR"
-  fi
 done
 
 echo "=== Updating .env ==="
