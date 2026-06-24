@@ -39,6 +39,8 @@ else
             print "        }\n";
         }
     ' "${NGINX_CONF}"
+    # Remove the backup so nginx does not load it as a duplicate site.
+    docker exec "${CONTAINER}" rm -f "${NGINX_CONF}.bak"
 fi
 
 echo "Testing nginx configuration..."
