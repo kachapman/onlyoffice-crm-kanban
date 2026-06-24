@@ -2,6 +2,11 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [Unreleased]
+
+### Fixed
+- `server.py` `do_POST` no longer crashes with `AttributeError: 'super' object has no attribute 'do_POST'` on non-API POST requests; now returns HTTP 405.
+
 ## [1.90.0] — 2026-06-23
 
 ### Domain migration to publicadjustermidwest.com + notification cache rollback

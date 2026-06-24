@@ -346,7 +346,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if self.path.startswith("/api/"):
             self._handle_api_post_put("POST")
             return
-        super().do_POST()
+        self.send_error(405, "Method Not Allowed")
 
     def do_PUT(self) -> None:
         if self.path.startswith("/api/"):
