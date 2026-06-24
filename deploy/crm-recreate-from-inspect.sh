@@ -78,16 +78,12 @@ for mount in data.get("Mounts") or []:
 # Mount the patched startup script read-only over the original
 parts.append("-v " + shlex.quote(patch_script + ":/app/run-community-server.sh:ro"))
 
-# Port mappings
+# Port mappings (force IPv4-only to avoid stale/broken IPv6 binds)
 for container_port, host_binds in ns.get("Ports", {}).items():
     if host_binds:
         for bind in host_binds:
-            host_ip = bind.get("HostIp", "")
             host_port = bind.get("HostPort", "")
-            if host_ip and host_ip not in ("", "0.0.0.0"):
-                mapping = f"{host_ip}:{host_port}:{container_port}"
-            else:
-                mapping = f"{host_port}:{container_port}"
+            mapping = f"0.0.0.0:{host_port}:{container_port}"
             parts.append("-p " + mapping)
 
 # Networks
