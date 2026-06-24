@@ -2,6 +2,17 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [1.90.0] — 2026-06-23
+
+### Domain migration to publicadjustermidwest.com + notification cache rollback
+
+- **Domain migration docs:** Added `docs/MIGRATE_DOMAINS.md` with full cutover guide for CRM droplet (DigitalOcean one-click Docker setup) and dashboard droplet (`estimate-nginx` reverse proxy).
+- **Cutover runbook:** Added `docs/CUTOVER_RUNBOOK.md` as a one-page checklist; dashboard side runs first to minimize downtime.
+- **Domain fallback updates:** Updated default portal URL fallbacks in `config.example.env`, `server.py`, and `public/app.js` to `https://office.publicadjustermidwest.com`.
+- **Production context:** Updated `AGENTS.md` production dashboard URL to `https://dashboard.publicadjustermidwest.com`.
+- **Notification cache rollback:** Reverted v1.88.0 server-side CRM mail-based notification cache and the two follow-up mail-parser fixes. Feed returns to using CRM history events directly. `notification_store.py` removed.
+- **Files changed:** `AGENTS.md`, `CHANGELOG.md`, `VERSION`, `config.example.env`, `docs/CUTOVER_RUNBOOK.md`, `docs/MIGRATE_DOMAINS.md`, `public/app.js`, `server.py`
+
 ## [1.87.4] — 2026-06-23
 
 ### Event log + indicator stacking + deal-edit optimization + refreshing spinner

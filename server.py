@@ -72,7 +72,7 @@ def _load_env_file() -> None:
 _load_env_file()
 PORT = int(os.environ.get("PORT", "8765"))
 PORTAL_URL = os.environ.get("ONLYOFFICE_PORTAL_URL", "").rstrip("/")
-DEFAULT_PORTAL = PORTAL_URL or "https://office.vanguardadj.com"
+DEFAULT_PORTAL = PORTAL_URL or "https://office.publicadjustermidwest.com"
 SSL_VERIFY = os.environ.get("ONLYOFFICE_SSL_VERIFY", "true").lower() not in (
     "0",
     "false",

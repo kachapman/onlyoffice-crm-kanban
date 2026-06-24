@@ -2,7 +2,7 @@
  * Vanguard CRM — multi-group opportunity board (local test portal)
  */
 
-const DEFAULT_PORTAL = "https://office.vanguardadj.com";
+const DEFAULT_PORTAL = "https://office.publicadjustermidwest.com";
 const GROUPS_STORAGE_KEY = "oo_board_groups_v2";
 const CALENDARS_STORAGE_KEY = "oo_board_calendars_v1";
 const NOTES_TILES_STORAGE_KEY = "oo_board_notes_v1";
