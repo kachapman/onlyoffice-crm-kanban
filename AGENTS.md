@@ -1,7 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
-**Current version:** 1.91.1 (released 2026-06-25; see CHANGELOG.md)  
-**Last session summary (for next resume):** v1.91.1 bugfixes: event log now loads from localStorage on init (survives hard refresh); `notifyUserList` in form-urlencoded attachment path sends individual params (not JSON string) matching .NET `List<Guid>` binder; GUID validation (`isGuid()`) applied to `validNotifyUserList`; numeric validation applied to `validFileIds`. Tested locally via dev server proxying to real CRM. Next: local testing of all changes, then push v1.91.1 after user approval.
+**Current version:** 1.91.2 (released 2026-06-25; see CHANGELOG.md)  
+**Last session summary (for next resume):** v1.91.2 performance fix: dashboard no longer hangs ~10s after deal edit from bookmark preview. Removed redundant `refreshAll()` from post-edit chain (full cache clear + full DOM rebuild of all tiles + double render from background tile loads). Preview, board, and bookmark tab refreshes now run in parallel (`Promise.all`). History pagination capped at 2 pages on post-edit auto-refresh (full 10-page load still happens on initial open). Quick-note path also parallelized.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 

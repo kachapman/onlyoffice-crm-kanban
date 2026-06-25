@@ -9207,61 +9207,58 @@ async function submitDealEditForm(e) {
     updateInferredStatus("edit", ctx.oppTitle || "");
     addEventLogEntry("edit", ctx.oppId, ctx.oppTitle || "", "Deal updated", true);
 
-    // Brief "sent" flash, then transition to persistent "Refreshing CRM data..." through
-    // the deferred board and preview refresh work. Sequential to avoid main-thread contention.
+    // Deferred board + preview + bookmark refresh, all in parallel so no single slow
+    // API (like history pagination) blocks the rest.
     setTimeout(() => {
       showRefreshingStatus();
       const previewEl = $("#opp-preview-modal");
       const previewId = oppPreviewContext && oppPreviewContext.oppId;
       const needPreview = previewEl && !previewEl.classList.contains("hidden") && previewId != null && Number(previewId) === Number(ctx.oppId);
       const needBoard = Boolean(group);
-      Promise.resolve()
-        .then(() => {
-          if (needPreview) {
-            return openOpportunityPreviewModal(previewId, ctx.oppTitle || "", group || ctx.group).catch(() => {});
+      const promises = [];
+      if (needPreview) {
+        promises.push(openOpportunityPreviewModal(previewId, ctx.oppTitle || "", group || ctx.group, false, true).catch(() => {}));
+      }
+      if (needBoard) {
+        promises.push((async () => {
+          try {
+            const updatedOpp = await fetchOpportunityForUpdate(oppId);
+            if (!updatedOpp) { await refreshGroup(group, { force: true }); return; }
+            await enrichOpportunitiesTags([updatedOpp]);
+            indexOpportunity(updatedOpp);
+            const oppIdx = group.opportunities.findIndex(o => Number(o.id ?? o.ID) === oppId);
+            const oldStageId = oppIdx >= 0 ? Number(group.opportunities[oppIdx].stage?.id ?? group.opportunities[oppIdx].stage?.ID) : null;
+            if (oppIdx >= 0) group.opportunities[oppIdx] = updatedOpp;
+            else group.opportunities.push(updatedOpp);
+            if (stageChanged && group.groupBy === "stage") {
+              updateOpportunityCardDom(updatedOpp, group);
+              const boardEl = groupDomEl(group)?.querySelector('.board');
+              if (boardEl) moveCardToColumnSorted(updatedOpp, group, boardEl, oldStageId);
+            } else if (tagsChanged && group.groupBy === "tag") {
+              const boardEl = groupDomEl(group)?.querySelector('.board');
+              updateAllCardCopies(updatedOpp, group, boardEl);
+              if (boardEl) rebuildAffectedTagColumns(group, boardEl, ctx.initialTags, updatedOpp);
+            } else if (group.groupBy === "tag") {
+              const boardEl = groupDomEl(group)?.querySelector('.board');
+              if (boardEl) updateAllCardCopies(updatedOpp, group, boardEl);
+            } else {
+              updateOpportunityCardDom(updatedOpp, group);
+            }
+          } catch (e) {
+            await refreshGroup(group, { force: true });
           }
-        })
-        .then(() => {
-          if (needBoard) {
-            return (async () => {
-              try {
-                const updatedOpp = await fetchOpportunityForUpdate(oppId);
-                if (!updatedOpp) { await refreshGroup(group, { force: true }); return; }
-                await enrichOpportunitiesTags([updatedOpp]);
-                indexOpportunity(updatedOpp);
-                const oppIdx = group.opportunities.findIndex(o => Number(o.id ?? o.ID) === oppId);
-                const oldStageId = oppIdx >= 0 ? Number(group.opportunities[oppIdx].stage?.id ?? group.opportunities[oppIdx].stage?.ID) : null;
-                if (oppIdx >= 0) group.opportunities[oppIdx] = updatedOpp;
-                else group.opportunities.push(updatedOpp);
-                if (stageChanged && group.groupBy === "stage") {
-                  updateOpportunityCardDom(updatedOpp, group);
-                  const boardEl = groupDomEl(group)?.querySelector('.board');
-                  if (boardEl) moveCardToColumnSorted(updatedOpp, group, boardEl, oldStageId);
-                } else if (tagsChanged && group.groupBy === "tag") {
-                  const boardEl = groupDomEl(group)?.querySelector('.board');
-                  updateAllCardCopies(updatedOpp, group, boardEl);
-                  if (boardEl) rebuildAffectedTagColumns(group, boardEl, ctx.initialTags, updatedOpp);
-                } else if (group.groupBy === "tag") {
-                  const boardEl = groupDomEl(group)?.querySelector('.board');
-                  if (boardEl) updateAllCardCopies(updatedOpp, group, boardEl);
-                } else {
-                  updateOpportunityCardDom(updatedOpp, group);
-                }
-              } catch (e) {
-                await refreshGroup(group, { force: true });
-              }
-            })();
-          }
-          return refreshAll().catch(() => {});
-        })
-        .then(() => {
-          if (state.activeBookmarkTab && Number(state.activeBookmarkTab) === Number(ctx.oppId)) {
-            return refreshBookmarkTab(ctx.oppId, false).catch(() => {});
-          }
-        })
-        .finally(() => {
-          hideRefreshingStatus();
-        });
+        })());
+      }
+      if (state.activeBookmarkTab && Number(state.activeBookmarkTab) === Number(ctx.oppId)) {
+        promises.push((async () => {
+          const deal = state.bookmarkedDeals.find(d => Number(d.oppId) === Number(ctx.oppId));
+          if (deal) deal._cachedData = null;
+          await refreshBookmarkTab(ctx.oppId, false).catch(() => {});
+        })());
+      }
+      Promise.all(promises).finally(() => {
+        hideRefreshingStatus();
+      });
     }, 800);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -9560,54 +9557,49 @@ async function submitQuickNoteForm(e) {
     const isSidePreviewCase = previewEl && !previewEl.classList.contains("hidden") && ctx && ctx.oppId != null &&
       (oppPreviewContext && Number(oppPreviewContext.oppId) === Number(ctx.oppId));
 
-    // Brief "saved" flash, then transition to persistent "Refreshing CRM data..." through deferred work.
+    // Deferred preview + board + bookmark refresh, all in parallel.
     setTimeout(() => {
       showRefreshingStatus();
-      Promise.resolve()
-        .then(() => {
-          if (isSidePreviewCase) {
-            const titleHint = ctx.oppTitle || "";
-            return openOpportunityPreviewModal(ctx.oppId, titleHint, ctx.group || null).catch(() => {});
-          }
-        })
-        .then(() => {
-          if (needsBoardUpdate && !isSidePreviewCase) {
-            return (async () => {
-              try {
-                const updatedOpp = await fetchOpportunityForUpdate(oppId);
-                if (!updatedOpp) { await refreshGroup(group, { force: true }); return; }
-                await enrichOpportunitiesTags([updatedOpp]);
-                indexOpportunity(updatedOpp);
-                const oppIdx = group.opportunities.findIndex(o => Number(o.id ?? o.ID) === oppId);
-                if (oppIdx >= 0) group.opportunities[oppIdx] = updatedOpp;
-                else group.opportunities.push(updatedOpp);
-                if (tagsChanged && group.groupBy === "tag") {
-                  const boardEl = groupDomEl(group)?.querySelector('.board');
-                  if (boardEl) {
-                    updateAllCardCopies(updatedOpp, group, boardEl);
-                    rebuildAffectedTagColumns(group, boardEl, ctx.initialTags, updatedOpp);
-                  }
-                } else if (tagsChanged) {
-                  updateOpportunityCardDom(updatedOpp, group);
-                } else {
-                  updateOpportunityCardDom(updatedOpp, group);
-                }
-              } catch (e) {
-                await refreshGroup(group, { force: true });
+      const promises = [];
+      if (isSidePreviewCase) {
+        promises.push(openOpportunityPreviewModal(ctx.oppId, ctx.oppTitle || "", ctx.group || null, false, true).catch(() => {}));
+      }
+      if (needsBoardUpdate && !isSidePreviewCase) {
+        promises.push((async () => {
+          try {
+            const updatedOpp = await fetchOpportunityForUpdate(oppId);
+            if (!updatedOpp) { await refreshGroup(group, { force: true }); return; }
+            await enrichOpportunitiesTags([updatedOpp]);
+            indexOpportunity(updatedOpp);
+            const oppIdx = group.opportunities.findIndex(o => Number(o.id ?? o.ID) === oppId);
+            if (oppIdx >= 0) group.opportunities[oppIdx] = updatedOpp;
+            else group.opportunities.push(updatedOpp);
+            if (tagsChanged && group.groupBy === "tag") {
+              const boardEl = groupDomEl(group)?.querySelector('.board');
+              if (boardEl) {
+                updateAllCardCopies(updatedOpp, group, boardEl);
+                rebuildAffectedTagColumns(group, boardEl, ctx.initialTags, updatedOpp);
               }
-            })();
+            } else if (tagsChanged) {
+              updateOpportunityCardDom(updatedOpp, group);
+            } else {
+              updateOpportunityCardDom(updatedOpp, group);
+            }
+          } catch (e) {
+            await refreshGroup(group, { force: true });
           }
-        })
-        .then(() => {
-          if (state.activeBookmarkTab && Number(state.activeBookmarkTab) === Number(ctx.oppId)) {
-            const deal = state.bookmarkedDeals.find(d => Number(d.oppId) === Number(ctx.oppId));
-            if (deal) deal._cachedData = null;
-            return refreshBookmarkTab(ctx.oppId, false).catch(() => {});
-          }
-        })
-        .finally(() => {
-          hideRefreshingStatus();
-        });
+        })());
+      }
+      if (state.activeBookmarkTab && Number(state.activeBookmarkTab) === Number(ctx.oppId)) {
+        promises.push((async () => {
+          const deal = state.bookmarkedDeals.find(d => Number(d.oppId) === Number(ctx.oppId));
+          if (deal) deal._cachedData = null;
+          await refreshBookmarkTab(ctx.oppId, false).catch(() => {});
+        })());
+      }
+      Promise.all(promises).finally(() => {
+        hideRefreshingStatus();
+      });
     }, 800);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -15688,10 +15680,13 @@ function buildOpportunityPreviewUserFields(opp, customFieldValues) {
   return rows;
 }
 
-async function fetchAllOpportunityHistory(oppId, force = false) {
+async function fetchAllOpportunityHistory(oppId, force = false, maxPages) {
   const all = [];
   let startIndex = 0;
+  let pages = 0;
   while (all.length < OPP_PREVIEW_HISTORY_MAX) {
+    if (maxPages != null && pages >= maxPages) break;
+    pages++;
     const params = new URLSearchParams({
       startIndex: String(startIndex),
       count: String(OPP_PREVIEW_HISTORY_PAGE),
@@ -15715,7 +15710,7 @@ async function fetchAllOpportunityHistory(oppId, force = false) {
   return all.slice(0, OPP_PREVIEW_HISTORY_MAX);
 }
 
-async function fetchOpportunityPreviewData(oppId, force = false) {
+async function fetchOpportunityPreviewData(oppId, force = false, quick = false) {
   const id = Number(oppId);
   if (!Number.isFinite(id) || id <= 0) throw new Error("Invalid opportunity id");
 
@@ -15729,7 +15724,7 @@ async function fetchOpportunityPreviewData(oppId, force = false) {
   const opp = await fetchOpportunityForUpdate(id, force);
   const [customFieldValues, history, tags, documents] = await Promise.all([
     fetchOpportunityCustomFieldValues(id, force),
-    fetchAllOpportunityHistory(id, force),
+    fetchAllOpportunityHistory(id, force, quick ? 2 : undefined),
     loadDealEditTags(opp, force),
     fetchOpportunityDocuments(id, force),
   ]);
@@ -16136,7 +16131,7 @@ function updatePreviewModalBookmarkButton(oppId) {
   btn.innerHTML = bookmarkRibbonSvg(bookmarked);
 }
 
-async function openOpportunityPreviewModal(oppId, titleHint = "", group = null, force = false) {
+async function openOpportunityPreviewModal(oppId, titleHint = "", group = null, force = false, quick = false) {
   const modal = $("#opp-preview-modal");
   const body = $("#opp-preview-body");
   const titleEl = $("#opp-preview-title");
@@ -16152,7 +16147,7 @@ async function openOpportunityPreviewModal(oppId, titleHint = "", group = null, 
   updatePreviewModalBookmarkButton(id);
 
   try {
-    const data = await fetchOpportunityPreviewData(id, force);
+    const data = await fetchOpportunityPreviewData(id, force, quick);
     const resolvedGroup = group || findGroupForOpportunity(id);
     setOpportunityPreviewContext(id, data.opp, resolvedGroup);
     titleEl.textContent = data.opp.title || data.opp.Title || titleHint || `Opportunity #${id}`;

@@ -4,6 +4,16 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 ## [Unreleased]
 
+## [1.91.2] — 2026-06-25
+
+### Fixed
+- Dashboard no longer hangs for ~10 seconds after deal edit from bookmark preview / quick note. Removed redundant `refreshAll()` call from `submitDealEditForm` post-edit chain (which re-fetched every API, cleared all caches, and rebuilt all group tile DOM). Now runs preview, board, and bookmark tab refreshes **in parallel** via `Promise.all()` instead of sequentially via `.then()` chaining.
+- Post-edit preview refresh now caps history pagination at 2 pages (100 items, down from 10 pages / 500). Full history is still loaded on initial preview open; only the auto-refresh after edit/note uses the fast path.
+- Quick-note post-save chain also parallelized for consistency.
+
+### Files changed
+- `public/app.js`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`
+
 ## [1.91.1] — 2026-06-25
 
 ### Fixed
