@@ -33,6 +33,7 @@ try:
 except Exception:
     pass
 from user_profile_store import load_user_profile, save_user_profile
+from event_log_store import append_event_log, load_event_log, list_users_with_logs
 from presence_store import (
     append_dm,
     clear_conversation,
@@ -565,6 +566,105 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         profile = save_user_profile(portal, user_id, existing)
         _json_response(self, 200, {"ok": True, "tiles": profile.get("notesTiles", [])})
 
+    # ---------------- Event Log / Health (server-side persistence, admin for kenc) ----------------
+
+    def _current_user_email(self, portal: str, token: str) -> str:
+        try:
+            url = f"{portal.rstrip('/')}/api/2.0/people/@self.json"
+            req = urllib.request.Request(
+                url,
+                headers={"Accept": "application/json", "Authorization": token},
+                method="GET",
+            )
+            with urllib.request.urlopen(req, context=_ssl_context(), timeout=20) as resp:
+                me_data = json.loads(resp.read().decode("utf-8"))
+                me = me_data.get("response") or me_data.get("result") or me_data
+                if isinstance(me, dict):
+                    return str(me.get("email") or me.get("Email") or "").strip().lower()
+        except Exception:
+            pass
+        return ""
+
+    def _is_admin(self, portal: str, token: str) -> bool:
+        return self._current_user_email(portal, token) == "kenc@vanguardadj.com"
+
+    def _handle_event_log_get(self) -> None:
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, _token, user_id = auth
+        events = load_event_log(portal, user_id)
+        _json_response(self, 200, {"events": events})
+
+    def _handle_event_log_put(self) -> None:
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, _token, user_id = auth
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        entries = payload.get("events")
+        if not isinstance(entries, list):
+            _json_response(self, 400, {"error": "events array is required"})
+            return
+        events = append_event_log(portal, user_id, entries)
+        _json_response(self, 200, {"ok": True, "events": events})
+
+    def _handle_event_log_users(self) -> None:
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, token, _user_id = auth
+        if not self._is_admin(portal, token):
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        users = list_users_with_logs(portal)
+        _json_response(self, 200, {"users": users})
+
+    def _handle_event_log_admin_get(self) -> None:
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, token, _user_id = auth
+        if not self._is_admin(portal, token):
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        qs = parse_qs(urlparse(self.path).query)
+        target_user = (qs.get("userId") or [""])[0]
+        if not target_user:
+            _json_response(self, 400, {"error": "userId is required"})
+            return
+        events = load_event_log(portal, target_user)
+        _json_response(self, 200, {"events": events})
+
+    def _handle_health_check(self) -> None:
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, token, _user_id = auth
+        reachable = False
+        try:
+            url = f"{portal.rstrip('/')}/api/2.0/people/@self.json"
+            req = urllib.request.Request(
+                url,
+                headers={"Accept": "application/json", "Authorization": token},
+                method="GET",
+            )
+            with urllib.request.urlopen(req, context=_ssl_context(), timeout=15) as resp:
+                if resp.status == 200:
+                    reachable = True
+        except Exception:
+            reachable = False
+        _json_response(self, 200, {
+            "ok": reachable,
+            "crmReachable": reachable,
+            "portalUrl": portal,
+            "checkedAt": datetime.now(timezone.utc).isoformat(),
+        })
+
     # ---------------- Presence / Team (user status, heartbeats, basic DMs, admin for kenc) ----------------
 
     def _handle_presence_users(self) -> None:
@@ -998,6 +1098,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self.send_error(404)
             return
 
+        if api_path == "/api/event-log":
+            self._handle_event_log_get()
+            return
+        if api_path == "/api/event-log/users":
+            self._handle_event_log_users()
+            return
+        if api_path == "/api/event-log/all":
+            self._handle_event_log_admin_get()
+            return
+        if api_path == "/api/health":
+            self._handle_health_check()
+            return
+
         if api_path == "/api/batch-opportunity-tags":
             self._handle_batch_opportunity_tags()
             return
@@ -1102,6 +1215,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             # Unknown /api/presence/* + method -> 404 (do not proxy)
             self.send_error(404)
+            return
+
+        if api_path == "/api/event-log" and method == "PUT":
+            self._handle_event_log_put()
             return
 
         if api_path == "/api/user-profile" and method == "PUT":

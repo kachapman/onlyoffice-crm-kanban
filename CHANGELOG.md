@@ -4,6 +4,32 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 ## [Unreleased]
 
+## [1.91.1] — 2026-06-25
+
+### Fixed
+- Event log no longer clears on hard refresh: `loadEventLogFromStorage()` is now called during `init()` so the localStorage backup is applied before the server merge runs.
+- GUID validation error ("Guid should contain 32 digits with 4 dashes") when posting an event note with attachments AND notify users: `notifyUserList` is now sent as individual form-urlencoded parameters (`notifyUserList=guid1&notifyUserList=guid2`) instead of a JSON-stringified array, matching ASP.NET MVC's `List<Guid>` model binder convention.
+- `validNotifyUserList` now filters with `isGuid()` instead of `filter(Boolean)`, rejecting non-GUID values before they reach the OnlyOffice API (JSON path).
+- `validFileIds` now validates numeric format (`/^\d+$/`), rejecting non-numeric file IDs before sending to the upload endpoint.
+
+### Files changed
+- `public/app.js`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`
+
+## [1.91.0] — 2026-06-24
+
+### Added
+- Server-side event log persistence (`event_log_store.py`): 7-day rolling retention with 1,000-entry cap, per-user per-portal JSON files.
+- Admin event-log tab: visible only for kenc@vanguardadj.com; shows user dropdown populated from CRM display names, filtered to users with event logs.
+- Discrete CRM health check: `GET /api/health` endpoint; "Check CRM status" button in event log modal (no polling).
+- GUID validation on history event creation: `notifyUserList` and attachment `fileIds` are validated client-side with `isGuid()` before sending to OnlyOffice; invalid entries are dropped with a console warning.
+- Upload response validation: file IDs returned from the upload handler are checked for valid GUID format.
+
+### Fixed
+- Quick Note and Deal Edit modals no longer auto-close after 2.5s on failure; the modal stays open so the user can retry or copy their work.
+
+### Files changed
+- `event_log_store.py` (new), `server.py`, `public/app.js`, `public/index.html`, `public/styles.css`, `Dockerfile`, `test-server.py`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`
+
 ## [1.90.1] — 2026-06-24
 
 ### Fixed

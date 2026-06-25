@@ -80,6 +80,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from user_profile_store import load_user_profile, save_user_profile  # reuse if present
+from event_log_store import append_event_log, load_event_log, list_users_with_logs  # reuse if present
 
 ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
@@ -275,8 +276,68 @@ class TestChaosHandler(SimpleHTTPRequestHandler):
     def _is_crm_path(self, api_path: str) -> bool:
         return "/crm/" in (api_path or "").lower()
 
+    def _handle_event_log_test(self, method: str) -> None:
+        portal = "https://test.local"
+        user_id = self._test_user_id()
+        if method == "GET":
+            events = load_event_log(portal, user_id)
+            _json_response(self, 200, {"events": events})
+            return
+        if method == "PUT":
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON"})
+                return
+            entries = payload.get("events")
+            if not isinstance(entries, list):
+                _json_response(self, 400, {"error": "events array is required"})
+                return
+            events = append_event_log(portal, user_id, entries)
+            _json_response(self, 200, {"ok": True, "events": events})
+            return
+
+    def _handle_event_log_users_test(self) -> None:
+        users = list_users_with_logs("https://test.local")
+        _json_response(self, 200, {"users": users})
+
+    def _handle_event_log_admin_test(self) -> None:
+        query = urlparse(self.path).query
+        user_id = ""
+        for part in query.split("&"):
+            if part.startswith("userId="):
+                user_id = part[7:]
+                break
+        if not user_id:
+            _json_response(self, 400, {"error": "userId is required"})
+            return
+        events = load_event_log("https://test.local", user_id)
+        _json_response(self, 200, {"events": events})
+
+    def _handle_health_test(self) -> None:
+        _json_response(self, 200, {
+            "ok": True,
+            "crmReachable": True,
+            "portalUrl": "https://test.local",
+            "checkedAt": "2026-06-24T00:00:00+00:00",
+            "testMode": True,
+        })
+
     def _handle_api_get(self) -> None:
         path = urlparse(self.path).path
+
+        if path == "/api/event-log":
+            self._handle_event_log_test("GET")
+            return
+        if path == "/api/event-log/users":
+            self._handle_event_log_users_test()
+            return
+        if path == "/api/event-log/all":
+            self._handle_event_log_admin_test()
+            return
+        if path == "/api/health":
+            self._handle_health_test()
+            return
 
         if path == "/api/user-profile":
             # Return a usable test profile
@@ -329,6 +390,10 @@ class TestChaosHandler(SimpleHTTPRequestHandler):
 
     def _handle_api_post_put(self, method: str) -> None:
         path = urlparse(self.path).path
+
+        if path == "/api/event-log" and method == "PUT":
+            self._handle_event_log_test("PUT")
+            return
 
         if path == "/api/user-profile" and method == "PUT":
             try:

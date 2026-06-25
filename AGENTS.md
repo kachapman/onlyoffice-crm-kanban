@@ -1,7 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
-**Current version:** 1.90.1 (hotfix released 2026-06-24; see CHANGELOG.md)  
-**Last session summary (for next resume):** v1.90.1 hotfix shipped: DM timestamps, emoji picker scroll pinning, indicator stacking, and popup-button first-click fix are committed/pushed. Old DNS records for `office.vanguardadj.com` and `dashboard.vanguardadj.com` have been removed as part of migration cleanup. Next work: harden event-note reliability (GUID validation, keep modal open on failure, server-side 7-day event-log persistence, admin event-log tab for kenc@vanguardadj.com, and a discrete CRM health-check endpoint).
+**Current version:** 1.91.1 (released 2026-06-25; see CHANGELOG.md)  
+**Last session summary (for next resume):** v1.91.1 bugfixes: event log now loads from localStorage on init (survives hard refresh); `notifyUserList` in form-urlencoded attachment path sends individual params (not JSON string) matching .NET `List<Guid>` binder; GUID validation (`isGuid()`) applied to `validNotifyUserList`; numeric validation applied to `validFileIds`. Tested locally via dev server proxying to real CRM. Next: local testing of all changes, then push v1.91.1 after user approval.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 
