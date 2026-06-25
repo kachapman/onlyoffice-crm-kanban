@@ -4,22 +4,6 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 ## [Unreleased]
 
-## [1.91.0] — 2026-06-24
-
-### Added
-- **Server-side event-log persistence:** new `event_log_store.py` keeps event logs on the dashboard server for 7 days (rolling) with a 1,000-entry cap. Stored per portal + CRM user under `data/event-logs/`.
-- **Event-log sync endpoints:** `GET /api/event-log`, `PUT /api/event-log`, `GET /api/event-log/users`, and `GET /api/event-log/all?userId=...`.
-- **Admin event-log tab:** visible only for `kenc@vanguardadj.com`, with a dropdown listing users who have event logs and the ability to view any selected user's log.
-- **Discrete CRM health check:** new `GET /api/health` endpoint and a "Check CRM status" button inside the event-log modal. No polling; it only runs when explicitly clicked.
-
-### Fixed
-- **GUID validation for event notes:** `notifyUserList` and attachment `fileIds` are now validated as GUIDs before being sent to OnlyOffice, preventing the "Guid should contain 32 digits" 400 error.
-- **Attachment file ID validation:** upload responses are now checked for a valid GUID file ID; uploads that return malformed IDs are treated as failures.
-- **Note modals no longer auto-close before success:** removed the 2.5s auto-close timer in Quick Note and Deal Edit modals so failures are visible and the user can retry without losing their note.
-
-### Files changed
-- `public/app.js`, `public/index.html`, `public/styles.css`, `server.py`, `event_log_store.py`, `VERSION`, `CHANGELOG.md`
-
 ## [1.90.1] — 2026-06-24
 
 ### Fixed

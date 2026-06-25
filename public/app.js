@@ -3856,34 +3856,8 @@ function saveEventLogToStorage() {
   } catch {}
 }
 
-async function loadEventLogFromServer() {
-  try {
-    const res = await fetch("/api/event-log", { credentials: "same-origin" });
-    if (!res.ok) return;
-    const data = await res.json();
-    const serverEvents = Array.isArray(data.events) ? data.events : [];
-    const localEvents = Array.isArray(state.eventLog) ? state.eventLog : [];
-    const seen = new Set(serverEvents.map((e) => e.id));
-    const merged = [...serverEvents, ...localEvents.filter((e) => e && e.id && !seen.has(e.id))];
-    merged.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
-    state.eventLog = merged.slice(0, MAX_EVENT_LOG);
-    saveEventLogToStorage();
-  } catch {}
-}
-
-function syncEventLogToServer(events) {
-  const toSync = (events || []).filter((e) => e && e.id && e.timestamp);
-  if (!toSync.length) return Promise.resolve();
-  return fetch("/api/event-log", {
-    method: "PUT",
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ events: toSync }),
-  }).catch(() => {});
-}
-
 function addEventLogEntry(type, oppId, oppTitle, message, success) {
-  const entry = {
+  state.eventLog.unshift({
     id: Date.now() + Math.random(),
     timestamp: new Date().toISOString(),
     type,
@@ -3891,11 +3865,9 @@ function addEventLogEntry(type, oppId, oppTitle, message, success) {
     oppTitle: oppTitle || "",
     message: String(message || ""),
     success: !!success,
-  };
-  state.eventLog = [entry, ...(state.eventLog || [])];
+  });
   if (state.eventLog.length > MAX_EVENT_LOG) state.eventLog.length = MAX_EVENT_LOG;
   saveEventLogToStorage();
-  syncEventLogToServer([entry]);
 }
 
 function updateBookmarkBodyClass() {
@@ -8846,15 +8818,9 @@ async function uploadAttachmentForNote(file) {
     const msg = (data && data.Message) || (data && data.message) || `Upload failed for ${file.name}`;
     throw new Error(msg);
   }
-  let fileId = data.Data || data.data || data.id || data.Id || null;
+  const fileId = data.Data || data.data || data.id || data.Id || null;
   if (fileId == null) {
     throw new Error(`Upload response missing file ID for ${file.name}`);
-  }
-  // Some upload paths return the ID wrapped in an object or with extra whitespace
-  if (typeof fileId === "object") fileId = fileId.id || fileId.Id || fileId.Data || fileId.data || null;
-  fileId = String(fileId).trim();
-  if (!isGuid(fileId)) {
-    throw new Error(`Upload returned an invalid file ID for ${file.name}: ${fileId}`);
   }
   return {
     id: fileId,
@@ -8866,28 +8832,11 @@ async function createOpportunityHistoryEvent(oppId, { content, categoryId, notif
   const html = noteContentToHtml(content);
   if (!html) throw new Error("Note text is required");
 
-  // Validate GUID-shaped inputs before OnlyOffice rejects them with a 400
-  const validNotifyUserList = (notifyUserList || []).map(String).map((s) => s.trim()).filter(isGuid);
-  const droppedNotifyUsers = (notifyUserList || []).filter((id) => !isGuid(String(id)));
-  const validFileIds = (fileIds || []).map((fid) => {
-    if (fid == null) return null;
-    const raw = typeof fid === "object" ? (fid.id || fid.Id || fid.Data || fid.data || null) : fid;
-    return raw == null ? null : String(raw).trim();
-  }).filter(isGuid);
-  const droppedFileIds = (fileIds || []).filter((fid) => !validFileIds.includes(typeof fid === "object" ? (fid.id || fid.Id || fid.Data || fid.data || null) : fid));
-
-  if (droppedNotifyUsers.length) {
-    console.warn("createOpportunityHistoryEvent: dropped invalid notifyUserList entries", droppedNotifyUsers);
-  }
-  if (droppedFileIds.length) {
-    console.warn("createOpportunityHistoryEvent: dropped invalid fileIds", droppedFileIds);
-  }
-
   let apiCall, descriptorBody, descriptorHeaders;
 
   const shortPreview = (content || "").replace(/<[^>]+>/g, " ").trim().slice(0, 80) || "(note)";
 
-  if (validFileIds && validFileIds.length > 0) {
+  if (fileIds && fileIds.length > 0) {
     // Use exact native form-urlencoded shape for attachments (from capture)
     // Use .json suffix for the history endpoint when sending attachments (matches native capture)
     const historyPath = "/api/2.0/crm/history.json";
@@ -8897,11 +8846,11 @@ async function createOpportunityHistoryEvent(oppId, { content, categoryId, notif
     params.set("entityId", String(oppId));
     params.set("entityType", "opportunity");
     params.set("created", new Date().toISOString());
-    if (validNotifyUserList?.length) {
+    if (notifyUserList?.length) {
       // notifyUserList is not in the minimal capture but keep support if server accepts
-      params.set("notifyUserList", JSON.stringify(validNotifyUserList));
+      params.set("notifyUserList", JSON.stringify(notifyUserList));
     }
-    validFileIds.forEach((fid) => params.append("fileId[]", String(fid)));
+    fileIds.forEach((fid) => params.append("fileId[]", String(fid)));
 
     descriptorBody = params.toString();
     descriptorHeaders = { "Content-Type": "application/x-www-form-urlencoded" };
@@ -8920,7 +8869,7 @@ async function createOpportunityHistoryEvent(oppId, { content, categoryId, notif
       content: html,
       categoryId,
     };
-    if (validNotifyUserList?.length) body.notifyUserList = validNotifyUserList;
+    if (notifyUserList?.length) body.notifyUserList = notifyUserList;
 
     descriptorBody = JSON.stringify(body);
     descriptorHeaders = { "Content-Type": "application/json" };
@@ -8933,7 +8882,7 @@ async function createOpportunityHistoryEvent(oppId, { content, categoryId, notif
     });
   }
 
-  const historyDescriptorPath = (validFileIds && validFileIds.length > 0) ? "/api/2.0/crm/history.json" : "/api/2.0/crm/history";
+  const historyDescriptorPath = (fileIds && fileIds.length > 0) ? "/api/2.0/crm/history.json" : "/api/2.0/crm/history";
 
   const res = await withCrmQueueOnTransient(apiCall, {
     method: "POST",
@@ -9104,6 +9053,13 @@ async function submitDealEditForm(e) {
 
   const connectStart = Date.now();
 
+  // Dynamic close timer: base 2.5s + 0.5s per MB of attachments to keep modal open during uploads
+  const totalFileSize = (ctx.selectedAttachments || []).reduce((sum, f) => sum + (f.size || 0), 0);
+  const extraCloseMs = Math.min(totalFileSize / (1024 * 1024) * 500, 5000);
+  const closeTimer = setTimeout(() => {
+    closeDealEditModal();
+  }, 2500 + extraCloseMs);
+
   try {
     const oppId = ctx.oppId;
     const dueVal = $("#deal-edit-due")?.value ?? "";
@@ -9207,6 +9163,7 @@ async function submitDealEditForm(e) {
     }
 
     const group = ctx.group;
+    clearTimeout(closeTimer);
     hideCRMSyncStatus();
     clearConnectingTimer();
     setConnectionState('connected');
@@ -9274,11 +9231,13 @@ async function submitDealEditForm(e) {
         });
     }, 800);
   } catch (err) {
+    clearTimeout(closeTimer);
     const msg = err instanceof Error ? err.message : String(err);
     setDealEditError(msg || "Could not save deal");
     hideCRMSyncStatus();
     addEventLogEntry("edit", ctx?.oppId, ctx?.oppTitle || "", msg || "Could not save deal", false);
   } finally {
+    clearTimeout(closeTimer);
     if (submitBtn) submitBtn.disabled = false;
     if (submittingNote && submittingNote.parentNode) submittingNote.parentNode.removeChild(submittingNote);
   }
@@ -9480,6 +9439,13 @@ async function submitQuickNoteForm(e) {
 
   const connectStart = Date.now();
 
+  // Dynamic close timer: base 2.5s + 0.5s per MB of attachments
+  const totalFileSize = (ctx.selectedAttachments || []).reduce((sum, f) => sum + (f.size || 0), 0);
+  const extraCloseMs = Math.min(totalFileSize / (1024 * 1024) * 500, 5000);
+  const closeTimer = setTimeout(() => {
+    closeQuickNoteModal();
+  }, 2500 + extraCloseMs);
+
   try {
     const oppId = ctx.oppId;
     const dueVal = $("#quick-note-due")?.value ?? "";
@@ -9555,6 +9521,7 @@ async function submitQuickNoteForm(e) {
     }
 
     const group = ctx.group;
+    clearTimeout(closeTimer);
     hideCRMSyncStatus();
     clearConnectingTimer();
     setConnectionState('connected');
@@ -9620,11 +9587,13 @@ async function submitQuickNoteForm(e) {
         });
     }, 800);
   } catch (err) {
+    clearTimeout(closeTimer);
     const msg = err instanceof Error ? err.message : String(err);
     setQuickNoteError(msg || "Could not save note");
     hideCRMSyncStatus();
     addEventLogEntry("note", ctx?.oppId, ctx?.oppTitle || "", msg || "Could not save note", false);
   } finally {
+    clearTimeout(closeTimer);
     if (submitBtn) submitBtn.disabled = false;
     if (submittingNote && submittingNote.parentNode) submittingNote.parentNode.removeChild(submittingNote);
   }
@@ -11286,11 +11255,6 @@ function formatMessageTime(iso) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
-
-function isGuid(value) {
-  if (value == null) return false;
-  return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(String(value).trim());
 }
 
 function ensureNotesToolbarRows(section) {
@@ -17267,15 +17231,16 @@ function refreshAllBookmarkButtonStates() {
    Event log
    ================================================================================ */
 
-function renderEventLogEntries(entries, container) {
-  if (!container) return;
-  if (!entries || !entries.length) {
-    container.innerHTML = '<div class="event-log-empty">No events logged yet.</div>';
+function renderEventLogModal() {
+  const list = $("#event-log-list");
+  if (!list) return;
+  if (!state.eventLog.length) {
+    list.innerHTML = '<div class="event-log-empty">No events logged yet.</div>';
     return;
   }
-  container.innerHTML = entries.map((e) => {
+  list.innerHTML = state.eventLog.map((e) => {
     const ts = new Date(e.timestamp);
-    const timeStr = Number.isNaN(ts.getTime()) ? "—" : ts.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    const timeStr = ts.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
     const icons = { edit: "✏️", note: "📝", delete: "🗑️", attach: "📎" };
     const icon = icons[e.type] || "ℹ️";
     const cls = e.success ? "success" : "fail";
@@ -17293,86 +17258,10 @@ function renderEventLogEntries(entries, container) {
   }).join("");
 }
 
-function renderEventLogModal() {
-  renderEventLogEntries(state.eventLog, $("#event-log-list"));
-}
-
-function switchEventLogTab(tabName) {
-  const tabs = $("#event-log-tabs");
-  if (!tabs) return;
-  tabs.querySelectorAll(".event-log-tab").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.tab === tabName);
-  });
-  ["mine", "admin"].forEach((name) => {
-    const pane = $(`#event-log-${name}`);
-    if (pane) pane.classList.toggle("active", name === tabName);
-    if (pane) pane.style.display = name === tabName ? "" : "none";
-  });
-}
-
-async function loadEventLogAdminUsers() {
-  try {
-    const res = await fetch("/api/event-log/users", { credentials: "same-origin" });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return Array.isArray(data.users) ? data.users : null;
-  } catch {
-    return null;
-  }
-}
-
-async function loadEventLogAdminEvents(userId) {
-  try {
-    const res = await fetch(`/api/event-log/all?userId=${encodeURIComponent(userId)}`, { credentials: "same-origin" });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return Array.isArray(data.events) ? data.events : [];
-  } catch {
-    return [];
-  }
-}
-
-async function renderEventLogAdminTab() {
-  const select = $("#event-log-user-select");
-  const list = $("#event-log-admin-list");
-  if (!select || !list) return;
-  const selected = select.value;
-  if (!selected) {
-    list.innerHTML = '<div class="event-log-empty">Select a user to view their event log.</div>';
-    return;
-  }
-  list.innerHTML = '<div class="event-log-empty">Loading…</div>';
-  const events = await loadEventLogAdminEvents(selected);
-  renderEventLogEntries(events, list);
-}
-
-async function openEventLogModal() {
+function openEventLogModal() {
   const modal = $("#event-log-modal");
   if (!modal) return;
-  await loadEventLogFromServer();
   renderEventLogModal();
-
-  // Check admin access and populate user dropdown
-  const tabs = $("#event-log-tabs");
-  if (tabs) {
-    const users = await loadEventLogAdminUsers();
-    if (users && users.length) {
-      tabs.classList.remove("hidden");
-      const select = $("#event-log-user-select");
-      if (select) {
-        const currentVal = select.value;
-        select.innerHTML = '<option value="">Select a user…</option>' +
-          users.map((uid) => `<option value="${escapeHtml(uid)}">${escapeHtml(uid)}</option>`).join("");
-        if (currentVal && users.includes(currentVal)) select.value = currentVal;
-      }
-      switchEventLogTab(tabs.querySelector(".event-log-tab.active")?.dataset.tab || "mine");
-      await renderEventLogAdminTab();
-    } else {
-      tabs.classList.add("hidden");
-      switchEventLogTab("mine");
-    }
-  }
-
   modal.classList.remove("hidden");
 }
 
@@ -17396,46 +17285,6 @@ function bindEventLogModal() {
     renderEventLogModal();
     showToast("Event log cleared");
   });
-
-  // Tab switching
-  modal.querySelectorAll(".event-log-tab").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      switchEventLogTab(btn.dataset.tab);
-      if (btn.dataset.tab === "admin") renderEventLogAdminTab();
-    });
-  });
-
-  // Admin user selection / refresh
-  $("#event-log-user-select")?.addEventListener("change", renderEventLogAdminTab);
-  $("#event-log-admin-refresh")?.addEventListener("click", renderEventLogAdminTab);
-
-  // Discrete CRM health check
-  $("#event-log-health")?.addEventListener("click", async () => {
-    const statusEl = $("#event-log-health-status");
-    if (statusEl) {
-      statusEl.textContent = "Checking…";
-      statusEl.className = "event-log-health-status";
-    }
-    try {
-      const res = await fetch("/api/health", { credentials: "same-origin" });
-      const data = await res.json();
-      if (statusEl) {
-        if (data.ok) {
-          statusEl.textContent = "CRM reachable";
-          statusEl.className = "event-log-health-status ok";
-        } else {
-          statusEl.textContent = `CRM unreachable: ${data.error || "unknown"}`;
-          statusEl.className = "event-log-health-status fail";
-        }
-      }
-    } catch (e) {
-      if (statusEl) {
-        statusEl.textContent = "Check failed";
-        statusEl.className = "event-log-health-status fail";
-      }
-    }
-  });
-
   // Dismiss on backdrop click
   modal.querySelector("[data-event-log-dismiss]")?.addEventListener("click", closeEventLogModal);
   // Escape
@@ -18653,8 +18502,6 @@ async function refreshAll() {
     renderBoardGroups();
     refreshDashboardTileLayouts();
     populateTasksUserFilter();
-    // Sync event log with server (non-blocking)
-    loadEventLogFromServer().catch(() => {});
     // Fire CRM tile loads as background — the loading indicator stays visible
     // until they complete, but the dashboard renders immediately.
     const done = () => {

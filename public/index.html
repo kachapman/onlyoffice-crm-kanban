@@ -834,25 +834,9 @@
     <div class="modal-backdrop" data-event-log-dismiss></div>
     <div class="modal-card modal-card-event-log">
       <h2 id="event-log-title" class="modal-title">Event log</h2>
-      <div id="event-log-tabs" class="event-log-tabs hidden">
-        <button type="button" class="event-log-tab active" data-tab="mine">My log</button>
-        <button type="button" class="event-log-tab" data-tab="admin">Admin</button>
-      </div>
-      <div id="event-log-mine" class="event-log-tab-content active">
-        <div id="event-log-list" class="event-log-list"></div>
-      </div>
-      <div id="event-log-admin" class="event-log-tab-content" style="display:none;">
-        <div class="event-log-admin-bar">
-          <label for="event-log-user-select">User:</label>
-          <select id="event-log-user-select" class="event-log-user-select"></select>
-          <button type="button" id="event-log-admin-refresh" class="btn btn-secondary btn-sm">Refresh</button>
-        </div>
-        <div id="event-log-admin-list" class="event-log-list"></div>
-      </div>
+      <div id="event-log-list" class="event-log-list"></div>
       <div class="modal-actions">
         <button type="button" id="event-log-clear" class="btn btn-danger btn-sm">Clear log</button>
-        <button type="button" id="event-log-health" class="btn btn-secondary btn-sm">Check CRM status</button>
-        <span id="event-log-health-status" class="event-log-health-status"></span>
         <button type="button" id="event-log-close" class="btn btn-secondary">Close</button>
       </div>
     </div>
