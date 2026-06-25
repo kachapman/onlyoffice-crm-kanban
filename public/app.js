@@ -17361,8 +17361,14 @@ async function openEventLogModal() {
       const select = $("#event-log-user-select");
       if (select) {
         const currentVal = select.value;
+        const portalUsers = Array.isArray(state.portalUsers) ? state.portalUsers : [];
+        const userMap = new Map(portalUsers.map((u) => [String(u.id || u.ID || u.userId || u.UserId || "").trim(), u]));
         select.innerHTML = '<option value="">Select a user…</option>' +
-          users.map((uid) => `<option value="${escapeHtml(uid)}">${escapeHtml(uid)}</option>`).join("");
+          users.map((uid) => {
+            const u = userMap.get(uid);
+            const label = u ? (u.displayName || u.userName || u.email || uid) : uid;
+            return `<option value="${escapeHtml(uid)}">${escapeHtml(label)}</option>`;
+          }).join("");
         if (currentVal && users.includes(currentVal)) select.value = currentVal;
       }
       switchEventLogTab(tabs.querySelector(".event-log-tab.active")?.dataset.tab || "mine");
