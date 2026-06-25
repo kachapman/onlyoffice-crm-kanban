@@ -450,10 +450,26 @@ function updateGroupFilterSummary(group) {
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
+function isBookmarkPreviewOpen() {
+  const sidebar = $("#bookmark-sidebar");
+  return sidebar && !sidebar.classList.contains("sidebar-hidden") && state.activeBookmarkTab != null;
+}
+
+function isMobileViewport() {
+  return window.innerWidth <= 768;
+}
+
+/** On narrow screens, when a bookmark preview is open, hide the sidebar strip so the preview fills the screen. */
+function updateMobileBookmarkPreview() {
+  const sidebar = $("#bookmark-sidebar");
+  if (!sidebar) return;
+  const previewOpen = state.activeBookmarkTab != null && !sidebar.classList.contains("sidebar-hidden");
+  sidebar.classList.toggle("mobile-preview-open", previewOpen && isMobileViewport());
+}
+
 function isRightIndicatorBlocked() {
   // Check if bookmark sidebar is open
-  const sidebar = $("#bookmark-sidebar");
-  if (sidebar && !sidebar.classList.contains("sidebar-hidden") && state.activeBookmarkTab != null) return true;
+  if (isBookmarkPreviewOpen()) return true;
   // Check if any modal is open (has backdrop, z-index 2000, overlays fixed indicators)
   const modals = document.querySelectorAll(".modal:not(.hidden)");
   for (const m of modals) {
@@ -473,6 +489,26 @@ function repositionRightIndicator(el) {
   }
 }
 
+/** Move toast, CRM sync status, and note queue into/out of the bookmark indicator stack
+ *  so they stack vertically on the right by default, and on the left when a bookmark preview is open. */
+function syncIndicatorStack() {
+  const stack = $("#bookmark-indicator-stack");
+  if (!stack) return;
+  const bookmarkOpen = isBookmarkPreviewOpen();
+  const indicators = [
+    $("#toast"),
+    $("#crm-sync-status"),
+    $("#note-queue-list"),
+  ].filter(Boolean);
+
+  indicators.forEach((el) => {
+    if (el.parentNode !== stack) stack.appendChild(el);
+  });
+
+  stack.classList.toggle("bookmark-open", bookmarkOpen);
+  stack.classList.remove("hidden");
+}
+
 function showToast(message, type = null) {
   const el = $("#toast");
   el.textContent = message;
@@ -484,6 +520,7 @@ function showToast(message, type = null) {
   }
   el.classList.remove("hidden");
   repositionRightIndicator(el);
+  syncIndicatorStack();
   clearTimeout(showToast._t);
   showToast._t = setTimeout(() => el.classList.add("hidden"), 5000);
 }
@@ -2152,6 +2189,7 @@ function updateNoteQueueList() {
   }
 
   el.innerHTML = items.join("");
+  syncIndicatorStack();
 }
 
 function addCompletedNoteQueueEntry({ preview, attachmentNames = [], failedNames = [], status }) {
@@ -2234,6 +2272,7 @@ function showCRMSyncStatus(text, isWarning = false) {
   }
   el.style.display = "";
   repositionRightIndicator(el);
+  syncIndicatorStack();
 }
 
 function hideCRMSyncStatus() {
@@ -3835,6 +3874,7 @@ function updateBookmarkBodyClass() {
   const sidebar = $("#bookmark-sidebar");
   const hasOpenBookmark = sidebar && !sidebar.classList.contains("sidebar-hidden") && state.activeBookmarkTab != null;
   document.body.classList.toggle("bookmark-open", hasOpenBookmark);
+  syncIndicatorStack();
 }
 
 function renderBasicMarkdown(text) {
@@ -11210,6 +11250,13 @@ function formatTimeAgo(iso) {
   return `${d}d ago`;
 }
 
+function formatMessageTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
 function ensureNotesToolbarRows(section) {
   if (!section || !section.classList.contains('notes-tile')) return;
   const bar = section.querySelector(':scope > .notes-tile-bar') || section.querySelector('.notes-tile-bar');
@@ -11661,6 +11708,12 @@ function createMessageElement(m, replyHandler) {
   textEl.textContent = m.text || "";
   div.appendChild(textEl);
 
+  // Discreet timestamp
+  const timeEl = document.createElement("div");
+  timeEl.className = "presence-msg-time";
+  timeEl.textContent = formatMessageTime(m.ts);
+  div.appendChild(timeEl);
+
   // Status under sent messages (me)
   if (isMe) {
     const status = document.createElement("div");
@@ -11831,7 +11884,7 @@ function clearPresenceInlineReplyTo() {
   if (preview) preview.style.display = "none";
 }
 
-function insertEmoji(textarea, emoji) {
+function insertEmoji(textarea, emoji, { preventFocus = false } = {}) {
   if (!textarea) return;
   const start = textarea.selectionStart || textarea.value.length;
   const end = textarea.selectionEnd || textarea.value.length;
@@ -11839,7 +11892,13 @@ function insertEmoji(textarea, emoji) {
   textarea.value = val.substring(0, start) + emoji + val.substring(end);
   const pos = start + emoji.length;
   textarea.selectionStart = textarea.selectionEnd = pos;
-  textarea.focus();
+  if (!preventFocus) {
+    try {
+      textarea.focus({ preventScroll: true });
+    } catch {
+      textarea.focus();
+    }
+  }
 }
 
 function showEmojiPicker(textarea, container) {
@@ -11866,69 +11925,92 @@ function showEmojiPicker(textarea, container) {
   container.appendChild(picker);
 }
 
-function showPopupEmojiPicker() {
+function showPopupEmojiPicker(emojiBtn) {
   const ta = $("#presence-dm-text");
-  if (!ta) return;
+  if (!ta || !emojiBtn) return;
   // Remove any existing picker
   const existing = document.querySelector("#presence-popup-emoji-picker");
   if (existing) { existing.remove(); return; }
   const picker = document.createElement("div");
   picker.id = "presence-popup-emoji-picker";
   picker.className = "presence-emoji-picker presence-emoji-picker-overlay";
+  picker.tabIndex = -1;
   const emojis = ["😀","😃","😄","😁","😆","😅","😂","🤣","😊","😇","🙂","🙃","😉","😌","😍","🥰","😘","😗","😙","😚","😋","😛","😝","😜","🤪","🤨","🧐","🤓","😎","🤩","🥳","😏","😒","😞","😔","😟","😕","🙁","☹️","😣","😖","😫","😩","🥺","😢","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🤗","🤔","🤭","🤫","🤥","😶","😐","😑","😬","🙄","😯","😦","😧","😮","😲","🥱","😴","🤤","😪","😵","🤐","🥴","🤢","🤮","🤧","😷","🤒","🤕","🤑","🤠","😈","👿","👹","👺","🤡","💩","👻","💀","☠️","👽","👾","🤖","🎃","😺","😸","😹","😻","😼","😽","🙀","😿","😾","🙈","🙉","🙊","💋","💌","💘","💝","💖","💗","💓","💞","💕","💟","❣️","💔","❤️","🧡","💛","💚","💙","💜","🤎","🖤","🤍","💯","💢","💥","💫","💦","💨","🕳️","💣","💬","👁️‍🗨️","🗨️","🗯️","💭","💤","👍","👎","👌","✌️","🤞","🤟","🤘","🤙","👈","👉","👆","👇","☝️","✋","🤚","🖐️","🖖","👋","🤙","💪","🦾","🦿","🦵","🦶","👂","🦻","👃","🧠","🦷","🦴","👀","👁️","👅","👄","💋"];
   emojis.forEach(em => {
     const b = document.createElement("button");
     b.type = "button";
     b.textContent = em;
     b.className = "presence-emoji-btn";
-    b.onclick = (e) => {
+    b.tabIndex = -1;
+    b.setAttribute("role", "menuitem");
+    b.addEventListener("click", (e) => {
       e.stopPropagation();
-      insertEmoji(ta, em);
+      insertEmoji(ta, em, { preventFocus: true });
       picker.remove();
-    };
+      // Restore focus to textarea after the picker is gone so the keyboard stays up
+      requestAnimationFrame(() => {
+        try { ta.focus({ preventScroll: true }); } catch { ta.focus(); }
+      });
+    });
     picker.appendChild(b);
   });
-  // Position picker below the emoji button
-  const emojiBtn = document.querySelector("#presence-modal .presence-dm-input .btn");
-  const isMobile = window.innerWidth < 480;
-  if (emojiBtn) {
-    const rect = emojiBtn.getBoundingClientRect();
+
+  // Append to body with fixed positioning and keep it pinned to the emoji button on scroll/resize
+  document.body.appendChild(picker);
+
+  const positionPicker = () => {
+    const btnRect = emojiBtn.getBoundingClientRect();
+    const isMobile = window.innerWidth < 480;
     picker.style.position = "fixed";
     picker.style.zIndex = "99999";
     picker.style.width = "auto";
     picker.style.minWidth = "200px";
+    picker.style.maxWidth = "calc(100vw - 16px)";
+
     if (isMobile) {
-      // On mobile: open to the left (right-aligned), below the entire input area
-      const inputContainer = document.querySelector("#presence-modal .presence-dm-input");
-      if (inputContainer) {
-        const inputRect = inputContainer.getBoundingClientRect();
-        picker.style.left = "8px";
-        picker.style.right = "8px";
-        picker.style.top = (inputRect.bottom + 4) + "px";
-        picker.style.minWidth = "unset";
-      } else {
-        picker.style.left = rect.left + "px";
-        picker.style.top = (rect.bottom + 4) + "px";
-      }
+      picker.style.left = "8px";
+      picker.style.right = "8px";
+      picker.style.top = `${btnRect.bottom + 4}px`;
+      picker.style.bottom = "auto";
+      picker.style.minWidth = "unset";
+      picker.style.maxWidth = "none";
     } else {
-      picker.style.left = rect.left + "px";
-      picker.style.top = (rect.bottom + 4) + "px";
+      const naturalWidth = picker.offsetWidth || 220;
+      let left = btnRect.right - naturalWidth;
+      if (left < 8) left = 8;
+      if (left + naturalWidth > window.innerWidth - 8) left = window.innerWidth - naturalWidth - 8;
+      picker.style.left = `${left}px`;
+      picker.style.top = `${btnRect.bottom + 4}px`;
+      picker.style.right = "auto";
+      picker.style.bottom = "auto";
     }
-  }
-  document.body.appendChild(picker);
-  // Click away to close
+  };
+  positionPicker();
+
+  const modalCard = document.querySelector("#presence-modal .modal-card");
+  const scrollTargets = [window, modalCard].filter(Boolean);
+  const onScroll = () => requestAnimationFrame(positionPicker);
+  scrollTargets.forEach((t) => t.addEventListener("scroll", onScroll, { passive: true }));
+  window.addEventListener("resize", onScroll);
+
+  // Click away to close (click capture so it beats modal backdrop handlers)
   const closePicker = (e) => {
-    if (!picker.contains(e.target) && e.target !== emojiBtn && !emojiBtn?.contains(e.target)) {
+    if (!picker.contains(e.target) && e.target !== emojiBtn && !emojiBtn.contains(e.target)) {
+      e.stopPropagation();
       picker.remove();
+      scrollTargets.forEach((t) => t.removeEventListener("scroll", onScroll));
+      window.removeEventListener("resize", onScroll);
       document.removeEventListener("click", closePicker, true);
     }
   };
-  setTimeout(() => document.addEventListener("click", closePicker, true), 0);
+  requestAnimationFrame(() => {
+    document.addEventListener("click", closePicker, true);
+  });
 }
 
-function showInlineEmojiPicker() {
+function showInlineEmojiPicker(emojiBtn) {
   const tile = document.querySelector('[data-tile-id="tile-presence"]');
-  if (!tile) return;
+  if (!tile || !emojiBtn) return;
   const ta = tile.querySelector("#presence-tile-dm-text");
   if (!ta) return;
   // Toggle existing picker
@@ -11937,63 +12019,85 @@ function showInlineEmojiPicker() {
   const picker = document.createElement("div");
   picker.id = "presence-inline-emoji-picker";
   picker.className = "presence-emoji-picker presence-emoji-picker-overlay";
+  picker.tabIndex = -1;
   const emojis = ["😀","😃","😄","😁","😆","😅","😂","🤣","😊","😇","🙂","🙃","😉","😌","😍","🥰","😘","😗","😙","😚","😋","😛","😝","😜","🤪","🤨","🧐","🤓","😎","🤩","🥳","😏","😒","😞","😔","😟","😕","🙁","☹️","😣","😖","😫","😩","🥺","😢","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🤗","🤔","🤭","🤫","🤥","😶","😐","😑","😬","🙄","😯","😦","😧","😮","😲","🥱","😴","🤤","😪","😵","🤐","🥴","🤢","🤮","🤧","😷","🤒","🤕","🤑","🤠","😈","👿","👹","👺","🤡","💩","👻","💀","☠️","👽","👾","🤖","🎃","😺","😸","😹","😻","😼","😽","🙀","😿","😾","🙈","🙉","🙊","💋","💌","💘","💝","💖","💗","💓","💞","💕","💟","❣️","💔","❤️","🧡","💛","💚","💙","💜","🤎","🖤","🤍","💯","💢","💥","💫","💦","💨","🕳️","💣","💬","👁️‍🗨️","🗨️","🗯️","💭","💤","👍","👎","👌","✌️","🤞","🤟","🤘","🤙","👈","👉","👆","👇","☝️","✋","🤚","🖐️","🖖","👋","🤙","💪","🦾","🦿","🦵","🦶","👂","🦻","👃","🧠","🦷","🦴","👀","👁️","👅","👄","💋"];
   emojis.forEach(em => {
     const b = document.createElement("button");
     b.type = "button";
     b.textContent = em;
     b.className = "presence-emoji-btn";
-    b.onclick = (e) => {
+    b.tabIndex = -1;
+    b.setAttribute("role", "menuitem");
+    b.addEventListener("click", (e) => {
       e.stopPropagation();
-      insertEmoji(ta, em);
+      insertEmoji(ta, em, { preventFocus: true });
       picker.remove();
-    };
+      requestAnimationFrame(() => {
+        try { ta.focus({ preventScroll: true }); } catch { ta.focus(); }
+      });
+    });
     picker.appendChild(b);
   });
-  // Position picker below the emoji button
-  const emojiBtn = tile.querySelector("#presence-tile-dm-emoji");
-  const isMobile = window.innerWidth < 480;
-  if (emojiBtn) {
-    const rect = emojiBtn.getBoundingClientRect();
+
+  // Append to body with fixed positioning and keep it pinned to the emoji button on scroll/resize
+  document.body.appendChild(picker);
+
+  const positionPicker = () => {
+    const btnRect = emojiBtn.getBoundingClientRect();
+    const isMobile = window.innerWidth < 480;
     picker.style.position = "fixed";
     picker.style.zIndex = "99999";
     picker.style.width = "auto";
     picker.style.minWidth = "200px";
+    picker.style.maxWidth = "calc(100vw - 16px)";
+
     if (isMobile) {
-      // On mobile: open to the left (right-aligned), below the entire input area
-      const inputContainer = tile.querySelector(".presence-dm-input");
-      if (inputContainer) {
-        const inputRect = inputContainer.getBoundingClientRect();
-        picker.style.left = "8px";
-        picker.style.right = "8px";
-        picker.style.top = (inputRect.bottom + 4) + "px";
-        picker.style.minWidth = "unset";
-      } else {
-        picker.style.left = rect.left + "px";
-        picker.style.top = (rect.bottom + 4) + "px";
-      }
+      picker.style.left = "8px";
+      picker.style.right = "8px";
+      picker.style.top = `${btnRect.bottom + 4}px`;
+      picker.style.bottom = "auto";
+      picker.style.minWidth = "unset";
+      picker.style.maxWidth = "none";
     } else {
-      picker.style.left = rect.left + "px";
-      picker.style.top = (rect.bottom + 4) + "px";
+      const naturalWidth = picker.offsetWidth || 220;
+      let left = btnRect.right - naturalWidth;
+      if (left < 8) left = 8;
+      if (left + naturalWidth > window.innerWidth - 8) left = window.innerWidth - naturalWidth - 8;
+      picker.style.left = `${left}px`;
+      picker.style.top = `${btnRect.bottom + 4}px`;
+      picker.style.right = "auto";
+      picker.style.bottom = "auto";
     }
-  }
-  document.body.appendChild(picker);
-  // Click away to close
+  };
+  positionPicker();
+
+  const tileBody = tile.querySelector(".presence-tile-body");
+  const scrollTargets = [window, tileBody].filter(Boolean);
+  const onScroll = () => requestAnimationFrame(positionPicker);
+  scrollTargets.forEach((t) => t.addEventListener("scroll", onScroll, { passive: true }));
+  window.addEventListener("resize", onScroll);
+
+  // Click away to close (click capture so it beats modal backdrop handlers)
   const closePicker = (e) => {
-    if (!picker.contains(e.target) && e.target !== emojiBtn && !emojiBtn?.contains(e.target)) {
+    if (!picker.contains(e.target) && e.target !== emojiBtn && !emojiBtn.contains(e.target)) {
+      e.stopPropagation();
       picker.remove();
+      scrollTargets.forEach((t) => t.removeEventListener("scroll", onScroll));
+      window.removeEventListener("resize", onScroll);
       document.removeEventListener("click", closePicker, true);
     }
   };
-  setTimeout(() => document.addEventListener("click", closePicker, true), 0);
+  requestAnimationFrame(() => {
+    document.addEventListener("click", closePicker, true);
+  });
 }
 
 function enhanceDMInputForCurrentThread() {
   const dm = $("#presence-dm");
   if (!dm) return;
   const inputDiv = dm.querySelector(".presence-dm-input");
-  if (!inputDiv || inputDiv.dataset.enhancedDm) return;
-  inputDiv.dataset.enhancedDm = "1";
+  if (!inputDiv || inputDiv.dataset.enhancedDm === "v2") return;
+  inputDiv.dataset.enhancedDm = "v2";
   const ta = inputDiv.querySelector("#presence-dm-text");
   const send = inputDiv.querySelector("#presence-dm-send");
   // Emoji selector button
@@ -12002,7 +12106,15 @@ function enhanceDMInputForCurrentThread() {
   emBtn.className = "btn btn-ghost btn-tiny";
   emBtn.textContent = "😊";
   emBtn.title = "Insert emoji";
-  emBtn.addEventListener("click", showPopupEmojiPicker);
+  emBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    showPopupEmojiPicker(emBtn);
+    // Keep the textarea focused so the keyboard stays up on mobile
+    const ta = inputDiv.querySelector("#presence-dm-text");
+    if (ta) requestAnimationFrame(() => {
+      try { ta.focus({ preventScroll: true }); } catch { ta.focus(); }
+    });
+  });
   // Buttons wrapper for the right column (emoji + send, horizontal)
   const btnWrap = document.createElement("div");
   btnWrap.className = "presence-dm-input-buttons";
@@ -12333,12 +12445,20 @@ function renderPresenceModal(snapshot = null, usersCache = null) {
         btn.dataset.tabBound = '1';
         btn.addEventListener('click', () => {
           state.presenceTab = t;
+          state.presenceSelectedUserId = null;
+          clearPresenceReplyTo();
           const s = state.presenceData || snap;
           const c = cache || (state.presenceUsersCache ? state.presenceUsersCache.users : []);
           renderPresenceModal(s, c);
         });
       }
     });
+  }
+
+  // If a DM thread is currently open, preserve it and only refresh chrome above.
+  if (state.presenceSelectedUserId && dmEl && !dmEl.classList.contains("hidden")) {
+    updatePresenceHeaderIndicators(snap);
+    return;
   }
 
   // Clear any stale non-tab recent section from previous impl
@@ -12699,12 +12819,14 @@ function bindPresenceTileControls(tile) {
     });
   }
 
-  // Popup button - opens full team viewer modal
-  const popupBtn = tile.querySelector("#presence-tile-popup-btn");
-  if (popupBtn && !popupBtn.dataset.bound) {
-    popupBtn.dataset.bound = "1";
-    popupBtn.addEventListener("click", () => {
-      openPresenceModal();
+  // Popup button - opens full team viewer modal (delegated so re-renders never lose it)
+  if (!tile.dataset.popupBound) {
+    tile.dataset.popupBound = "1";
+    tile.addEventListener("click", (e) => {
+      if (e.target.closest("#presence-tile-popup-btn")) {
+        e.stopPropagation();
+        openPresenceModal();
+      }
     });
   }
 
@@ -12720,9 +12842,17 @@ function bindPresenceTileControls(tile) {
     dmSend.addEventListener("click", sendDMInlineMessage);
   }
   const dmEmoji = tile.querySelector("#presence-tile-dm-emoji");
-  if (dmEmoji && !dmEmoji.dataset.bound) {
-    dmEmoji.dataset.bound = "1";
-    dmEmoji.addEventListener("click", showInlineEmojiPicker);
+  if (dmEmoji && dmEmoji.dataset.bound !== "v2") {
+    dmEmoji.dataset.bound = "v2";
+    dmEmoji.addEventListener("click", (e) => {
+      e.stopPropagation();
+      showInlineEmojiPicker(dmEmoji);
+      // Keep the textarea focused so the keyboard stays up on mobile
+      const ta = tile.querySelector("#presence-tile-dm-text");
+      if (ta) requestAnimationFrame(() => {
+        try { ta.focus({ preventScroll: true }); } catch { ta.focus(); }
+      });
+    });
   }
   const dmText = tile.querySelector("#presence-tile-dm-text");
   if (dmText && !dmText.dataset.bound) {
@@ -16791,6 +16921,11 @@ function initBookmarkSidebar() {
       closeBookmarkPreview();
     });
   }
+
+  // Recalculate mobile preview layout on resize
+  window.addEventListener("resize", () => {
+    updateMobileBookmarkPreview();
+  });
 }
 
 function hideBookmarkSidebar() {
@@ -16802,6 +16937,7 @@ function hideBookmarkSidebar() {
   }
   if (trigger) trigger.classList.remove("trigger-hidden");
   updateBookmarkBodyClass();
+  updateMobileBookmarkPreview();
 }
 
 function renderBookmarkTabs() {
@@ -16936,6 +17072,7 @@ async function activateBookmarkTab(oppId) {
 
   state.activeBookmarkTab = id;
   updateBookmarkBodyClass();
+  updateMobileBookmarkPreview();
   const previewPanel = $("#bookmark-sidebar-preview");
   const titleEl = $("#bookmark-preview-title");
   const bodyEl = $("#bookmark-preview-body");
@@ -16987,6 +17124,7 @@ async function activateBookmarkTab(oppId) {
 function closeBookmarkPreview() {
   state.activeBookmarkTab = null;
   updateBookmarkBodyClass();
+  updateMobileBookmarkPreview();
   const previewPanel = $("#bookmark-sidebar-preview");
   if (previewPanel) previewPanel.classList.add("hidden");
   // Hide dimming backdrop

@@ -1,7 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
-**Current version:** 1.90.0+ (see CHANGELOG.md; post-v1.90.0 cutover commits on main)  
-**Last session summary (for next resume):** CRM and dashboard droplet cutover to publicadjustermidwest.com is complete and verified in production. Dashboard login works, user data is present, and expanded linked emails in deal preview / bookmark preview again fill the available modal width. Remaining work: post-cutover cleanup (remove old DNS records after 24–48h, delete old `*vanguardadj*` data directories from the dashboard Docker volume), and confirm the CRM "Not secure" Brave warning clears on affected client profiles (it is secure in incognito/other browsers, so the server cert chain is correct). Ubuntu OS updates on CRM server remain postponed until migration is stable.
+**Current version:** 1.90.1 (hotfix released 2026-06-24; see CHANGELOG.md)  
+**Last session summary (for next resume):** v1.90.1 hotfix shipped: DM timestamps, emoji picker scroll pinning, indicator stacking, and popup-button first-click fix are committed/pushed. Old DNS records for `office.vanguardadj.com` and `dashboard.vanguardadj.com` have been removed as part of migration cleanup. Next work: harden event-note reliability (GUID validation, keep modal open on failure, server-side 7-day event-log persistence, admin event-log tab for kenc@vanguardadj.com, and a discrete CRM health-check endpoint).
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 

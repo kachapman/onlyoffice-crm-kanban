@@ -219,6 +219,9 @@
   <!-- Note attachments queue: fixed bottom-left, always visible (never behind sidebar/modals) -->
   <div id="note-queue-list" class="note-queue-list" aria-live="polite" aria-label="Recent note attachments status"></div>
 
+  <!-- Indicator stack: holds toast, CRM sync status, and note queue when bookmark preview is open so they stack vertically on the left instead of overlapping -->
+  <div id="bookmark-indicator-stack" class="bookmark-indicator-stack hidden" aria-live="polite" aria-label="Notifications"></div>
+
   <div id="add-tile-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="add-tile-modal-title">
     <div class="modal-backdrop" data-add-tile-dismiss></div>
     <div class="modal-card modal-card-add-tile">

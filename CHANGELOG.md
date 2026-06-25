@@ -4,9 +4,21 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 ## [Unreleased]
 
+## [1.90.1] — 2026-06-24
+
 ### Fixed
 - `server.py` `do_POST` no longer crashes with `AttributeError: 'super' object has no attribute 'do_POST'` on non-API POST requests; now returns HTTP 405.
 - Expanded linked emails in deal preview modal and bookmark preview once again fill the full available modal width. The `.opp-preview-mail-embed` panel is now appended directly to `.opp-preview-history-item` instead of inside the flex row shared with attachments.
+- DM messages now show a discreet timestamp below each message bubble.
+- Team tile popup button (⤢) now uses event delegation so it opens on the first click even after tile re-renders.
+- Emoji picker no longer detaches when scrolling: it is fixed to the viewport and repositions on scroll/resize so it stays pinned to the emoji button.
+- Mobile emoji picker now opens below the emoji button instead of being anchored to the bottom edge of the screen.
+
+### Changed
+- Toast, CRM sync status, and note queue indicators are now stacked vertically in a shared container. By default the stack is on the bottom-right; when a bookmark preview is open it moves to the bottom-left so indicators do not overlap the preview panel.
+
+### Files changed
+- `public/app.js`, `public/index.html`, `public/styles.css`, `VERSION`, `CHANGELOG.md`
 
 ## [1.90.0] — 2026-06-23
 

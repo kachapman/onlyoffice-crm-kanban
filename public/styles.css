@@ -894,13 +894,6 @@ body {
   color: var(--danger);
 }
 
-/* When bookmark sidebar or an overlay blocks the bottom-right, shift fixed indicators left */
-.bookmark-open .toast,
-.bookmark-open .crm-sync-status {
-  right: auto !important;
-  left: 1.5rem !important;
-}
-
 /* Also shift header meta indicators when sidebar is open */
 .bookmark-open #mutation-sync-status,
 .bookmark-open #crm-crash-banner {
@@ -1022,7 +1015,7 @@ body {
 #note-queue-list {
   position: fixed;
   bottom: 5.5rem;
-  left: 1.5rem;
+  right: 1.5rem;
   z-index: 2002;
   max-width: 420px;
   padding: 0.5rem 0.85rem;
@@ -1047,6 +1040,52 @@ body {
 .note-queue-item .q-attach { opacity: 0.8; font-size: 0.9em; }
 .note-queue-item .q-check { margin-left: 0.25em; }
 .note-queue-item .q-fail { margin-left: 0.25em; color: #9f1239; }
+
+/* Indicator stack: holds toast, CRM sync status, and note queue so they stack
+   vertically on the right by default, and on the left when a bookmark preview is open. */
+.bookmark-indicator-stack {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  left: auto;
+  z-index: 2004;
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: flex-end;
+  gap: 0.5rem;
+  max-width: min(420px, calc(100vw - 3rem));
+  pointer-events: none;
+}
+.bookmark-indicator-stack.bookmark-open {
+  right: auto;
+  left: 1.5rem;
+  align-items: flex-start;
+}
+.bookmark-indicator-stack.hidden {
+  display: none !important;
+}
+.bookmark-indicator-stack > * {
+  pointer-events: auto;
+}
+.bookmark-indicator-stack .toast,
+.bookmark-indicator-stack .crm-sync-status,
+.bookmark-indicator-stack #note-queue-list {
+  position: static !important;
+  right: auto !important;
+  left: auto !important;
+  bottom: auto !important;
+  margin: 0 !important;
+  animation: slide-in 0.2s ease;
+}
+.bookmark-indicator-stack .toast {
+  max-width: 100%;
+}
+.bookmark-indicator-stack .crm-sync-status {
+  max-width: 100%;
+}
+.bookmark-indicator-stack #note-queue-list {
+  max-width: 100%;
+}
 
 /* Attachments field in note editors (deal-edit + quick-note) */
 .note-attachments-field {
@@ -3101,6 +3140,7 @@ body {
   gap: 0.35rem;
   padding: 0.5rem;
   border-top: 1px solid var(--border);
+  position: relative;
 }
 .presence-dm-input textarea {
   grid-area: text;
@@ -3196,6 +3236,18 @@ body {
   font-size: 0.6em;
   margin-top: 0.1rem;
   align-self: flex-end;
+}
+
+.presence-msg-time {
+  font-size: 0.6em;
+  color: var(--muted);
+  margin-top: 0.15rem;
+  opacity: 0.75;
+  line-height: 1;
+  text-align: right;
+}
+.presence-msg:not(.me) .presence-msg-time {
+  text-align: left;
 }
 
 /* ---------- DM pagination ---------- */
@@ -3573,6 +3625,8 @@ body {
   box-shadow: 0 4px 16px rgba(0,0,0,0.2);
   width: auto;
   min-width: 220px;
+  max-width: calc(100vw - 16px);
+  box-sizing: border-box;
 }
 
 .presence-emoji-picker {
@@ -3979,6 +4033,7 @@ body {
   padding: 0.35rem 0.5rem;
   border-top: 1px solid var(--border);
   flex-shrink: 0;
+  position: relative;
 }
 
 .presence-dm-inline-field {
@@ -6766,6 +6821,16 @@ body {
   .bookmark-sidebar-preview {
     width: calc(100vw - 160px);
     min-width: 260px;
+  }
+
+  /* When a bookmark preview is open on mobile, hide the tab strip and let the preview fill the screen */
+  .bookmark-sidebar.mobile-preview-open .bookmark-sidebar-strip {
+    display: none;
+  }
+  .bookmark-sidebar.mobile-preview-open .bookmark-sidebar-preview {
+    width: 100vw;
+    min-width: 100vw;
+    border-right: none;
   }
 }
 

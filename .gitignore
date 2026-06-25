@@ -17,6 +17,13 @@ venv/
 .DS_Store
 .opencode/
 
+# Screenshots / debug images dropped in repo root
+/*.png
+/*.jpg
+/*.jpeg
+/*.gif
+/*.webp
+
 # Lighthouse / audit reports
 dashboard.vanguardadj.com-*.json
 
