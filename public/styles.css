@@ -6907,3 +6907,61 @@ body {
   font-style: italic;
 }
 
+.event-log-tabs {
+  display: flex;
+  gap: 0.35rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.event-log-tabs.hidden {
+  display: none;
+}
+.event-log-tab {
+  padding: 0.35rem 0.6rem;
+  font-size: 0.85rem;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.event-log-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.event-log-tab-content {
+  display: none;
+}
+.event-log-tab-content.active {
+  display: block;
+}
+.event-log-admin-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+}
+.event-log-user-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+}
+.event-log-health-status {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-left: auto;
+}
+.event-log-health-status.ok {
+  color: #166534;
+}
+.event-log-health-status.fail {
+  color: #9f1239;
+}
+
