@@ -4,6 +4,19 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 ## [Unreleased]
 
+## [1.91.3] — 2026-06-26
+
+### Added
+- **Editable deal title in deal-edit modal.** Title input added at the top of the form (discreet, transparent background, no border, accent underline on focus). Validates non-empty on save. All entry points covered (card edit button, preview modal, search preview, bookmark sidebar).
+- **CRM iframe proxy investigation:** Added `/crm-proxy/` test route to `server.py`. Confirmed `X-Frame-Options` can be stripped, allowing the native CRM to be embedded in an iframe. Documented findings and the recommended subdomain proxy approach in `FUTURE_FEATURES.md` (FEAT-024). Not implemented — parked.
+
+### Fixed
+- **Event note line breaks preserved.** Browser contenteditable `<div>` wrapping (Chrome wraps each paragraph in `<div>`) is now normalized to `<br/>` tags before sending to the CRM. Multi-line notes no longer arrive as a single text blob. Fix applies to both deal-edit and quick-note modals (both go through `noteContentToHtml`).
+- **Create opportunity modal — tags moved after custom fields.** Tags selector was moved below the dynamic custom fields section (Inspection Photos checkbox area) and before the Private checkbox, matching the requested form order.
+
+### Files changed
+- `public/app.js`, `public/index.html`, `public/styles.css`, `server.py`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`, `FUTURE_FEATURES.md`
+
 ## [1.91.2] — 2026-06-25
 
 ### Fixed

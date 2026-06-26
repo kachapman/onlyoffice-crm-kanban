@@ -289,6 +289,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if self.path.startswith("/api/"):
             self._handle_api_get()
             return
+        if self.path.startswith("/crm-proxy/"):
+            self._handle_crm_proxy("GET")
+            return
         super().do_GET()
 
     def send_head(self):
@@ -1077,6 +1080,46 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 result[oid] = tags
 
         _json_response(self, 200, {"tags": result})
+
+    def _handle_crm_proxy(self, method: str) -> None:
+        path = urlparse(self.path).path
+        # Strip /crm-proxy/ prefix to get the actual CRM path
+        target = path[len("/crm-proxy"):]  # e.g., /Default.aspx
+        if not target.startswith("/"):
+            target = "/" + target
+        portal = _portal_base(self)
+        if not portal:
+            self.send_error(400, "Portal not configured")
+            return
+        jar = cookies.SimpleCookie(self.headers.get("Cookie", ""))
+        token = jar.get(SESSION_COOKIE)
+        if token is None:
+            self.send_error(401, "Not authenticated")
+            return
+        url = f"{portal}{target}"
+        headers = {"Authorization": token.value, "Accept": "*/*"}
+        req = urllib.request.Request(url, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, context=_ssl_context(), timeout=120) as resp:
+                body = resp.read()
+                ctype = resp.headers.get_content_type() or "text/html"
+        except urllib.error.HTTPError as exc:
+            body = exc.read()
+            ctype = exc.headers.get_content_type() if exc.headers else "text/html"
+            self.send_response(exc.code)
+        except urllib.error.URLError as exc:
+            self.send_response(502)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(str(exc.reason).encode("utf-8"))
+            return
+        else:
+            self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        # Explicitly strip X-Frame-Options to allow iframe embedding
+        self.end_headers()
+        self.wfile.write(body)
 
     def _handle_api_get(self) -> None:
         api_path = urlparse(self.path).path

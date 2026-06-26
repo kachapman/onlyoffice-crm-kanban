@@ -4251,6 +4251,34 @@ body {
   text-decoration: underline;
 }
 
+.deal-edit-title-field {
+  margin-bottom: 0.5rem;
+}
+
+.deal-edit-title-input {
+  display: block;
+  width: 100%;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid transparent;
+  padding: 0.25rem 0;
+  outline: none;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+.deal-edit-title-input:focus {
+  border-bottom-color: var(--accent);
+}
+
+.deal-edit-title-input::placeholder {
+  color: var(--muted);
+  font-weight: 400;
+}
+
 .modal-card-opp-preview {
   width: min(720px, 96vw);
   max-height: 92vh;

@@ -5655,6 +5655,7 @@ function buildOpportunityPutBody(opp, overrides = {}) {
   if (overrides.successProbability !== undefined) {
     body.successProbability = overrides.successProbability;
   }
+  if (overrides.title !== undefined) body.title = overrides.title;
   return body;
 }
 
@@ -5714,7 +5715,7 @@ async function updateOpportunityStage(oppId, stageId) {
   if (res && res.queued) return;
 }
 
-async function updateOpportunityBulk(oppId, { dueDate, stageId, customFieldValues }) {
+async function updateOpportunityBulk(oppId, { dueDate, stageId, customFieldValues, title }) {
   const opp = await fetchOpportunityForUpdate(oppId);
   const overrides = {};
   if (dueDate !== undefined) overrides.expectedCloseDate = dueDate || null;
@@ -5725,6 +5726,7 @@ async function updateOpportunityBulk(oppId, { dueDate, stageId, customFieldValue
     const sp = stage?.successProbability ?? stage?.SuccessProbability;
     if (sp != null && !Number.isNaN(Number(sp))) overrides.successProbability = Number(sp);
   }
+  if (title !== undefined) overrides.title = title;
   const body = buildOpportunityPutBody(opp, overrides);
   if (customFieldValues?.length) {
     const existing = extractOpportunityCustomFieldList(opp);
@@ -8681,10 +8683,12 @@ async function openDealEditModal(opp, group) {
   try {
     dealEditCustomFieldValues = await fetchOpportunityCustomFieldValues(id);
   } catch { /* non-fatal */ }
+  const oppTitle = opp.title || opp.Title || `Opportunity #${id}`;
   state.dealEdit = {
     oppId: Number(id),
     group,
-    oppTitle: opp.title || opp.Title || `Opportunity #${id}`,
+    oppTitle,
+    initialTitle: opp.title || opp.Title || "",
     initialTags: [...tags],
     tags: [...tags],
     initialStageId: String(resolveOppStageId(opp)),
@@ -8692,6 +8696,9 @@ async function openDealEditModal(opp, group) {
     selectedAttachments: [],
     customFieldValues: dealEditCustomFieldValues,
   };
+
+  const titleInput = $("#deal-edit-title");
+  if (titleInput) titleInput.value = state.dealEdit.initialTitle;
 
   // Toggle user fields button
   const toggleBtn = $("#deal-edit-toggle-fields");
@@ -9042,6 +9049,17 @@ function noteContentToHtml(input) {
       .replace(/\s+on\w+='[^']*'/gi, "");
     // Treat "empty" editor artifacts as no content
     if (!s || /^(<br\s*\/?>|\s*|<div>\s*<br\s*\/?>\s*<\/div>)$/i.test(s)) return "";
+    // Normalize browser contenteditable <div> wrapping to <br/> line breaks
+    // Chrome wraps each paragraph in <div>, but CRM expects <br/> for line breaks
+    s = s
+      .replace(/<\/div>\s*<div[^>]*>/gi, '<br/>')
+      .replace(/<div[^>]*>/gi, '')
+      .replace(/<\/div>/gi, '');
+    // Collapse 3+ consecutive <br> into 2 max
+    s = s.replace(/(\s*<br\s*\/?>\s*){3,}/gi, '<br/><br/>');
+    // Trim leading/trailing <br>
+    s = s.replace(/^(?:\s*<br\s*\/?>\s*)+/i, '');
+    s = s.replace(/(?:\s*<br\s*\/?>\s*)+$/i, '');
     return s;
   }
   return plainTextToNoteHtml(s);
@@ -9108,6 +9126,14 @@ async function submitDealEditForm(e) {
       : [];
     const dueChanged = dueVal !== ctx.initialDue;
     const stageChanged = stageId && stageId !== ctx.initialStageId;
+    const titleVal = ($("#deal-edit-title")?.value ?? "").trim();
+    if (!titleVal) {
+      setDealEditError("Deal name cannot be empty");
+      if (submitBtn) submitBtn.disabled = false;
+      if (submittingNote && submittingNote.parentNode) submittingNote.parentNode.removeChild(submittingNote);
+      return;
+    }
+    const titleChanged = titleVal !== ctx.initialTitle;
 
     const tagsChanged = dealTagsChanged(ctx.initialTags, ctx.tags);
     if (tagsChanged) {
@@ -9170,12 +9196,13 @@ async function submitDealEditForm(e) {
       }
     }
 
-    // Combined: due date + stage (single PUT — avoids 3 separate GET+PUT cycles)
-    if (dueChanged || stageChanged) {
+    // Combined: due date + stage + title (single PUT — avoids multiple cycles)
+    if (dueChanged || stageChanged || titleChanged) {
       try {
         await updateOpportunityBulk(oppId, {
           dueDate: dueChanged ? serializeCrmTimestamp(dueVal) : undefined,
           stageId: stageChanged ? stageId : undefined,
+          title: titleChanged ? titleVal : undefined,
         });
       } catch (err) {
         throw dealEditStepError("Opportunity update", err);
@@ -9197,6 +9224,11 @@ async function submitDealEditForm(e) {
     }
 
     const group = ctx.group;
+    if (titleChanged) {
+      ctx.oppTitle = titleVal;
+      const titleEl = $("#deal-edit-modal-title");
+      if (titleEl) titleEl.textContent = titleVal;
+    }
     hideCRMSyncStatus();
     clearConnectingTimer();
     setConnectionState('connected');

@@ -397,6 +397,71 @@ See also user's post-v1.1 list in this session's plan.md and the new AGENTS.md.
 
 ---
 
+---
+
+## FEAT-024 — Native CRM iframe embed (mail module / full CRM)
+
+**Status:** Investigated 2026-06-26. Not implemented — parked for future consideration.
+
+### Goal
+
+Embed the **native OnlyOffice CRM mail module** (or the full CRM) inside the dashboard as an iframe tile or popup modal, giving access to 100% of CRM functionality without leaving the dashboard.
+
+### Background
+
+The API-based mail module approach was tried multiple times (ISSUE-002) and failed on:
+- Read/unread status pushes to server being unreliable
+- Account/inbox selector dropdown never working
+- Various incomplete API coverage
+
+### Investigation findings (2026-06-26)
+
+**Headers from `office.publicadjustermidwest.com`:**
+- `X-Frame-Options: SAMEORIGIN` — blocks framing from other domains
+- No CSP `frame-ancestors` restriction
+- No CORS headers
+
+**Quick test:** Added `/crm-proxy/` route to `server.py` that fetches CRM pages and strips `X-Frame-Options`. Confirmed the page loads through the proxy with framing headers removed.
+
+**Critical blocker (asset resolution):** The CRM's HTML and JS use **absolute paths** for assets and API calls:
+- Assets: `/skins/default/...`, `/discbundle/common/css/...`
+- API calls: `/api/2.0/mail/conversations/...`
+
+When loaded under `/crm-proxy/` on the dashboard domain, these resolve to the dashboard's server, not the CRM portal.
+
+### The cleanest path forward (subdomain proxy)
+
+A separate **nginx proxy subdomain** — no URL rewriting, no Python overhead, everything works natively.
+
+1. **DNS:** Point `crm-proxy.dashboard.publicadjustermidwest.com` to the dashboard droplet IP
+2. **nginx:** Add a `server_name` block that proxies ALL traffic to `https://office.publicadjustermidwest.com` and strips `X-Frame-Options`
+3. **Iframe:** Dashboard loads `https://crm-proxy.dashboard.publicadjustermidwest.com/addons/mail/Default.aspx`
+4. **Auth:** The `oo_token` cookie must be scoped to `.publicadjustermidwest.com` (parent domain) so both subdomains can read it. nginx passes it as the `Authorization` header.
+
+**Why this works:** Because the iframe loads from a **different subdomain** (not a sub-path), absolute paths like `/api/2.0/...` and `/skins/default/...` all resolve to the same nginx proxy → portal. No HTML rewriting needed. The CRM's own JS works unmodified.
+
+### Risks
+
+| Risk | Mitigation |
+|------|-----------|
+| CRM updates change bundles or HTML | Monitor on update; fix nginx config if needed |
+| `oo_token` cookie scope change | Set on `.publicadjustermidwest.com` parent domain |
+| nginx caching stale assets | Short cache TTL on proxy responses |
+| WebSocket / SignalR connections | May need separate proxy config |
+| Performance under load | nginx handles proxying in C — negligible overhead |
+
+### Files (when pursued)
+
+| File | Change |
+|------|--------|
+| Production nginx config (`/opt/estimate-enhancer/nginx.conf`) | New `server_name` block for `crm-proxy.*` |
+| `public/app.js` | Add "Open CRM Mail" tile/modal with iframe |
+| `public/index.html` | Iframe container in modal or tile body |
+| `public/styles.css` | Iframe sizing, full-height modal |
+| `server.py` | (local dev) Catch-all proxy for `/crm-proxy/*` with body forwarding, auth |
+
+---
+
 ## Suggested implementation order
 
 1. **FEAT-001** — Preview popup (high user value, uses existing APIs).
@@ -404,3 +469,4 @@ See also user's post-v1.1 list in this session's plan.md and the new AGENTS.md.
 3. **FEAT-003** — Note attachments (needs API research).
 4. Pick items from **Toaster_Features** by priority.
 5. **FEAT-022** — Document/spreadsheet tile: run Phase B spike before committing to Phase C; Phase A if embed is blocked or deferred.
+6. **FEAT-024** — Native CRM iframe embed (investigated, not implemented — see above).

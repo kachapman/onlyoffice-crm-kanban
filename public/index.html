@@ -549,6 +549,10 @@
         <a id="deal-edit-crm-link" class="deal-edit-crm-link" href="#" target="_blank" rel="noopener noreferrer">Open in CRM</a>
       </div>
       <form id="deal-edit-form" class="modal-form">
+        <div class="field deal-edit-title-field">
+          <input type="text" id="deal-edit-title" name="title" class="deal-edit-title-input"
+                 placeholder="Deal name" autocomplete="off" />
+        </div>
         <div class="field">
           <label for="deal-edit-due">Change Deal Due Date</label>
           <input type="date" id="deal-edit-due" name="expectedCloseDate" />
@@ -746,6 +750,7 @@
           <label for="create-opp-expected-close">Change Deal Due Date</label>
           <input type="date" id="create-opp-expected-close" name="expectedCloseDate" />
         </div>
+        <div id="create-opp-custom-fields" class="create-opp-custom-fields"></div>
         <div class="field">
           <label>Tags</label>
           <div id="create-opp-tags" class="deal-edit-tags" aria-live="polite"></div>
@@ -755,7 +760,6 @@
             </select>
           </div>
         </div>
-        <div id="create-opp-custom-fields" class="create-opp-custom-fields"></div>
         <label class="checkbox-filter modal-checkbox">
           <input type="checkbox" id="create-opp-private" name="isPrivate" />
           <span>Private opportunity</span>

@@ -1,7 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
-**Current version:** 1.91.2 (released 2026-06-25; see CHANGELOG.md)  
-**Last session summary (for next resume):** v1.91.2 performance fix: dashboard no longer hangs ~10s after deal edit from bookmark preview. Removed redundant `refreshAll()` from post-edit chain (full cache clear + full DOM rebuild of all tiles + double render from background tile loads). Preview, board, and bookmark tab refreshes now run in parallel (`Promise.all`). History pagination capped at 2 pages on post-edit auto-refresh (full 10-page load still happens on initial open). Quick-note path also parallelized.
+**Current version:** 1.91.3 (released 2026-06-26; see CHANGELOG.md)  
+**Last session summary (for next resume):** v1.91.3 hotfix: (1) Editable deal title in edit modal — discreet transparent input at top of form, validates non-empty, all entry points. (2) Note line-break fix — browser `<div>` wrapping normalized to `<br/>` in `noteContentToHtml`, multi-line notes no longer blob in CRM. (3) Create-opp modal tags moved after custom fields. (4) CRM iframe proxy investigation — added `/crm-proxy/` test route to server.py, confirmed X-Frame-Options can be stripped, documented FEAT-024 in FUTURE_FEATURES.md (subdomain proxy approach, not implemented). No push until user confirms. See CHANGELOG.md and FUTURE_FEATURES.md.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 
