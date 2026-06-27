@@ -157,15 +157,6 @@ def format_deal_summary(deals: list[dict]) -> str:
             parts.append(f"   Status: {_esc(stage)}")
         if amt:
             parts.append(f"   Amount: {_esc(amt)}")
-        update = d.get("latestUpdate")
-        if update:
-            content = update.get("content", "")
-            created = _fmt_date(update.get("created", ""))
-            if content:
-                preview = content[:120].replace("\n", " ")
-                parts.append(f"   Latest: {preview}")
-                if created:
-                    parts[-1] += f" ({_esc(created)})"
         lines.append("\n".join(parts))
     lines.append("")
     lines.append("Reply with a number (1, 2, ...) to see full details.")
