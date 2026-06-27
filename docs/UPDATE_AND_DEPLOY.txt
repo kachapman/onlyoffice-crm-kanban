@@ -91,7 +91,23 @@ PART B — ON THE SERVER (DigitalOcean droplet)
 
    VERIFY: git log -1 --oneline; cat VERSION → 1.4.0; git status clean.
 
-9. Rebuild and restart (CRM container only)
+9. Update .env with any new environment variables (adds to existing)
+
+   Only needed when new vars were added to config.example.env since last deploy.
+   Do this BEFORE the docker compose build — the container reads .env at startup.
+
+   nano /opt/vanguard/onlyoffice-crm-kanban/.env
+
+   If deploying the Telegram bot for the first time, ensure these lines exist
+   (ask the developer for the actual values):
+
+   TELEGRAM_BOT_TOKEN=your_token_here
+   BOT_CRM_EMAIL=bot@vanguardadj.com
+   BOT_CRM_PASSWORD=your_password_here
+
+   VERIFY: grep -E "TELEGRAM_BOT_TOKEN|BOT_CRM_EMAIL|BOT_CRM_PASSWORD" .env
+
+10. Rebuild and restart (CRM container only)
 
    docker compose build
    docker compose up -d
@@ -104,13 +120,13 @@ PART B — ON THE SERVER (DigitalOcean droplet)
    immediate crash on "python3 server.py" → container Restarting(1) → nginx 502.
    See the v1.4.5 release notes and the Dockerfile in the repo for the correct list.
 
-10. Local app health (no nginx)
+11. Local app health (no nginx)
 
    curl -s http://127.0.0.1:8765/api/config
 
    VERIFY: JSON with portalUrl. If refused, docker compose logs dashboard.
 
-11. Docker network (nginx → dashboard)
+12. Docker network (nginx → dashboard)
 
    docker exec estimate-nginx wget -qO- http://vanguard-crm-dashboard:8765/api/config
 
@@ -118,7 +134,7 @@ PART B — ON THE SERVER (DigitalOcean droplet)
    docker network connect estimate-enhancer_estimate-network vanguard-crm-dashboard
    (retry wget before editing nginx.conf)
 
-12. Public site
+13. Public site
 
    curl -sI https://dashboard.vanguardadj.com/ | head -5
    curl -s https://dashboard.vanguardadj.com/api/config
@@ -126,31 +142,20 @@ PART B — ON THE SERVER (DigitalOcean droplet)
    VERIFY: HTTP 200; JSON from /api/config. If 502 only here, nginx -t && reload
    estimate-nginx (see PRODUCTION_SERVER_NOTES.txt).
 
-13. Browser
+14. Browser
 
    https://dashboard.vanguardadj.com — login, notifications feed, notes File menu.
 
    VERIFY: data and tiles unchanged; v1.1 UI (feed loading, notes archive menu).
 
-14. (If deploying the Telegram bot) Set up the Python venv & systemd service
-
-   Only needed on first deploy of the bot, or when server.py changes that
-   affect the bot's API endpoints.
+15. (If deploying the Telegram bot for the first time) Set up venv & systemd
 
    a) Create the virtualenv (one time):
 
       python3 -m venv /tmp/botenv
       /tmp/botenv/bin/pip install python-telegram-bot==22.8 httpx
 
-   b) Update .env with bot credentials (one time, secrets stay on droplet):
-
-      Edit /opt/vanguard/onlyoffice-crm-kanban/.env and ensure these lines:
-
-      TELEGRAM_BOT_TOKEN=your_token
-      BOT_CRM_EMAIL=bot@vanguardadj.com
-      BOT_CRM_PASSWORD=your_password
-
-   c) Copy & enable the systemd service (one time):
+   b) Copy & enable the systemd service (one time):
 
       cp docs/crm-telegram-bot.service /etc/systemd/system/
       systemctl daemon-reload
@@ -160,7 +165,14 @@ PART B — ON THE SERVER (DigitalOcean droplet)
           journalctl -u crm-telegram-bot -n 5 --no-pager | grep "200 OK"
           Message @vanguardupdates_bot on Telegram → expect a response.
 
-15. (After code changes that touch the bot) Restart the systemd service
+   NOTE: The bot's required env vars (TELEGRAM_BOT_TOKEN, BOT_CRM_EMAIL,
+   BOT_CRM_PASSWORD) must be in /opt/vanguard/onlyoffice-crm-kanban/.env
+   BEFORE the docker compose rebuild (step 10), because the dashboard
+   container reads .env at startup and uses TELEGRAM_BOT_TOKEN to
+   authenticate bot API requests. If you forgot, run "docker compose up -d"
+   (without --build) after adding them — Docker re-reads .env on every start.
+
+16. (After code changes that touch the bot) Restart the systemd service
 
    systemctl restart crm-telegram-bot
 
@@ -210,6 +222,7 @@ TROUBLESHOOTING
 | Old code after pull             | docker compose build --no-cache && up -d           |
 | Bot 409 Conflict                | Only one bot instance per token allowed. Kill competing processes (`pkill -f telegram_bot`), then `systemctl restart crm-telegram-bot` |
 | Bot fails to start              | Check .env has TELEGRAM_BOT_TOKEN, BOT_CRM_EMAIL, BOT_CRM_PASSWORD. Run manually first: `/tmp/botenv/bin/python3 telegram_bot.py` |
+| Bot 503 "TELEGRAM_BOT_TOKEN not configured" | Dashboard container doesn't have the env var. Add to .env, then `docker compose up -d` (re-reads .env). No rebuild needed. |
 | Dockerfile missing .py          | If server.py imports a new module, add it to the Dockerfile COPY line. Missing modules cause container crash → nginx 502. |
 
 
@@ -293,7 +306,15 @@ QUICK REFERENCE (copy/paste)
 Desktop:
   cd ~/crm-kanban && git add -A && git commit -m "Describe change" && git push
 
-Server (dashboard):
+Server (dashboard, first time with bot):
+  cd /opt/vanguard/onlyoffice-crm-kanban && git pull
+  # Edit .env to add TELEGRAM_BOT_TOKEN, BOT_CRM_EMAIL, BOT_CRM_PASSWORD
+  docker compose up -d --build
+  # First-time bot setup:
+  cp docs/crm-telegram-bot.service /etc/systemd/system/
+  systemctl daemon-reload && systemctl enable --now crm-telegram-bot
+
+Server (dashboard, normal update):
   cd /opt/vanguard/onlyoffice-crm-kanban && git pull && docker compose up -d --build
 
 Server (Telegram bot, after dashboard deploy):
