@@ -34,6 +34,10 @@ except Exception:
     pass
 from user_profile_store import load_user_profile, save_user_profile
 from event_log_store import append_event_log, load_event_log, list_users_with_logs
+from crm_bot_store import (add_mapping, cancel_code, generate_code,
+                           get_mapping_by_chat, get_pending_codes, list_mappings,
+                           remove_mapping, remove_mapping_by_chat,
+                           set_verify_chat_id, verify_code)
 from presence_store import (
     append_dm,
     clear_conversation,
@@ -83,6 +87,9 @@ SESSION_COOKIE = "oo_token"
 DATA_DIR = ROOT / "data"
 COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
 PRESENCE_AUTO_STATUS_TIMEOUT_S = 300  # 5 min — clear auto-status if no dashboard activity
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+BOT_CRM_EMAIL = os.environ.get("BOT_CRM_EMAIL", "")
+BOT_CRM_PASSWORD = os.environ.get("BOT_CRM_PASSWORD", "")
 
 
 class ResponseCache:
@@ -588,7 +595,26 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             pass
         return ""
 
+    def _current_user_is_admin(self, portal: str, token: str) -> bool:
+        try:
+            url = f"{portal.rstrip('/')}/api/2.0/people/@self.json"
+            req = urllib.request.Request(
+                url,
+                headers={"Accept": "application/json", "Authorization": token},
+                method="GET",
+            )
+            with urllib.request.urlopen(req, context=_ssl_context(), timeout=20) as resp:
+                me_data = json.loads(resp.read().decode("utf-8"))
+                me = me_data.get("response") or me_data.get("result") or me_data
+                if isinstance(me, dict):
+                    return me.get("isAdmin") is True
+        except Exception:
+            pass
+        return False
+
     def _is_admin(self, portal: str, token: str) -> bool:
+        if self._current_user_is_admin(portal, token):
+            return True
         return self._current_user_email(portal, token) == "kenc@vanguardadj.com"
 
     def _handle_event_log_get(self) -> None:
@@ -642,6 +668,303 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         events = load_event_log(portal, target_user)
         _json_response(self, 200, {"events": events})
+
+    # ---------------- Bot customers (admin) ----------------
+
+    def _handle_bot_customers_list(self) -> None:
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, token, _user_id = auth
+        if not self._is_admin(portal, token):
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        mappings = list_mappings(portal)
+        pending = get_pending_codes(portal)
+        _json_response(self, 200, {"mappings": mappings, "pendingCodes": pending})
+
+    def _handle_bot_customers_generate_code(self) -> None:
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, token, _user_id = auth
+        if not self._is_admin(portal, token):
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        contact_id = payload.get("contactId")
+        contact_name = str(payload.get("contactName") or "").strip()
+        notes_category_id = payload.get("notesCategoryId")
+        if not contact_id:
+            _json_response(self, 400, {"error": "contactId is required"})
+            return
+        result = generate_code(portal, int(contact_id), contact_name,
+                               int(notes_category_id) if notes_category_id else None)
+        _json_response(self, 200, result)
+
+    def _handle_bot_customers_cancel_code(self) -> None:
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, token, _user_id = auth
+        if not self._is_admin(portal, token):
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        contact_id = payload.get("contactId")
+        if not contact_id:
+            _json_response(self, 400, {"error": "contactId is required"})
+            return
+        ok = cancel_code(portal, int(contact_id))
+        _json_response(self, 200, {"ok": ok})
+
+    def _handle_bot_customers_unlink(self) -> None:
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, token, _user_id = auth
+        if not self._is_admin(portal, token):
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        qs = parse_qs(urlparse(self.path).query)
+        raw = (qs.get("contactId") or [""])[0]
+        if not raw:
+            _json_response(self, 400, {"error": "contactId is required"})
+            return
+        ok = remove_mapping(portal, int(raw))
+        _json_response(self, 200, {"ok": ok})
+
+    def _handle_bot_customers_verify_code(self) -> None:
+        """Called by the Telegram bot process (not browser). Uses TELEGRAM_BOT_TOKEN."""
+        bot_token = str(os.environ.get("TELEGRAM_BOT_TOKEN") or "")
+        if not bot_token:
+            _json_response(self, 503, {"error": "TELEGRAM_BOT_TOKEN not configured"})
+            return
+        auth_header = self.headers.get("Authorization", "").strip()
+        if auth_header != f"Bearer {bot_token}":
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        code = str(payload.get("code") or "").strip()
+        chat_id = payload.get("chatId")
+        portal = str(payload.get("portal") or "").strip()
+        if not code or not chat_id or not portal:
+            _json_response(self, 400, {"error": "code, chatId, and portal are required"})
+            return
+        mapping = verify_code(portal, code)
+        if not mapping:
+            _json_response(self, 404, {"error": "Invalid or expired code"})
+            return
+        set_verify_chat_id(portal, mapping["contactId"], int(chat_id))
+        _json_response(self, 200, mapping)
+
+    def _handle_check_admin(self) -> None:
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, token, _user_id = auth
+        is_admin = self._is_admin(portal, token)
+        _json_response(self, 200, {"isAdmin": is_admin})
+
+    # ---------------- Bot endpoints (gated by TELEGRAM_BOT_TOKEN) ----------------
+
+    @staticmethod
+    def _bot_token() -> str:
+        return TELEGRAM_BOT_TOKEN
+
+    def _bot_verify_request(self) -> bool:
+        """Check Authorization: Bearer <bot_token> header."""
+        auth_header = self.headers.get("Authorization", "").strip()
+        expected = self._bot_token()
+        return bool(expected) and auth_header == f"Bearer {expected}"
+
+    _bot_crm_session: dict[str, Any] = {}  # {"token": "...", "expires": time}
+
+    def _bot_crm_token(self, portal: str) -> str | None:
+        """Get a CRM session token for the bot user, caching it."""
+        session = self._bot_crm_session
+        if session.get("token") and session.get("expires", 0) > time.time():
+            return session["token"]
+        if not BOT_CRM_EMAIL or not BOT_CRM_PASSWORD:
+            return None
+        body = json.dumps({"userName": BOT_CRM_EMAIL, "password": BOT_CRM_PASSWORD}).encode("utf-8")
+        req = urllib.request.Request(
+            f"{portal}/api/2.0/authentication.json",
+            data=body,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, context=_ssl_context(), timeout=20) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                token = data.get("response", {}).get("token")
+                if token:
+                    session["token"] = token
+                    session["expires"] = time.time() + 3000  # 50 min cache
+                    return token
+        except Exception:
+            pass
+        return None
+
+    def _bot_crm_proxy(self, portal: str, method: str, api_path: str, query: str = "") -> tuple[int, Any]:
+        """Make a CRM API call using bot credentials."""
+        token = self._bot_crm_token(portal)
+        if not token:
+            return 502, {"error": "Bot CRM auth failed"}
+        url = f"{portal}{api_path}"
+        if query:
+            url = f"{url}?{query}"
+        req = urllib.request.Request(
+            url,
+            headers={"Accept": "application/json", "Authorization": token},
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(req, context=_ssl_context(), timeout=30) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            data = exc.read()
+            try:
+                return exc.code, json.loads(data.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                return exc.code, {"error": str(exc)}
+        except urllib.error.URLError as exc:
+            return 502, {"error": str(exc.reason)}
+
+    def _handle_bot_me(self) -> None:
+        if not self._bot_verify_request():
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        qs = parse_qs(urlparse(self.path).query)
+        raw_chat = (qs.get("chatId") or [""])[0]
+        if not raw_chat:
+            _json_response(self, 400, {"error": "chatId is required"})
+            return
+        portal = _portal_base(self)
+        if not portal:
+            _json_response(self, 400, {"error": "Portal not configured"})
+            return
+        mapping = get_mapping_by_chat(portal, int(raw_chat))
+        if not mapping:
+            _json_response(self, 404, {"error": "Not found"})
+            return
+        _json_response(self, 200, mapping)
+
+    def _handle_bot_deals(self) -> None:
+        if not self._bot_verify_request():
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        qs = parse_qs(urlparse(self.path).query)
+        raw_contact = (qs.get("contactId") or [""])[0]
+        if not raw_contact:
+            _json_response(self, 400, {"error": "contactId is required"})
+            return
+        portal = _portal_base(self)
+        if not portal:
+            _json_response(self, 400, {"error": "Portal not configured"})
+            return
+        contact_id = int(raw_contact)
+
+        # Get mapping to check notesCategoryId
+        raw_chat = (qs.get("chatId") or [""])[0]
+        notes_category_id = None
+        if raw_chat:
+            mapping = get_mapping_by_chat(portal, int(raw_chat))
+            if mapping:
+                notes_category_id = mapping.get("notesCategoryId")
+
+        # Fetch open opportunities for this contact
+        filter_params = urlencode({
+            "startIndex": "0",
+            "count": "100",
+            "filterValue": "",
+            "contactId": str(contact_id),
+            "stageType": "open",
+            "sortBy": "date_created",
+            "sortOrder": "descending",
+        })
+        code, data = self._bot_crm_proxy(portal, "GET", "/api/2.0/crm/opportunity/filter", filter_params)
+        if code >= 400:
+            _json_response(self, code, data)
+            return
+        opportunities = data.get("response") if isinstance(data, dict) else []
+
+        # Fetch history for each deal to find latest customer update notes
+        deals = []
+        for opp in (opportunities or []):
+            if not isinstance(opp, dict):
+                continue
+            opp_id = opp.get("id") or opp.get("ID")
+            if not opp_id:
+                continue
+            title = str(opp.get("title") or opp.get("Title") or f"Deal #{opp_id}")
+            stage = str(opp.get("stageTitle") or opp.get("StageTitle") or "")
+            amount_raw = opp.get("amount") or opp.get("Amount")
+            try:
+                amount = float(amount_raw) if amount_raw else 0
+            except (TypeError, ValueError):
+                amount = 0
+            currency = str(opp.get("currency") or opp.get("Currency") or "")
+
+            # Fetch recent history (last 5 events)
+            hist_params = urlencode({
+                "entityType": "opportunity",
+                "entityId": str(opp_id),
+                "startIndex": "0",
+                "count": "5",
+                "sortBy": "date",
+                "sortOrder": "descending",
+            })
+            hcode, hdata = self._bot_crm_proxy(portal, "GET", "/api/2.0/crm/history/filter", hist_params)
+            events = []
+            if hcode < 400:
+                raw_events = hdata.get("response") if isinstance(hdata, dict) else []
+                if isinstance(raw_events, list):
+                    for ev in raw_events:
+                        if not isinstance(ev, dict):
+                            continue
+                        ev_cat = ev.get("category") or ev.get("Category") or {}
+                        cat_id = None
+                        if isinstance(ev_cat, dict):
+                            cat_id = ev_cat.get("id") or ev_cat.get("ID")
+                        elif isinstance(ev_cat, (int, str)):
+                            try:
+                                cat_id = int(ev_cat)
+                            except (TypeError, ValueError):
+                                pass
+                        # Filter to only notes matching the allowed category
+                        content = str(ev.get("content") or ev.get("Content") or "").strip()
+                        created = str(ev.get("created") or ev.get("Created") or "")
+                        if cat_id and notes_category_id and cat_id == notes_category_id and content:
+                            events.append({
+                                "content": content[:500],
+                                "created": created,
+                            })
+                    # Sort by date descending
+                    events.sort(key=lambda e: e.get("created", ""), reverse=True)
+
+            deals.append({
+                "id": int(opp_id),
+                "title": title,
+                "stage": stage,
+                "amount": amount,
+                "currency": currency,
+                "latestUpdate": events[0] if events else None,
+            })
+
+        _json_response(self, 200, {"deals": deals})
 
     def _handle_health_check(self) -> None:
         auth = _require_auth(self)
@@ -700,31 +1023,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     def _handle_presence_get(self) -> None:
         """Live presence snapshot + merged user info + DM hints.
-        Admin-only fields (last* activity) are only included when the requester is kenc@vanguardadj.com.
+        Admin-only fields (last* activity) are only included when the requester is a CRM admin.
         """
         auth = _require_auth(self)
         if not auth:
             return
         portal, token, user_id = auth
 
-        # Who am I (for admin check and "me" context)
-        my_email = ""
-        try:
-            url = f"{portal.rstrip('/')}/api/2.0/people/@self.json"
-            req = urllib.request.Request(
-                url,
-                headers={"Accept": "application/json", "Authorization": token},
-                method="GET",
-            )
-            with urllib.request.urlopen(req, context=_ssl_context(), timeout=20) as resp:
-                me_data = json.loads(resp.read().decode("utf-8"))
-                me = me_data.get("response") or me_data.get("result") or me_data
-                if isinstance(me, dict):
-                    my_email = str(me.get("email") or me.get("Email") or "").strip().lower()
-        except Exception:
-            pass
-
-        is_admin = my_email == "kenc@vanguardadj.com"
+        is_admin = self._is_admin(portal, token)
+        my_email = self._current_user_email(portal, token)
 
         # Base people list (small, mediated)
         people: list[dict[str, Any]] = []
@@ -1193,6 +1500,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             jar = cookies.SimpleCookie(self.headers.get("Cookie", ""))
             _json_response(self, 200, {"authenticated": SESSION_COOKIE in jar})
             return
+        if api_path == "/api/check-admin":
+            self._handle_check_admin()
+            return
+        if api_path == "/api/bot-customers":
+            self._handle_bot_customers_list()
+            return
+        if api_path == "/api/bot/me":
+            self._handle_bot_me()
+            return
+        if api_path == "/api/bot/deals":
+            self._handle_bot_deals()
+            return
 
         route = self._api_route()
         if not route:
@@ -1269,6 +1588,23 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         if api_path == "/api/dashboard-notes" and method == "PUT":
             self._handle_dashboard_notes_put()
+            return
+
+        # Bot-customers endpoints
+        if api_path.startswith("/api/bot-customers"):
+            if api_path == "/api/bot-customers/generate-code" and method == "POST":
+                self._handle_bot_customers_generate_code()
+                return
+            if api_path == "/api/bot-customers/cancel-code" and method == "POST":
+                self._handle_bot_customers_cancel_code()
+                return
+            if api_path == "/api/bot-customers/verify-code" and method == "POST":
+                self._handle_bot_customers_verify_code()
+                return
+            if api_path == "/api/bot-customers/mapping" and method == "DELETE":
+                self._handle_bot_customers_unlink()
+                return
+            self.send_error(404)
             return
 
         route = self._api_route()

@@ -1,93 +1,86 @@
 # Release v1.2.0
 
 **Tag:** `v1.2.0`  
-**Date:** 2026-06-06  
+**Date:** 2026-06-26  
 **Repository:** [onlyoffice-crm-kanban](https://github.com/kachapman/onlyoffice-crm-kanban)
 
 ## Summary
 
-Post-v1.1.0 testing follow-up. Addresses the full list of fixes and small features identified during live testing after the 1.1 deploy: reliable tile collapse/minimize (including half-width CRM groups while collapsed), calendar double-height scaling, immediate group delete persistence, task descriptions, comma-separated keyword filter now uses inclusive AND semantics, persistent preview on edit, white favicon, friendly linked-email error, full tasks list modal with open/completed toggle + check/uncheck + new task, template management reduced to delete-only modal, crash/5xx banner with exact requested wording and 30s guidance, tasks-list icon (minimal file cabinet), readability styling for the tasks popup, plus supporting docs (AGENTS.md) and cleanup.
+Telegram customer bot release. Customers can now check their open project statuses via `@vanguardupdates_bot` using a simple invite-code flow — no commands, no setup. Admins manage customer linking from a new modal in the dashboard. Also includes admin detection from CRM `isAdmin` field, increased bookmarked deals limit, and bot button repositioning in the header.
 
 ---
 
-## Fixes
+## New Features
 
-### Layout, collapse & tiles
-- Notes and calendar tiles: collapse button now reliably hides body content (toolbar stays visible). Added specific CSS rules to override tile min-height constraints when `.tile-body-collapsed`.
-- Calendar double-height: content now scales properly (month grid uses flex + body constraints + day min-heights instead of leaving empty space).
-- CRM group tiles: minimize/collapse now preserve the chosen half or quarter width (the collapsed bar stays narrow instead of snapping to full width). Width classes (`tile-half`/`tile-quarter`) are computed and applied before any collapsed early-return.
-- Group removal: delete now triggers an immediate `saveUserProfileToServer({quiet:true})` so the change is not lost on quick reload.
-- Tasks (compact rows): description text is rendered (`.task-desc`, truncated) in addition to title.
+### Telegram customer bot (`@vanguardupdates_bot`)
+- New async Python bot (`telegram_bot.py`) using `python-telegram-bot` v22.8 + `httpx`.
+- **Invite-code flow:** customers send their code → bot verifies via dashboard proxy → links Telegram chat to CRM contact → shows open projects.
+- **Number-based drill-down:** reply with `1`, `2`, etc. to see full deal details (amount, stage, latest customer update).
+- Customer-facing text uses "projects" terminology (not "deals").
+- Runs as a separate process; only needs `TELEGRAM_BOT_TOKEN` + dashboard URL.
 
-### CRM notifications
-- Keyword filter: comma-separated values are now matched with **AND** (inclusive) semantics. The input is split, trimmed, and every token must appear in the notification blob (`tokens.every(token => blob.includes(token))`). Single keywords continue to work. Placeholder updated.
-- Graceful handling for "Linked email ... wasn't found" (and similar message-not-found cases) in the opportunity preview modal.
+### Invite-code infrastructure (`crm_bot_store.py`)
+- JSON persistence for chat-to-contact mappings and pending invite codes.
+- 8-char alphanumeric codes with 48-hour expiry.
+- Codes auto-expire on read; consumed codes create a pending mapping immediately updated on first contact.
 
-### Preview & assets
-- Preview modal is now persistent: opening the edit form from the preview does not close it; after a successful edit the preview data refreshes in place.
-- Favicon and related meta / logo images switched to the white ship variant for visibility on both light and dark surfaces.
+### Bot Customers admin modal
+- Robot SVG button in the header (next to event-log button).
+- Searchable contact picker (type ≥2 chars → CRM contact filter API).
+- Note category dropdown for history curation ("Customer Update" type).
+- Code generation box with Copy button + expiry countdown + Cancel.
+- Existing mappings list with Linked/Pending status badges and × unlink confirmation.
 
-### Tasks list popup (readability)
-- Light theme backgrounds and text for the full tasks list (`#tasks-list-modal`): body uses white with subtle inset shadow/border, rows use light gray with hover, done rows are dimmed + strikethrough, meta text muted, headers contrasted. Checkboxes use blue accent. Makes long lists easy to scan.
+### Admin detection from CRM
+- Checks `isAdmin` from `/api/2.0/people/@self` response.
+- Falls back to `kenc@vanguardadj.com` email match if field unavailable.
+- Presence modal and presence tile admin buttons use `state.currentUserIsAdmin`.
 
-### CRM backend errors
-- Crash / 5xx notification banner for OnlyOffice CRM proxy failures.
-  - Triggered from the central `api()` wrapper on `!res.ok && status >= 500` (or JSON parse failure) when the path includes `/crm/`.
-  - Exact wording requested: "OnlyOffice CRM backend error (e.g. 502 on history). Dashboard may be out of date. Refresh page now — recommended in ~30 seconds."
-  - "Refresh page now" button performs `location.reload()`.
-  - Sticky, role="alert", throttled (~15 s), auto-removed on any successful CRM-path response.
-  - Testable locally by blocking or throttling `/api/proxy/api/2.0/crm/*` requests in DevTools Network panel.
+### Server endpoints (7 new)
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| GET | `/api/bot-customers` | Admin session | List mappings + pending codes |
+| POST | `/api/bot-customers/generate-code` | Admin session | Create invite code |
+| POST | `/api/bot-customers/cancel-code` | Admin session | Revoke pending code |
+| DELETE | `/api/bot-customers/mapping` | Admin session | Unlink customer mapping |
+| POST | `/api/bot-customers/verify-code` | Bot Bearer token | Consume invite code |
+| GET | `/api/bot/me` | Bot Bearer token | Check chat has mapping |
+| GET | `/api/bot/deals` | Bot Bearer token | Fetch open deals + history |
+| GET | `/api/check-admin` | Any | Returns `{"isAdmin": bool}` |
 
----
-
-## New features
-
-### Tasks list modal (full view)
-- New discreet button (minimalistic light file-cabinet SVG icon, after emoji iterations) injected into the tasks panel header (flex row, to the left of the user selector). `id="tasks-list-btn"`.
-- Opens `#tasks-list-modal`:
-  - Fetches both open tasks (`/api/2.0/crm/task/filter?isClosed=false`) and completed (`isClosed=true`), merges, and renders.
-  - "Show completed" toggle re-renders the visible set (open always shown; completed optional).
-  - Per-row checkbox: checking closes the task (POST /close, optimistic removal or move to done list, re-render). Unchecking a done row reopens it.
-  - Title is a deep link (reuses `crmTaskUrl`).
-  - Shows due date + responsible person.
-  - Footer "New Task" button opens the existing create-task modal.
-- Reuses existing task row/checkbox patterns, `api()` wrapper, profile save scheduling, and optimistic UI style from the compact tasks tile.
-
-### Group templates — delete-only management
-- The previous "Manage templates" flow (edit names + delete via prompts) has been replaced with a focused delete-only popup.
-- Button on group toolbar now opens `#template-delete-modal`.
-- The modal lists every saved template across all groups.
-- Each entry has an × control; clicking it confirms, removes the template from the matching group's `templates` array, calls `saveUserProfileToServer`, then refreshes every group template `<select>` and the list inside the modal.
-- No rename or edit paths remain (per explicit request: "We dont need to edit them").
-
-### Icon for tasks list
-- Final icon chosen after feedback: a simple, light, minimalistic file-cabinet (two horizontal lines) drawn with SVG `stroke="currentColor"` so it inherits theme color. Replaces earlier emoji trials.
+### Other
+- **Bookmarked deals limit** increased from 15 to 20.
+- **`.env`** and **`config.example.env`** updated with `TELEGRAM_BOT_TOKEN`, `BOT_CRM_EMAIL`, `BOT_CRM_PASSWORD`.
 
 ---
 
-## Changed / removed
-- Template UI: "edit" capability removed; only deletion via the dedicated list + × modal remains.
-- Keyword filter semantics: OR → AND (all provided keywords must match).
-- Several tile CSS rules and JS layout application order were adjusted so that collapse, minimize, and width choices compose correctly for all tile types.
-- FUTURE_FEATURES.md: the parked FEAT-009 crash-notification entry was removed (feature already shipped and documented here + in conversation for test steps).
+## Changed
+- **Bot button** repositioned from `right: 10.5rem` to `right: 9.5rem`, matching event-log button spacing.
+- **Presence admin gating** updated from hardcoded `kenc@vanguardadj.com` email check to `state.currentUserIsAdmin`.
+- **Bot CRM authentication** uses a dedicated dashboard CRM session (`bot@vanguardadj.com`), not the admin's session. Token cached 50 minutes.
 
 ---
 
 ## Upgrade (production)
-Does **not** require DNS, nginx, or certificate changes if v1.1.0 is already live. See [UPDATE_AND_DEPLOY.txt](./UPDATE_AND_DEPLOY.txt) (Part B — verify each step).
+
+Requires new environment variables. See `config.example.env`.
 
 ```bash
 cd /opt/vanguard/onlyoffice-crm-kanban
 git pull --ff-only origin main
-# or: git checkout v1.2.0
+# Edit .env to add: TELEGRAM_BOT_TOKEN, BOT_CRM_EMAIL, BOT_CRM_PASSWORD
 docker compose up -d --build
+# Start the bot separately (systemd or separate container):
+# cd /opt/vanguard/onlyoffice-crm-kanban
+# /tmp/botenv/bin/python3 telegram_bot.py &
 ```
 
-VERIFY steps (high level):
+VERIFY steps:
 - `cat VERSION` → 1.2.0
-- `git status` clean
-- Browser hard-refresh (Ctrl+Shift+R) at https://dashboard.vanguardadj.com after deploy (static JS/CSS are aggressively cached).
-- Test: collapse notes/calendar/groups (half width while collapsed), comma keywords (AND), open the tasks list via cabinet icon, toggle completed, check/uncheck tasks, delete a template via the new modal, trigger a 5xx on a /crm/ call to see the banner.
+- Login to dashboard → see robot button in header (admin only) → open Bot Customers modal.
+- Generate a code → send to `@vanguardupdates_bot` on Telegram → confirm linking → see projects.
+- Test bookmark limit (now 20).
+- Hard-refresh browser after deploy for static assets.
 
 Full changelog: [CHANGELOG.md](../CHANGELOG.md)
 
@@ -102,10 +95,10 @@ git checkout v1.1.0
 docker compose up -d --build
 ```
 
-User dashboard data in the Docker volume is **not** removed by rollback.
+Bot will stop (no separate process for it in v1.1.0). Customer mappings in `crm_bot_store.py` are in a Docker volume and preserved.
 
 ---
 
 ## GitHub Release publishing
 
-Use the body from this file (or the corresponding section in CHANGELOG.md). See [docs/GITHUB_RELEASES.md](./GITHUB_RELEASES.md) for the one-time publish steps or `gh release create` example.
+Use the body from this file. See [docs/GITHUB_RELEASES.md](./GITHUB_RELEASES.md) for the one-time publish steps or `gh release create` example.

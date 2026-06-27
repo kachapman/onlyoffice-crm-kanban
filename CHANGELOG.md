@@ -4,6 +4,27 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-06-26
+
+### Added
+- **Telegram customer bot (`@vanguardupdates_bot`).** New async Python bot (`telegram_bot.py`) using `python-telegram-bot` v22.8. Customers send their invite code to get linked; then they can view open projects and reply with a number for full details.
+- **Invite-code-based customer linking.** Admin generates an 8-char code in the dashboard modal, tells the customer, customer types it to the bot. Codes expire after 48 hours. Persisted via `crm_bot_store.py`.
+- **Bot Customers admin modal.** Robot SVG trigger button in the header (right: 9.5rem, next to event-log). Searchable contact picker (CRM contact search), note category dropdown for history curation, code generation with Copy + expiry countdown + Cancel, existing mappings list with Linked/Pending badges and × unlink.
+- **7 new server endpoints** for bot customer management, code verification, deal queries, and admin check. Bot CRM session managed via dedicated `bot@vanguardadj.com` account (token cached 50 min).
+- **Admin detection from CRM `isAdmin` field.** `/api/2.0/people/@self` response checked; falls back to `kenc@vanguardadj.com` email match. Presence admin gating uses `state.currentUserIsAdmin`.
+- **Bookmarked deals limit** increased from 15 to 20.
+
+### Changed
+- **Customer-facing bot text** uses "projects" instead of "deals".
+- **Bot button** moved from `right: 10.5rem` to `right: 9.5rem` for consistent header spacing.
+- `.env` and `config.example.env` updated with `TELEGRAM_BOT_TOKEN`, `BOT_CRM_EMAIL`, `BOT_CRM_PASSWORD`.
+
+### Files changed
+- `telegram_bot.py` (new), `crm_bot_store.py` (new)
+- `server.py`, `public/index.html`, `public/app.js`, `public/styles.css`
+- `VERSION`, `CHANGELOG.md`, `AGENTS.md`, `README.md`, `config.example.env`
+- `docs/RELEASE_v1.2.md`, `docs/GITHUB_RELEASES.md`
+
 ## [1.91.3] — 2026-06-26
 
 ### Added

@@ -6,7 +6,7 @@ Tags are pushed to [onlyoffice-crm-kanban](https://github.com/kachapman/onlyoffi
 |-----|------------|
 | `v1.0.0` | [RELEASE_v1.0.md](./RELEASE_v1.0.md) |
 | `v1.1.0` | [RELEASE_v1.1.md](./RELEASE_v1.1.md) — fixes, features, upgrade, rollback |
-| `v1.2.0` | [RELEASE_v1.2.md](./RELEASE_v1.2.md) — collapse/minimize, tasks list modal, template delete, AND keywords, crash banner, AGENTS.md, polish |
+| `v1.2.0` | [RELEASE_v1.2.md](./RELEASE_v1.2.md) — Telegram customer bot (invite-code linking, deal/project queries, admin modal), admin detection from CRM, bookmarks increase |
 | `v1.4.5` | [RELEASE_v1.4.5.md](./RELEASE_v1.4.5.md) — Side-by-side preview note editor (left/top + delete + manual refresh btn), presence AFD (tab-away vs offline), today feed white left lines, crash banner (amber right, persistent, 30s/admin text) + full tile render (CRM sections empty), quick note side auto-refresh. All prior presence/kanban/rich notes foundations. |
 | `v1.6.0` | [RELEASE_v1.6.md](./RELEASE_v1.6.md) — Post-1.4.5 bug fixes (DM cross-device unread, no hangs after notes/pushes, persistence, mobile quick-edit) + quick note prefill from notes tile (rich HTML). |
 | `v1.6.1` | [RELEASE_v1.6.1.md](./RELEASE_v1.6.1.md) — FEAT-003 attachments on event notes (native UploadProgress.ashx + fileId[] form-urlencoded history, 25MB, text priority, plain selected list, right-side 10s queue list with ✓/✕); mobile stack no-overlap; deferred preview refresh to fix hangs; version next to Sign out; server proxy form-urlencoded/multipart fix; rolled back show-empty-stages for tags (fixed broken tiles). |

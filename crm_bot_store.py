@@ -1,0 +1,256 @@
+"""Telegram bot customer mappings and pending invite codes."""
+
+from __future__ import annotations
+
+import json
+import re
+import secrets
+import string
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parent
+DATA_DIR = ROOT / "data" / "bot-customers"
+CODE_EXPIRE_HOURS = 48
+CODE_LENGTH = 8
+
+
+def _safe_segment(value: str, fallback: str = "unknown") -> str:
+    seg = re.sub(r"[^\w.-]+", "_", str(value or "").strip())[:120]
+    return seg or fallback
+
+
+def _portal_dir(portal: str) -> Path:
+    return DATA_DIR / _safe_segment(portal, "portal")
+
+
+def _load_file(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {"mappings": [], "pendingCodes": []}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {"mappings": [], "pendingCodes": []}
+        return data
+    except (json.JSONDecodeError, OSError):
+        return {"mappings": [], "pendingCodes": []}
+
+
+def _save_file(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _store_path(portal: str) -> Path:
+    return _portal_dir(portal) / "store.json"
+
+
+# ── Mappings ──
+
+def list_mappings(portal: str) -> list[dict[str, Any]]:
+    store = _load_file(_store_path(portal))
+    return store.get("mappings", [])
+
+
+def add_mapping(portal: str, chat_id: int, contact_id: int, contact_name: str,
+                notes_category_id: int | None) -> dict[str, Any]:
+    path = _store_path(portal)
+    store = _load_file(path)
+    mappings = store.get("mappings", [])
+
+    existing_idx = None
+    for i, m in enumerate(mappings):
+        if m.get("chatId") == chat_id:
+            existing_idx = i
+            break
+
+    now = datetime.now(timezone.utc).isoformat()
+    entry = {
+        "chatId": chat_id,
+        "contactId": contact_id,
+        "contactName": contact_name,
+        "notesCategoryId": notes_category_id,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+
+    if existing_idx is not None:
+        entry["createdAt"] = mappings[existing_idx].get("createdAt", now)
+        mappings[existing_idx] = entry
+    else:
+        mappings.append(entry)
+
+    store["mappings"] = mappings
+    _save_file(path, store)
+    return entry
+
+
+def remove_mapping(portal: str, contact_id: int) -> bool:
+    path = _store_path(portal)
+    store = _load_file(path)
+    mappings = store.get("mappings", [])
+    new_mappings = [m for m in mappings if m.get("contactId") != contact_id]
+    if len(new_mappings) == len(mappings):
+        return False
+    store["mappings"] = new_mappings
+    _save_file(path, store)
+    return True
+
+
+def remove_mapping_by_chat(portal: str, chat_id: int) -> bool:
+    path = _store_path(portal)
+    store = _load_file(path)
+    mappings = store.get("mappings", [])
+    new_mappings = [m for m in mappings if m.get("chatId") != chat_id]
+    if len(new_mappings) == len(mappings):
+        return False
+    store["mappings"] = new_mappings
+    _save_file(path, store)
+    return True
+
+
+def get_mapping_by_contact(portal: str, contact_id: int) -> dict[str, Any] | None:
+    for m in list_mappings(portal):
+        if m.get("contactId") == contact_id:
+            return m
+    return None
+
+
+def get_mapping_by_chat(portal: str, chat_id: int) -> dict[str, Any] | None:
+    for m in list_mappings(portal):
+        if m.get("chatId") == chat_id:
+            return m
+    return None
+
+
+# ── Pending invite codes ──
+
+def _generate_code() -> str:
+    alphabet = string.ascii_uppercase + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(CODE_LENGTH))
+
+
+def get_pending_codes(portal: str) -> list[dict[str, Any]]:
+    store = _load_file(_store_path(portal))
+    now = datetime.now(timezone.utc)
+    codes = store.get("pendingCodes", [])
+    # Auto-expire stale codes
+    active = []
+    for c in codes:
+        expires = _parse_iso(c.get("expiresAt") or "")
+        if expires and expires > now:
+            active.append(c)
+    store["pendingCodes"] = active
+    _save_file(_store_path(portal), store)
+    return active
+
+
+def generate_code(portal: str, contact_id: int, contact_name: str,
+                  notes_category_id: int | None) -> dict[str, Any]:
+    path = _store_path(portal)
+    store = _load_file(path)
+    codes = store.get("pendingCodes", [])
+    # Remove any existing pending code for this contact
+    codes = [c for c in codes if c.get("contactId") != contact_id]
+    code = _generate_code()
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(hours=CODE_EXPIRE_HOURS)
+    entry = {
+        "code": code,
+        "contactId": contact_id,
+        "contactName": contact_name,
+        "notesCategoryId": notes_category_id,
+        "portal": portal,
+        "createdAt": now.isoformat(),
+        "expiresAt": expires.isoformat(),
+    }
+    codes.append(entry)
+    store["pendingCodes"] = codes
+    _save_file(path, store)
+    return {
+        "code": code,
+        "contactId": contact_id,
+        "contactName": contact_name,
+        "notesCategoryId": notes_category_id,
+        "expiresAt": entry["expiresAt"],
+    }
+
+
+def cancel_code(portal: str, contact_id: int) -> bool:
+    path = _store_path(portal)
+    store = _load_file(path)
+    codes = store.get("pendingCodes", [])
+    new_codes = [c for c in codes if c.get("contactId") != contact_id]
+    if len(new_codes) == len(codes):
+        return False
+    store["pendingCodes"] = new_codes
+    _save_file(path, store)
+    return True
+
+
+def verify_code(portal: str, code: str) -> dict[str, Any] | None:
+    """Find and consume a pending code. Returns the mapping data on success."""
+    store = _load_file(_store_path(portal))
+    codes = store.get("pendingCodes", [])
+    now = datetime.now(timezone.utc)
+    for i, c in enumerate(codes):
+        expires = _parse_iso(c.get("expiresAt") or "")
+        if c.get("code", "").upper() == code.upper().strip() and expires and expires > now:
+            entry = codes.pop(i)
+            store["pendingCodes"] = codes
+            # Auto-create mapping
+            contact_id = c["contactId"]
+            mappings = store.get("mappings", [])
+            existing = None
+            for j, m in enumerate(mappings):
+                if m.get("contactId") == contact_id:
+                    existing = j
+                    break
+            now_iso = now.isoformat()
+            mapping = {
+                "chatId": 0,
+                "contactId": contact_id,
+                "contactName": c.get("contactName", ""),
+                "notesCategoryId": c.get("notesCategoryId"),
+                "createdAt": now_iso,
+                "updatedAt": now_iso,
+            }
+            if existing is not None:
+                mapping["createdAt"] = mappings[existing].get("createdAt", now_iso)
+                mappings[existing] = mapping
+            else:
+                mappings.append(mapping)
+            store["mappings"] = mappings
+            _save_file(_store_path(portal), store)
+            return mapping
+    return None
+
+
+def set_verify_chat_id(portal: str, contact_id: int, chat_id: int) -> bool:
+    """Set chatId after initial verify (code flow created mapping with chatId=0)."""
+    path = _store_path(portal)
+    store = _load_file(path)
+    mappings = store.get("mappings", [])
+    for m in mappings:
+        if m.get("contactId") == contact_id:
+            m["chatId"] = chat_id
+            m["updatedAt"] = datetime.now(timezone.utc).isoformat()
+            _save_file(path, store)
+            return True
+    return False
+
+
+def _parse_iso(value: str) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except ValueError:
+        return None

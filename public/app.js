@@ -12,7 +12,7 @@ const HIDDEN_FEED_STORAGE_KEY = "oo_board_hidden_feed_v1";
 const FEED_KEYWORD_STORAGE_KEY = "oo_board_feed_keyword_v1";
 const GROUP_TEMPLATES_STORAGE_KEY = "oo_board_group_templates_v1";
 const BOOKMARKED_STORAGE_KEY = "oo_board_bookmarked_v1";
-const MAX_BOOKMARKED_DEALS = 15;
+const MAX_BOOKMARKED_DEALS = 20;
 const FEED_DAYS = 30;
 const FEED_CACHE_TTL_MS = 5 * 60 * 1000;
 const FEED_MAX_EVENTS = 150;
@@ -349,6 +349,7 @@ const state = {
   currentUserId: null,
   currentUserName: "",
   currentUserEmail: "",
+  currentUserIsAdmin: false,
   portalUsers: [],
   tasks: [],
   tileLayout: { order: [], widths: {}, heights: {} },
@@ -7101,6 +7102,7 @@ async function loadCurrentUser() {
     state.currentUserEmail = String(me?.email || me?.Email || me?.primaryEmail || me?.PrimaryEmail || "")
       .trim()
       .toLowerCase();
+    state.currentUserIsAdmin = me?.isAdmin === true;
     return me;
   } catch {
     state.currentUser = null;
@@ -12535,13 +12537,12 @@ function renderPresenceModal(snapshot = null, usersCache = null) {
     });
   }
 
-  // Admin area (kenc only): hidden by default, toggleable via button that says "Admin" when hidden.
-  // Strictly gated to kenc@vanguardadj.com email (both client and server-side in snapshot).
+  // Admin area: hidden by default, toggleable via button that says "Admin" when hidden.
+  // Gated to CRM admins (both client and server-side in snapshot).
   if (adminEl && adminToggle) {
-    const isKenc = (state.currentUserEmail || "").toLowerCase() === "kenc@vanguardadj.com";
     const hasAdminData = snap && snap.users && snap.users.some(u => u.admin);
     const onTeamTab = activeTab === 'team';
-    if (isKenc && hasAdminData && onTeamTab) {
+    if (state.currentUserIsAdmin && hasAdminData && onTeamTab) {
       adminToggle.classList.remove("hidden");
       const isVisible = !adminEl.classList.contains("hidden");
       adminToggle.textContent = isVisible ? "Hide Admin" : "Admin";
@@ -13155,10 +13156,9 @@ function updatePresenceTileBadge() {
 function updatePresenceTileAdminButton() {
   const btn = $("#presence-tile-admin-btn");
   if (!btn) return;
-  const isKenc = (state.currentUserEmail || "").toLowerCase() === "kenc@vanguardadj.com";
   const snap = state.presenceData || {};
   const hasAdminData = Array.isArray(snap.users) && snap.users.some(u => u.admin);
-  btn.classList.toggle("hidden", !(isKenc && hasAdminData));
+  btn.classList.toggle("hidden", !(state.currentUserIsAdmin && hasAdminData));
 }
 
 function syncTileStatusSelect(snap) {
@@ -17461,6 +17461,328 @@ function bindEventLogModal() {
   });
 }
 
+// ── Bot Customers Modal ──
+
+function updateBotCustomersBtn() {
+  const btn = $("#bot-customers-btn");
+  if (!btn) return;
+  btn.classList.toggle("hidden", !state.currentUserIsAdmin);
+}
+
+let _botCustomersDraft = null;
+let _botCustomersMappings = [];
+
+async function openBotCustomersModal() {
+  const modal = $("#bot-customers-modal");
+  if (!modal) return;
+
+  _botCustomersDraft = { contactId: null, contactLabel: "", notesCategoryId: null };
+
+  if (state.historyCategories && state.historyCategories.length) {
+    populateBotCustomersCategorySelect();
+  } else {
+    await loadHistoryCategories();
+    populateBotCustomersCategorySelect();
+  }
+
+  await loadBotCustomersFromServer();
+  renderBotCustomerMappings();
+  updateBotGeneratedCodeBox();
+
+  const search = $("#bot-customers-contact-search");
+  if (search) search.value = "";
+  updateBotCustomersContactSelectedUi();
+
+  modal.classList.remove("hidden");
+}
+
+function closeBotCustomersModal() {
+  $("#bot-customers-modal")?.classList.add("hidden");
+}
+
+function populateBotCustomersCategorySelect() {
+  const select = $("#bot-customers-note-category");
+  if (!select) return;
+  select.innerHTML = '<option value="">— None (all notes) —</option>';
+  const cats = state.historyCategories || [];
+  for (const cat of cats) {
+    const id = cat.id ?? cat.ID;
+    const title = cat.title || cat.Title || String(id);
+    const opt = document.createElement("option");
+    opt.value = String(id);
+    opt.textContent = title;
+    select.appendChild(opt);
+  }
+  const preferred = cats.findIndex((c) => /customer.?update/i.test(String(c.title || c.Title || "")));
+  if (preferred >= 0) select.selectedIndex = preferred + 1;
+}
+
+async function loadBotCustomersFromServer() {
+  try {
+    const res = await fetch("/api/bot-customers", { credentials: "same-origin" });
+    if (!res.ok) {
+      _botCustomersMappings = [];
+      return;
+    }
+    const data = await res.json();
+    _botCustomersMappings = data.mappings || [];
+    const codes = data.pendingCodes || [];
+    if (codes.length) {
+      const code = codes[0];
+      _botCustomersDraft.pendingCode = code.code;
+      _botCustomersDraft.pendingExpires = code.expiresAt;
+      _botCustomersDraft.pendingContactId = code.contactId;
+      _botCustomersDraft.pendingContactName = code.contactName;
+    }
+  } catch {
+    _botCustomersMappings = [];
+  }
+}
+
+function renderBotCustomerMappings() {
+  const list = $("#bot-mappings-list");
+  if (!list) return;
+  if (!_botCustomersMappings.length) {
+    list.innerHTML = '<p class="bot-empty">No customers mapped yet.</p>';
+    return;
+  }
+
+  const cats = state.historyCategories || [];
+  const catLabel = (id) => {
+    if (id == null) return "";
+    const found = cats.find((c) => Number(c.id ?? c.ID) === Number(id));
+    return found ? (found.title || found.Title || "") : "";
+  };
+
+  list.innerHTML = _botCustomersMappings.map((m) => {
+    const cat = catLabel(m.notesCategoryId);
+    const catHtml = cat ? `<span class="bot-mapping-category">${escapeHtml(cat)}</span>` : "";
+    const hasChat = m.chatId && m.chatId > 0;
+    const statusHtml = hasChat
+      ? '<span class="bot-mapping-status linked">Linked</span>'
+      : '<span class="bot-mapping-status pending">Pending</span>';
+    return `<div class="bot-mapping-row">
+      <span class="bot-mapping-name">${escapeHtml(m.contactName || `Contact #${m.contactId}`)}</span>
+      ${catHtml}
+      ${statusHtml}
+      <button type="button" class="btn btn-ghost btn-sm bot-unlink-btn" data-contact-id="${escapeHtml(String(m.contactId))}" title="Remove mapping">&times;</button>
+    </div>`;
+  }).join("");
+
+  list.querySelectorAll(".bot-unlink-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const cid = Number(btn.dataset.contactId);
+      if (!confirm("Remove this customer mapping?")) return;
+      handleRemoveBotCustomer(cid);
+    });
+  });
+}
+
+function updateBotCustomersContactSelectedUi() {
+  const draft = _botCustomersDraft;
+  const selected = $("#bot-customers-contact-selected");
+  const search = $("#bot-customers-contact-search");
+  if (!draft || !selected) return;
+  if (draft.contactId) {
+    selected.innerHTML = `${escapeHtml(draft.contactLabel || `Contact #${draft.contactId}`)} <span class="contact-clear" role="button" tabindex="0">clear</span>`;
+    $(".contact-clear", selected)?.addEventListener("click", () => {
+      draft.contactId = null;
+      draft.contactLabel = "";
+      if (search) search.value = "";
+      updateBotCustomersContactSelectedUi();
+    });
+  } else {
+    selected.textContent = "";
+  }
+}
+
+function bindBotCustomersContactPicker() {
+  const input = $("#bot-customers-contact-search");
+  const results = $("#bot-customers-contact-results");
+  if (!input || !results || input.dataset.bound) return;
+  input.dataset.bound = "1";
+  let debounce;
+
+  input.addEventListener("input", () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(async () => {
+      const q = input.value.trim();
+      results.innerHTML = "";
+      if (q.length < 2) {
+        results.classList.add("hidden");
+        return;
+      }
+      try {
+        const contacts = await searchContacts(q);
+        results.classList.remove("hidden");
+        if (!contacts.length) {
+          results.innerHTML = '<button type="button" disabled>No matches</button>';
+          return;
+        }
+        for (const c of contacts) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = c.displayName || c.title || `Contact #${c.id}`;
+          btn.addEventListener("click", () => {
+            _botCustomersDraft.contactId = Number(c.id ?? c.ID);
+            _botCustomersDraft.contactLabel = btn.textContent;
+            input.value = "";
+            results.classList.add("hidden");
+            updateBotCustomersContactSelectedUi();
+          });
+          results.appendChild(btn);
+        }
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    }, 350);
+  });
+
+  document.addEventListener("click", (e) => {
+    const wrap = $("#bot-customers-contact-field");
+    if (wrap && !wrap.contains(e.target)) results.classList.add("hidden");
+  });
+}
+
+function updateBotGeneratedCodeBox() {
+  const box = $("#bot-generated-code");
+  const val = $("#bot-code-value");
+  const expires = $("#bot-code-expires");
+  if (!box || !val || !expires) return;
+  const d = _botCustomersDraft;
+  if (d && d.pendingCode) {
+    box.classList.remove("hidden");
+    val.textContent = d.pendingCode;
+    if (d.pendingExpires) {
+      const expDate = new Date(d.pendingExpires);
+      const diff = expDate - Date.now();
+      if (diff > 0) {
+        expires.textContent = `Expires in ${Math.round(diff / 3600000)}h`;
+      } else {
+        expires.textContent = "Expired";
+      }
+    } else {
+      expires.textContent = "";
+    }
+  } else {
+    box.classList.add("hidden");
+    val.textContent = "";
+    expires.textContent = "";
+  }
+}
+
+async function handleGenerateCode() {
+  const draft = _botCustomersDraft;
+  if (!draft || !draft.contactId) {
+    showToast("Please select a contact first.", true);
+    return;
+  }
+  const select = $("#bot-customers-note-category");
+  const catId = select && select.value ? Number(select.value) : null;
+
+  try {
+    const res = await fetch("/api/bot-customers/generate-code", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contactId: draft.contactId,
+        contactName: draft.contactLabel,
+        notesCategoryId: catId,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showToast(data.error || "Failed to generate code", true);
+      return;
+    }
+    draft.pendingCode = data.code;
+    draft.pendingExpires = data.expiresAt;
+    draft.pendingContactId = data.contactId;
+    draft.pendingContactName = data.contactName;
+    updateBotGeneratedCodeBox();
+    showToast("Invite code generated!");
+    await loadBotCustomersFromServer();
+    renderBotCustomerMappings();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function handleCancelCode() {
+  const draft = _botCustomersDraft;
+  if (!draft || !draft.pendingContactId) return;
+  try {
+    const res = await fetch("/api/bot-customers/cancel-code", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contactId: draft.pendingContactId }),
+    });
+    if (!res.ok) {
+      const data = await res.json();
+      showToast(data.error || "Failed to cancel code", true);
+      return;
+    }
+    draft.pendingCode = null;
+    draft.pendingExpires = null;
+    draft.pendingContactId = null;
+    updateBotGeneratedCodeBox();
+    showToast("Code cancelled");
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function handleRemoveBotCustomer(contactId) {
+  try {
+    const res = await fetch(`/api/bot-customers/mapping?contactId=${contactId}`, {
+      method: "DELETE",
+      credentials: "same-origin",
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showToast(data.error || "Failed to remove mapping", true);
+      return;
+    }
+    _botCustomersMappings = _botCustomersMappings.filter((m) => m.contactId !== contactId);
+    renderBotCustomerMappings();
+    showToast("Mapping removed");
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+function bindBotCustomersModal() {
+  const modal = $("#bot-customers-modal");
+  if (!modal || modal.dataset.bound) return;
+  modal.dataset.bound = "1";
+
+  $("#bot-customers-btn")?.addEventListener("click", () => {
+    openBotCustomersModal();
+  });
+
+  $("#bot-customers-close")?.addEventListener("click", closeBotCustomersModal);
+  modal.querySelector("[data-bot-customers-dismiss]")?.addEventListener("click", closeBotCustomersModal);
+  modal.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeBotCustomersModal();
+  });
+
+  $("#bot-generate-code-btn")?.addEventListener("click", handleGenerateCode);
+  $("#bot-code-cancel-btn")?.addEventListener("click", handleCancelCode);
+  $("#bot-code-copy-btn")?.addEventListener("click", () => {
+    const val = $("#bot-code-value");
+    if (!val || !val.textContent) return;
+    navigator.clipboard.writeText(val.textContent).then(() => {
+      showToast("Copied!");
+    }).catch(() => {
+      showToast("Failed to copy", true);
+    });
+  });
+
+  bindBotCustomersContactPicker();
+}
+
 /* ================================================================================
    Render opportunity preview content into any container (reused by modal + tabs)
    ================================================================================ */
@@ -18647,6 +18969,15 @@ async function refreshAll() {
     const settled = await Promise.allSettled([
       loadCurrentUser(),
       loadPortalUsers(),
+      (async () => {
+        try {
+          const res = await fetch("/api/check-admin", { credentials: "same-origin" });
+          if (res.ok) {
+            const d = await res.json();
+            state.currentUserIsAdmin = d.isAdmin === true;
+          }
+        } catch {}
+      })(),
       loadUserProfileFromServer(),
       loadStages(),
       loadAllTags(),
@@ -18663,6 +18994,7 @@ async function refreshAll() {
         }
       }
     }
+    updateBotCustomersBtn();
     syncFeedFilterPlaceholder();
     // Re-render bookmark sidebar + button states now that profile (including bookmarkedDeals) is loaded
     renderBookmarkTabs();
@@ -18852,6 +19184,7 @@ async function init() {
   bindFeedHiddenModal();
   bindNotesArchiveRestoreModal();
   bindEventLogModal();
+  bindBotCustomersModal();
   initBookmarkSidebar();
 
   $("#new-opportunity-btn")?.addEventListener("click", () => {
