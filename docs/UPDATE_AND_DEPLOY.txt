@@ -23,7 +23,8 @@ PART A — ON YOUR DESKTOP (development machine)
 
    Main files:
    - public/app.js, public/styles.css, public/index.html  (UI)
-   - server.py, user_profile_store.py, notes_store.py, ics_calendar.py  (backend)
+   - server.py, user_profile_store.py, notes_store.py, ics_calendar.py, crm_bot_store.py  (backend)
+   - telegram_bot.py  (Telegram bot process — deploy separately)
    - docker-compose.yml, Dockerfile, deploy/*  (production)
 
 3. Test locally (optional but recommended)
@@ -131,6 +132,40 @@ PART B — ON THE SERVER (DigitalOcean droplet)
 
    VERIFY: data and tiles unchanged; v1.1 UI (feed loading, notes archive menu).
 
+14. (If deploying the Telegram bot) Set up the Python venv & systemd service
+
+   Only needed on first deploy of the bot, or when server.py changes that
+   affect the bot's API endpoints.
+
+   a) Create the virtualenv (one time):
+
+      python3 -m venv /tmp/botenv
+      /tmp/botenv/bin/pip install python-telegram-bot==22.8 httpx
+
+   b) Update .env with bot credentials (one time, secrets stay on droplet):
+
+      Edit /opt/vanguard/onlyoffice-crm-kanban/.env and ensure these lines:
+
+      TELEGRAM_BOT_TOKEN=your_token
+      BOT_CRM_EMAIL=bot@vanguardadj.com
+      BOT_CRM_PASSWORD=your_password
+
+   c) Copy & enable the systemd service (one time):
+
+      cp docs/crm-telegram-bot.service /etc/systemd/system/
+      systemctl daemon-reload
+      systemctl enable --now crm-telegram-bot
+
+   VERIFY: systemctl status crm-telegram-bot → "active (running)"
+          journalctl -u crm-telegram-bot -n 5 --no-pager | grep "200 OK"
+          Message @vanguardupdates_bot on Telegram → expect a response.
+
+15. (After code changes that touch the bot) Restart the systemd service
+
+   systemctl restart crm-telegram-bot
+
+   VERIFY: journalctl -u crm-telegram-bot -n 5 --no-pager → no "409 Conflict"
+
 
 --------------------------------------------------------------------------------
 NGINX / TLS (only when you change hostnames or certs)
@@ -173,6 +208,9 @@ TROUBLESHOOTING
 | Login OK locally, not production| HTTPS required (COOKIE_SECURE=true)                |
 | Settings not saved              | docker volume dashboard-data; logs dashboard       |
 | Old code after pull             | docker compose build --no-cache && up -d           |
+| Bot 409 Conflict                | Only one bot instance per token allowed. Kill competing processes (`pkill -f telegram_bot`), then `systemctl restart crm-telegram-bot` |
+| Bot fails to start              | Check .env has TELEGRAM_BOT_TOKEN, BOT_CRM_EMAIL, BOT_CRM_PASSWORD. Run manually first: `/tmp/botenv/bin/python3 telegram_bot.py` |
+| Dockerfile missing .py          | If server.py imports a new module, add it to the Dockerfile COPY line. Missing modules cause container crash → nginx 502. |
 
 
 --------------------------------------------------------------------------------
@@ -255,7 +293,11 @@ QUICK REFERENCE (copy/paste)
 Desktop:
   cd ~/crm-kanban && git add -A && git commit -m "Describe change" && git push
 
-Server:
+Server (dashboard):
   cd /opt/vanguard/onlyoffice-crm-kanban && git pull && docker compose up -d --build
+
+Server (Telegram bot, after dashboard deploy):
+  systemctl restart crm-telegram-bot
+  journalctl -u crm-telegram-bot -n 5 --no-pager | grep "200 OK"
 
 ================================================================================

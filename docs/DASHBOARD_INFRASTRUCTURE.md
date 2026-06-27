@@ -21,7 +21,7 @@ ports 80/443 on host
    │
    ▼
 ┌─────────────────────────────────────┐
-│  estimate-nginx (nginx:alpine)      │
+│  estimate-nginx (nginx:alpine)     │
 │  /opt/estimate-enhancer/nginx.conf  │
 │  ports: 80:80, 443:443              │
 └─────────────────────────────────────┘
@@ -29,6 +29,10 @@ ports 80/443 on host
    ├──► app:8000                  estimate-enhancer  → enhancer.sherwoodestimates.com
    ├──► iws-calculator:80         IWS Calculator     → iwscalc.sherwoodestimates.com
    └──► dashboard:8765            CRM Kanban Dashboard → dashboard.publicadjustermidwest.com
+   │
+   └──► systemd: crm-telegram-bot   Telegram bot (@vanguardupdates_bot)
+                                    polls Telegram API, calls dashboard at
+                                    http://127.0.0.1:8765 (host loopback → container)
 ```
 
 ### Critical facts
@@ -97,6 +101,51 @@ networks:
 Because the dashboard's Compose file declares `estimate-network` as an **external** network, it joins the same network namespace as the estimate-enhancer services. This is why nginx can proxy to `http://dashboard:8765` even though the projects are in different directories.
 
 **Do NOT change the network name** in either file without updating the other.
+
+---
+
+## Telegram Bot (crm-telegram-bot)
+
+The Telegram customer bot (`@vanguardupdates_bot`) runs as a **systemd service** on the host, **not** inside Docker. This keeps polling independent of the dashboard container lifecycle.
+
+| Property | Value |
+|----------|-------|
+| Service name | `crm-telegram-bot` |
+| Unit file | `/etc/systemd/system/crm-telegram-bot.service` (from `docs/crm-telegram-bot.service` in repo) |
+| Working dir | `/opt/vanguard/onlyoffice-crm-kanban` |
+| Executable | `/tmp/botenv/bin/python3 telegram_bot.py` |
+| Python venv | `/tmp/botenv` (created via `python3 -m venv /tmp/botenv`) |
+| Dependencies | `python-telegram-bot==22.8`, `httpx` |
+| Env vars | Loaded from `.env` in working dir: `TELEGRAM_BOT_TOKEN`, `BOT_CRM_EMAIL`, `BOT_CRM_PASSWORD`, `ONLYOFFICE_PORTAL_URL` |
+| Dashboard URL | `http://127.0.0.1:8765` (host loopback → `vanguard-crm-dashboard` container) |
+| Auth to dashboard | Bearer token = `TELEGRAM_BOT_TOKEN` (dashboard verifies on bot endpoints) |
+
+### Lifecycle
+
+- **Start/stop:** `systemctl start|stop crm-telegram-bot`
+- **Restart after dashboard deploy:** `systemctl restart crm-telegram-bot`
+- **Logs:** `journalctl -u crm-telegram-bot -f`
+- **Auto-restart:** Enabled (systemd `Restart=always`)
+- **Survives reboot:** Yes (systemd `enable`)
+
+### First-time setup
+
+```bash
+python3 -m venv /tmp/botenv
+/tmp/botenv/bin/pip install python-telegram-bot==22.8 httpx
+cp docs/crm-telegram-bot.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now crm-telegram-bot
+```
+
+### Conflict prevention
+
+Only one bot instance per `TELEGRAM_BOT_TOKEN` can poll Telegram at a time. If you see `409 Conflict` in the logs, kill stale instances and restart:
+
+```bash
+pkill -f telegram_bot 2>/dev/null
+systemctl restart crm-telegram-bot
+```
 
 ---
 
