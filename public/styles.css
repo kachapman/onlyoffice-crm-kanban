@@ -7115,6 +7115,32 @@ body {
   text-overflow: ellipsis;
 }
 
+.bot-mapping-nickname {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-style: italic;
+  flex-shrink: 0;
+  max-width: 8rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bot-mapping-nickname-empty {
+  color: var(--border);
+  font-style: normal;
+}
+
+.bot-nickname-input {
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+}
+
 .bot-mapping-category {
   font-size: 0.75rem;
   color: var(--muted);

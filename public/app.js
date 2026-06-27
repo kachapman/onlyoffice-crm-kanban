@@ -17539,6 +17539,29 @@ async function loadBotCustomersFromServer() {
   }
 }
 
+async function handleSetNickname(contactId, nickname) {
+  try {
+    const res = await fetch("/api/bot-customers/nickname", {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contactId, nickname }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showToast(data.error || "Failed to set nickname", true);
+      return false;
+    }
+    const m = _botCustomersMappings.find((m2) => m2.contactId === contactId);
+    if (m) m.nickname = nickname;
+    renderBotCustomerMappings();
+    return true;
+  } catch (err) {
+    showToast(err.message, true);
+    return false;
+  }
+}
+
 function renderBotCustomerMappings() {
   const list = $("#bot-mappings-list");
   if (!list) return;
@@ -17561,10 +17584,16 @@ function renderBotCustomerMappings() {
     const statusHtml = hasChat
       ? '<span class="bot-mapping-status linked">Linked</span>'
       : '<span class="bot-mapping-status pending">Pending</span>';
+    const nick = (m.nickname || "").trim();
+    const nickHtml = nick
+      ? `<span class="bot-mapping-nickname">${escapeHtml(nick)}</span>`
+      : `<span class="bot-mapping-nickname bot-mapping-nickname-empty">No nickname</span>`;
     return `<div class="bot-mapping-row">
       <span class="bot-mapping-name">${escapeHtml(m.contactName || `Contact #${m.contactId}`)}</span>
+      ${nickHtml}
       ${catHtml}
       ${statusHtml}
+      <button type="button" class="btn btn-ghost btn-sm bot-nickname-edit-btn" data-contact-id="${escapeHtml(String(m.contactId))}" data-nickname="${escapeHtml(nick)}" title="Edit nickname">&#9998;</button>
       <button type="button" class="btn btn-ghost btn-sm bot-unlink-btn" data-contact-id="${escapeHtml(String(m.contactId))}" title="Remove mapping">&times;</button>
     </div>`;
   }).join("");
@@ -17574,6 +17603,16 @@ function renderBotCustomerMappings() {
       const cid = Number(btn.dataset.contactId);
       if (!confirm("Remove this customer mapping?")) return;
       handleRemoveBotCustomer(cid);
+    });
+  });
+
+  list.querySelectorAll(".bot-nickname-edit-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const cid = Number(btn.dataset.contactId);
+      const current = btn.dataset.nickname || "";
+      const newNick = prompt("Enter a nickname for this customer:", current);
+      if (newNick === null) return;
+      handleSetNickname(cid, newNick.trim());
     });
   });
 }
@@ -17679,6 +17718,7 @@ async function handleGenerateCode() {
   }
   const select = $("#bot-customers-note-category");
   const catId = select && select.value ? Number(select.value) : null;
+  const nickname = ($("#bot-customers-nickname")?.value || "").trim();
 
   try {
     const res = await fetch("/api/bot-customers/generate-code", {
@@ -17689,6 +17729,7 @@ async function handleGenerateCode() {
         contactId: draft.contactId,
         contactName: draft.contactLabel,
         notesCategoryId: catId,
+        nickname,
       }),
     });
     const data = await res.json();

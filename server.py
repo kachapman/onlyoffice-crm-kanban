@@ -37,7 +37,7 @@ from event_log_store import append_event_log, load_event_log, list_users_with_lo
 from crm_bot_store import (add_mapping, cancel_code, generate_code,
                            get_mapping_by_chat, get_pending_codes, list_mappings,
                            remove_mapping, remove_mapping_by_chat,
-                           set_verify_chat_id, verify_code)
+                           set_nickname, set_verify_chat_id, verify_code)
 from presence_store import (
     append_dm,
     clear_conversation,
@@ -699,11 +699,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         contact_id = payload.get("contactId")
         contact_name = str(payload.get("contactName") or "").strip()
         notes_category_id = payload.get("notesCategoryId")
+        nickname = str(payload.get("nickname") or "").strip()
         if not contact_id:
             _json_response(self, 400, {"error": "contactId is required"})
             return
         result = generate_code(portal, int(contact_id), contact_name,
-                               int(notes_category_id) if notes_category_id else None)
+                               int(notes_category_id) if notes_category_id else None,
+                               nickname)
         _json_response(self, 200, result)
 
     def _handle_bot_customers_cancel_code(self) -> None:
@@ -740,6 +742,27 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": "contactId is required"})
             return
         ok = remove_mapping(portal, int(raw))
+        _json_response(self, 200, {"ok": ok})
+
+    def _handle_bot_customers_set_nickname(self) -> None:
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, token, _user_id = auth
+        if not self._is_admin(portal, token):
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        contact_id = payload.get("contactId")
+        nickname = str(payload.get("nickname") or "").strip()
+        if not contact_id:
+            _json_response(self, 400, {"error": "contactId is required"})
+            return
+        ok = set_nickname(portal, int(contact_id), nickname)
         _json_response(self, 200, {"ok": ok})
 
     def _handle_bot_customers_verify_code(self) -> None:
@@ -1603,6 +1626,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             if api_path == "/api/bot-customers/mapping" and method == "DELETE":
                 self._handle_bot_customers_unlink()
+                return
+            if api_path == "/api/bot-customers/nickname" and method == "PUT":
+                self._handle_bot_customers_set_nickname()
                 return
             self.send_error(404)
             return

@@ -54,7 +54,7 @@ def list_mappings(portal: str) -> list[dict[str, Any]]:
 
 
 def add_mapping(portal: str, chat_id: int, contact_id: int, contact_name: str,
-                notes_category_id: int | None) -> dict[str, Any]:
+                notes_category_id: int | None, nickname: str = "") -> dict[str, Any]:
     path = _store_path(portal)
     store = _load_file(path)
     mappings = store.get("mappings", [])
@@ -71,6 +71,7 @@ def add_mapping(portal: str, chat_id: int, contact_id: int, contact_name: str,
         "contactId": contact_id,
         "contactName": contact_name,
         "notesCategoryId": notes_category_id,
+        "nickname": nickname,
         "createdAt": now,
         "updatedAt": now,
     }
@@ -147,7 +148,7 @@ def get_pending_codes(portal: str) -> list[dict[str, Any]]:
 
 
 def generate_code(portal: str, contact_id: int, contact_name: str,
-                  notes_category_id: int | None) -> dict[str, Any]:
+                  notes_category_id: int | None, nickname: str = "") -> dict[str, Any]:
     path = _store_path(portal)
     store = _load_file(path)
     codes = store.get("pendingCodes", [])
@@ -161,6 +162,7 @@ def generate_code(portal: str, contact_id: int, contact_name: str,
         "contactId": contact_id,
         "contactName": contact_name,
         "notesCategoryId": notes_category_id,
+        "nickname": nickname,
         "portal": portal,
         "createdAt": now.isoformat(),
         "expiresAt": expires.isoformat(),
@@ -173,6 +175,7 @@ def generate_code(portal: str, contact_id: int, contact_name: str,
         "contactId": contact_id,
         "contactName": contact_name,
         "notesCategoryId": notes_category_id,
+        "nickname": nickname,
         "expiresAt": entry["expiresAt"],
     }
 
@@ -213,6 +216,7 @@ def verify_code(portal: str, code: str) -> dict[str, Any] | None:
                 "contactId": contact_id,
                 "contactName": c.get("contactName", ""),
                 "notesCategoryId": c.get("notesCategoryId"),
+                "nickname": c.get("nickname", ""),
                 "createdAt": now_iso,
                 "updatedAt": now_iso,
             }
@@ -235,6 +239,19 @@ def set_verify_chat_id(portal: str, contact_id: int, chat_id: int) -> bool:
     for m in mappings:
         if m.get("contactId") == contact_id:
             m["chatId"] = chat_id
+            m["updatedAt"] = datetime.now(timezone.utc).isoformat()
+            _save_file(path, store)
+            return True
+    return False
+
+
+def set_nickname(portal: str, contact_id: int, nickname: str) -> bool:
+    path = _store_path(portal)
+    store = _load_file(path)
+    mappings = store.get("mappings", [])
+    for m in mappings:
+        if m.get("contactId") == contact_id:
+            m["nickname"] = nickname
             m["updatedAt"] = datetime.now(timezone.utc).isoformat()
             _save_file(path, store)
             return True
