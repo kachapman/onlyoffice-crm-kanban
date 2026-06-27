@@ -1,0 +1,18 @@
+[Unit]
+Description=CRM Telegram Bot (@vanguardupdates_bot)
+Documentation=https://github.com/kachapman/onlyoffice-crm-kanban
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vanguard/onlyoffice-crm-kanban
+ExecStart=/tmp/botenv/bin/python3 /opt/vanguard/onlyoffice-crm-kanban/telegram_bot.py
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
