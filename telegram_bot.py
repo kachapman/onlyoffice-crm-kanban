@@ -150,13 +150,10 @@ def format_deal_summary(deals: list[dict]) -> str:
         return "No open projects found for your contact."
     lines = ["Your open projects:", ""]
     for i, d in enumerate(deals, 1):
-        amt = _fmt_money(d.get("amount", 0), d.get("currency", ""))
         parts = [f"{i}. {_esc(d['title'])}"]
         stage = d.get("stage", "")
         if stage:
             parts.append(f"   Status: {_esc(stage)}")
-        if amt:
-            parts.append(f"   Amount: {_esc(amt)}")
         lines.append("\n".join(parts))
     lines.append("")
     lines.append("Reply with a number (1, 2, ...) to see full details.")
