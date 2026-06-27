@@ -37,4 +37,4 @@ onlyoffice-module/**/obj/
 *.lighthouse.json
 127.0.0.1_*
 curl *.txt
-scripts/
+scripts/romanian_roadtrip.md
