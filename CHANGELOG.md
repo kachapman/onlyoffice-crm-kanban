@@ -4,6 +4,16 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 ## [Unreleased]
 
+### Added
+- **Nickname field for bot customer mappings.** New text input in the "Invite Customer" form to label each code (e.g. "Office manager"). Nickname shown in the Existing Mappings list with a ✎ edit button (inline prompt). New server endpoint `PUT /api/bot-customers/nickname`. Stored in `crm_bot_store.py` mapping entries and preserved through the verify-code flow. (`FEAT-025`)
+- **Rich text (HTML) in bot messages.** All Telegram bot `reply_text` calls now use `parse_mode="HTML"`. CRM note content with `<b>`, `<i>`, etc. renders as formatted text. Plain-text fields (titles, stage names) are HTML-escaped to prevent breakage.
+
+### Changed
+- **Bot project summary cleaned up.** Latest customer note and amount removed from the summary list (only title + status shown). Full details including note and amount still visible in the detail view when customer replies with a number.
+
+### Fixed
+- `.gitignore` updated to exclude `romanian_roadtrip.md`.
+
 ## [1.2.0] — 2026-06-26
 
 ### Added
