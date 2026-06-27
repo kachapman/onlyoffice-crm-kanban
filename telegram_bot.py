@@ -10,6 +10,7 @@ curated deal info from the CRM (via the dashboard proxy).
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import os
@@ -140,18 +141,22 @@ async def verify_code(code: str, chat_id: int) -> dict | None:
 
 # ── Message Formatting ──
 
+def _esc(text: str) -> str:
+    return html.escape(str(text), quote=False)
+
+
 def format_deal_summary(deals: list[dict]) -> str:
     if not deals:
         return "No open projects found for your contact."
     lines = ["Your open projects:", ""]
     for i, d in enumerate(deals, 1):
         amt = _fmt_money(d.get("amount", 0), d.get("currency", ""))
-        parts = [f"{i}. {d['title']}"]
+        parts = [f"{i}. {_esc(d['title'])}"]
         stage = d.get("stage", "")
         if stage:
-            parts.append(f"   Status: {stage}")
+            parts.append(f"   Status: {_esc(stage)}")
         if amt:
-            parts.append(f"   Amount: {amt}")
+            parts.append(f"   Amount: {_esc(amt)}")
         update = d.get("latestUpdate")
         if update:
             content = update.get("content", "")
@@ -160,7 +165,7 @@ def format_deal_summary(deals: list[dict]) -> str:
                 preview = content[:120].replace("\n", " ")
                 parts.append(f"   Latest: {preview}")
                 if created:
-                    parts[-1] += f" ({created})"
+                    parts[-1] += f" ({_esc(created)})"
         lines.append("\n".join(parts))
     lines.append("")
     lines.append("Reply with a number (1, 2, ...) to see full details.")
@@ -173,14 +178,14 @@ def format_deal_detail(deals: list[dict], index: int) -> str:
     d = deals[index]
     amt = _fmt_money(d.get("amount", 0), d.get("currency", ""))
     lines = [
-        d["title"],
+        _esc(d["title"]),
         "─" * 30,
     ]
     stage = d.get("stage", "")
     if stage:
-        lines.append(f"Status: {stage}")
+        lines.append(f"Status: {_esc(stage)}")
     if amt:
-        lines.append(f"Amount: {amt}")
+        lines.append(f"Amount: {_esc(amt)}")
     update = d.get("latestUpdate")
     if update:
         content = update.get("content", "")
@@ -190,7 +195,7 @@ def format_deal_detail(deals: list[dict], index: int) -> str:
             lines.append("Latest customer update:")
             lines.append(content)
             if created:
-                lines.append(f"— {created}")
+                lines.append(f"— {_esc(created)}")
     lines.append("")
     lines.append("Send any message to see your projects again.")
     return "\n".join(lines)
@@ -217,7 +222,8 @@ def main() -> None:
 
     async def start(update: Update, _ctx) -> None:
         await update.message.reply_text(
-            "Welcome! Send me your invite code or any message to see your project updates."
+            "Welcome! Send me your invite code or any message to see your project updates.",
+            parse_mode="HTML",
         )
 
     async def handle_message(update: Update, _ctx) -> None:
@@ -234,7 +240,7 @@ def main() -> None:
         if mapping:
             contact_id = mapping.get("contactId")
             if not contact_id:
-                await update.message.reply_text("Your account is not fully set up. Please contact support.")
+                await update.message.reply_text("Your account is not fully set up. Please contact support.", parse_mode="HTML")
                 return
 
             deals = await get_deals(contact_id, chat_id)
@@ -243,15 +249,15 @@ def main() -> None:
                 idx = int(text) - 1
                 if 0 <= idx < len(deals):
                     msg = format_deal_detail(deals, idx)
-                    await update.message.reply_text(msg)
+                    await update.message.reply_text(msg, parse_mode="HTML")
                     return
                 else:
                     msg = format_deal_summary(deals)
-                    await update.message.reply_text(msg)
+                    await update.message.reply_text(msg, parse_mode="HTML")
                     return
             else:
                 msg = format_deal_summary(deals)
-                await update.message.reply_text(msg)
+                await update.message.reply_text(msg, parse_mode="HTML")
                 return
         else:
             result = await verify_code(text, chat_id)
@@ -263,12 +269,13 @@ def main() -> None:
                     msg += format_deal_summary(deals)
                 else:
                     msg = "✅ You've been linked! But we couldn't find any projects yet."
-                await update.message.reply_text(msg)
+                await update.message.reply_text(msg, parse_mode="HTML")
                 logger.info("Chat %d linked to contact %s", chat_id, contact_id)
             else:
                 await update.message.reply_text(
                     "That code wasn't recognized or has expired. "
-                    "Please check with your agent for a new invite code."
+                    "Please check with your agent for a new invite code.",
+                    parse_mode="HTML",
                 )
 
     app.add_handler(CommandHandler("start", start))
