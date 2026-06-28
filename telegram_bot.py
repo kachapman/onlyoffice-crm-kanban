@@ -164,11 +164,8 @@ def _esc(text: str) -> str:
 _TELEGRAM_HTML_TAGS = frozenset({
     'b', 'strong', 'i', 'em', 'u', 'ins',
     's', 'strike', 'del',
-    'a', 'code', 'pre', 'br',
+    'a', 'code', 'pre',
 })
-
-
-_SELF_CLOSING_TAGS = frozenset({'br', 'hr', 'img', 'input', 'meta', 'link'})
 
 
 def _sanitize_html(text: str) -> str:
@@ -180,6 +177,7 @@ def _sanitize_html(text: str) -> str:
        so orphaned openings are auto-closed and dangling closings removed.
     3. Re-escape bare & outside tag brackets to &amp;.
     """
+    text = re.sub(r'<br\s*/?>', '\n', text)
     text = html.unescape(text)
 
     open_tags: list[str] = []
@@ -188,7 +186,7 @@ def _sanitize_html(text: str) -> str:
         raw = m.group(0)
         tagname = m.group(1).lower()
 
-        if tagname in _SELF_CLOSING_TAGS or raw.endswith('/>'):
+        if raw.endswith('/>'):
             if tagname in _TELEGRAM_HTML_TAGS:
                 return raw
             return ''
