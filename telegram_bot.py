@@ -309,7 +309,74 @@ def _extract_mail_fields(content: str) -> dict[str, str] | None:
     return fields if fields else None
 
 
-def _format_mail_event(content: str, max_len: int = 500) -> str:
+def _extract_forward_info(body: str) -> tuple[str, str | None]:
+    """Find a Forwarded/Original Message header block, extract From/Date, and return (cleaned_body, info_line)."""
+    marker_re = re.compile(r'--------\s*(Forwarded|Original)\s*Message\s*--------\s*', re.IGNORECASE)
+    m = marker_re.search(body)
+    if not m:
+        return body, None
+
+    marker_type = m.group(1).lower()
+    header_field_re = re.compile(
+        r'(Subject|Date|From|Reply-To|To|Cc|Bcc):\s*',
+        re.IGNORECASE,
+    )
+    pos = m.end()
+    fields: dict[str, str] = {}
+
+    while True:
+        fm = header_field_re.match(body, pos)
+        if not fm:
+            break
+        key = fm.group(1).lower()
+        value_start = fm.end()
+        next_fm = header_field_re.search(body, value_start)
+        body_indicator = re.search(r'(?<=\s)[\[>]', body[value_start:])
+        body_indicator_pos = value_start + body_indicator.start() if body_indicator else len(body)
+
+        if next_fm and next_fm.start() < body_indicator_pos:
+            end = next_fm.start()
+            pos = next_fm.start()
+        else:
+            end = body_indicator_pos
+            pos = end
+
+        value = body[value_start:end].strip()
+        if key in ("from", "date", "subject", "to"):
+            fields[key] = value
+
+    info_parts: list[str] = []
+    if "from" in fields:
+        info_parts.append(f"from {fields['from']}")
+    if "date" in fields:
+        info_parts.append(f"on {fields['date']}")
+
+    if info_parts:
+        info = "Forwarded " + " ".join(info_parts)
+    else:
+        info = "Forwarded message" if marker_type == "forwarded" else "Original message"
+
+    before = body[:m.start()].rstrip()
+    after = body[pos:].lstrip()
+    cleaned = (before + ("\n\n" if before else "") + after).strip()
+    return cleaned, f"[{info}]"
+
+
+def _clean_reply_attribution(body: str) -> tuple[str, str | None]:
+    """Convert 'On ... wrote:' attribution into a clean [On ... wrote] line."""
+    reply_re = re.compile(r'\s+On\s+(.+?)\s+wrote:\s*', re.IGNORECASE)
+    m = reply_re.search(body)
+    if not m:
+        return body, None
+    attribution = m.group(1).strip()
+    info = f"On {attribution} wrote"
+    before = body[:m.start()].rstrip()
+    after = body[m.end():].lstrip()
+    cleaned = (before + f"\n\n[{info}]" + ('\n\n' + after if after else '')).strip()
+    return cleaned, info
+
+
+def _format_mail_event(content: str, max_len: int = 1000) -> str:
     """Parse CRM mail JSON and return a concise readable block."""
     try:
         data = json.loads(content)
@@ -332,6 +399,10 @@ def _format_mail_event(content: str, max_len: int = 500) -> str:
     to_addr = _parse_address(str(data.get("to") or ""))
     subject = _esc(str(data.get("subject") or ""))
     body = str(data.get("introduction") or data.get("body") or "")
+    body, forward_info = _extract_forward_info(body)
+    body, _ = _clean_reply_attribution(body)
+    # Put each quoted email line on its own line for readability.
+    body = re.sub(r'\s*>\s*', '\n> ', body).strip()
     if len(body) > max_len:
         body = body[:max_len - 1] + "…"
     body = _sanitize_html(body)
@@ -343,6 +414,9 @@ def _format_mail_event(content: str, max_len: int = 500) -> str:
         lines.append(f"To: {to_addr}")
     if subject:
         lines.append(f"Subject: {subject}")
+    if forward_info:
+        lines.append("")
+        lines.append(forward_info)
     if body:
         lines.append("")
         lines.append(f"Body: {body}")
@@ -409,12 +483,14 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
                 cat = ev.get("categoryName") or ""
                 content = ev.get("content", "")
                 created = _fmt_date(ev.get("created", ""))
-                if cat:
+                if cat and created:
+                    lines.append(f"<b>[{_esc(cat)}]</b> — <i>{_esc(created)}</i>")
+                elif cat:
                     lines.append(f"<b>[{_esc(cat)}]</b>")
+                elif created:
+                    lines.append(f"<i>{_esc(created)}</i>")
                 if content:
                     lines.append(_format_event_body(cat, content))
-                if created:
-                    lines.append(f"— {_esc(created)}")
                 lines.append("")
     else:
         update = d.get("latestUpdate")
@@ -423,14 +499,18 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
             created = _fmt_date(update.get("created", ""))
             if content:
                 lines.append("")
-                lines.append("Latest customer update:")
-                lines.append(_sanitize_html(content))
                 if created:
-                    lines.append(f"— {_esc(created)}")
+                    lines.append(f"Latest customer update — <i>{_esc(created)}</i>")
+                else:
+                    lines.append("Latest customer update:")
+                lines.append(_sanitize_html(content))
     if lines and lines[-1] != "":
         lines.append("")
     lines.append("Send another project name to search again.")
-    return "\n".join(lines)
+    msg = "\n".join(lines)
+    if len(msg) > 4000:
+        msg = msg[:3980] + "\n\n… (message truncated)"
+    return msg
 
 
 # ── Main Setup ──
