@@ -173,55 +173,105 @@ _TELEGRAM_HTML_TAGS = frozenset({
 })
 
 
+def _clean_a_tag(tag: str) -> str | None:
+    """Validate and rebuild an <a> tag with a clean, escaped href."""
+    m = re.search(r'\shref\s*=\s*("|\')(.+?)\1', tag, re.IGNORECASE)
+    if not m:
+        return None
+    href = m.group(2).strip()
+    if not href:
+        return None
+    href = (href
+            .replace('&', '&amp;')
+            .replace('"', '&quot;')
+            .replace("'", '&#39;')
+            .replace('<', '&lt;')
+            .replace('>', '&gt;'))
+    return f'<a href="{href}">'
+
+
+def _balance_tags(text: str) -> str:
+    """Drop dangling closers and auto-close orphaned allowed tags."""
+    tag_re = re.compile(
+        r'</?(?:' + '|'.join(re.escape(t) for t in _TELEGRAM_HTML_TAGS) + r')'
+        r'(?:\s+\w+(?:\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^>\s]*))?)*\s*/?>',
+        re.IGNORECASE,
+    )
+    open_tags: list[str] = []
+    result: list[str] = []
+    i = 0
+    for m in tag_re.finditer(text):
+        result.append(text[i:m.start()])
+        tag = m.group(0)
+        tagname = re.match(r'</?(\w+)', tag).group(1).lower()
+        if tag.startswith('</'):
+            if open_tags and open_tags[-1] == tagname:
+                open_tags.pop()
+                result.append(tag)
+        elif tag.endswith('/>'):
+            result.append(tag)
+        else:
+            result.append(tag)
+            open_tags.append(tagname)
+        i = m.end()
+    result.append(text[i:])
+    for tag in reversed(open_tags):
+        result.append(f'</{tag}>')
+    return ''.join(result)
+
+
 def _sanitize_html(text: str) -> str:
     """Sanitize CRM HTML for Telegram's HTML parse mode.
 
-    1. Decode ALL HTML entities to actual characters (handles &nbsp;,
-       &mdash;, &amp;, etc. — Telegram doesn't support named entities).
-    2. Strip non-Telegram tags; track and balance Telegram-safe tags
-       so orphaned openings are auto-closed and dangling closings removed.
-    3. Re-escape bare & outside tag brackets to &amp;.
+    1. Replace <br> with newlines.
+    2. Decode all HTML entities.
+    3. Preserve allowed Telegram tags with placeholders.
+    4. Escape every remaining <, >, and &.
+    5. Restore allowed tags, validating <a href> and balancing tags.
     """
-    text = re.sub(r'<br\s*/?>', '\n', text)
+    if not text:
+        return ""
+
+    text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
     text = html.unescape(text)
 
-    open_tags: list[str] = []
+    allowed_tag_re = re.compile(
+        r'</?(?:' + '|'.join(re.escape(t) for t in _TELEGRAM_HTML_TAGS) + r')'
+        r'(?:\s+\w+(?:\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^>\s]*))?)*\s*/?>',
+        re.IGNORECASE,
+    )
 
-    def _replace_tag(m: re.Match) -> str:
+    placeholders: list[str] = []
+
+    def preserve_tag(m: re.Match) -> str:
         raw = m.group(0)
-        tagname = m.group(1).lower()
-
-        if raw.endswith('/>'):
-            if tagname in _TELEGRAM_HTML_TAGS:
-                return raw
-            return ''
-
+        tagname = re.match(r'</?(\w+)', raw).group(1).lower()
         if raw.startswith('</'):
-            if tagname in _TELEGRAM_HTML_TAGS:
-                if open_tags and open_tags[-1] == tagname:
-                    open_tags.pop()
-                    return raw
+            placeholders.append(raw)
+        elif raw.endswith('/>'):
+            if tagname == 'a':
                 return ''
-        elif tagname in _TELEGRAM_HTML_TAGS:
-            open_tags.append(tagname)
-            return raw
+            placeholders.append(raw)
+        else:
+            if tagname == 'a':
+                cleaned = _clean_a_tag(raw)
+                if not cleaned:
+                    return ''
+                placeholders.append(cleaned)
+            else:
+                placeholders.append(raw)
+        return f'\x00{len(placeholders) - 1}\x00'
 
-        return ''
+    text = allowed_tag_re.sub(preserve_tag, text)
 
-    text = re.sub(r'</?(\w+)(\s[^>]*)?>', _replace_tag, text)
+    # Escape all literal HTML metacharacters outside allowed tags.
+    text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
-    for tag in reversed(open_tags):
-        text += f'</{tag}>'
+    def restore_tag(m: re.Match) -> str:
+        return placeholders[int(m.group(1))]
 
-    result: list[str] = []
-    i = 0
-    for m in re.finditer(r'<[^>]*>', text):
-        before = text[i:m.start()]
-        result.append(before.replace('&', '&amp;'))
-        result.append(m.group(0).replace('&', '&amp;'))
-        i = m.end()
-    result.append(text[i:].replace('&', '&amp;'))
-    return ''.join(result)
+    text = re.sub(r'\x00(\d+)\x00', restore_tag, text)
+    return _balance_tags(text)
 
 
 HELP_TEXT = (
@@ -316,15 +366,28 @@ def main() -> None:
 
     app = Application.builder().token(TOKEN).build()
 
+    async def _reply_html(update: Update, text: str) -> None:
+        """Send a message in HTML mode, falling back to plain text if Telegram rejects it."""
+        try:
+            await update.message.reply_text(text, parse_mode="HTML")
+        except Exception as exc:
+            logger.warning("HTML reply failed for chat %s: %s", update.effective_chat.id, exc)
+            sample = text[:500].replace("\n", "\\n")
+            logger.warning("Offending message sample: %s", sample)
+            try:
+                await update.message.reply_text(text, parse_mode=None)
+            except Exception as exc2:
+                logger.exception("Plain-text fallback also failed for chat %s", update.effective_chat.id)
+
     async def start(update: Update, _ctx) -> None:
-        await update.message.reply_text(
+        await _reply_html(
+            update,
             "Welcome! Send me your invite code to get started. "
             "Once linked, send a project name to find it.",
-            parse_mode="HTML",
         )
 
     async def help_command(update: Update, _ctx) -> None:
-        await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
+        await _reply_html(update, HELP_TEXT)
 
     async def handle_message(update: Update, _ctx) -> None:
         try:
@@ -343,14 +406,14 @@ def main() -> None:
                 contact_id = mapping.get("contactId")
                 is_employee = mapping.get("employee", False)
                 if not contact_id and not is_employee:
-                    await update.message.reply_text("Your account is not fully set up. Please contact support.", parse_mode="HTML")
+                    await _reply_html(update, "Your account is not fully set up. Please contact support.")
                     return
 
                 _last_employee[chat_id] = is_employee
 
                 # Help request
                 if lower in ("/help", "help", "?"):
-                    await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
+                    await _reply_html(update, HELP_TEXT)
                     return
 
                 # Number reply: read from cached results (no re-fetch)
@@ -358,28 +421,28 @@ def main() -> None:
                     deals = _last_deals.get(chat_id, [])
                     emp = _last_employee.get(chat_id, False)
                     if not deals:
-                        await update.message.reply_text("No projects to select from. Send a project name to search.", parse_mode="HTML")
+                        await _reply_html(update, "No projects to select from. Send a project name to search.")
                         return
                     idx = int(text) - 1
                     if 0 <= idx < len(deals):
                         msg = format_deal_detail(deals, idx, is_employee=emp)
-                        await update.message.reply_text(msg, parse_mode="HTML")
+                        await _reply_html(update, msg)
                     else:
                         search = _last_search.get(chat_id, "")
                         msg = format_search_result(deals, search, is_employee=emp)
-                        await update.message.reply_text(msg, parse_mode="HTML")
+                        await _reply_html(update, msg)
                     return
 
                 # Treat any other text as a title search
                 search = text
                 deals = await get_deals(contact_id, chat_id, search=search, employee=is_employee)
                 if deals is None:
-                    await update.message.reply_text("I'm having trouble reaching the server. Please try again in a couple of minutes.", parse_mode="HTML")
+                    await _reply_html(update, "I'm having trouble reaching the server. Please try again in a couple of minutes.")
                     return
                 _last_deals[chat_id] = deals
                 _last_search[chat_id] = search
                 msg = format_search_result(deals, search, is_employee=is_employee)
-                await update.message.reply_text(msg, parse_mode="HTML")
+                await _reply_html(update, msg)
                 return
             else:
                 # Not linked yet — treat message as invite code
@@ -399,18 +462,18 @@ def main() -> None:
                         )
                     else:
                         msg = "✅ You've been linked! But we couldn't find any projects yet."
-                    await update.message.reply_text(msg, parse_mode="HTML")
+                    await _reply_html(update, msg)
                     logger.info("Chat %d linked to contact %s (employee=%s)", chat_id, contact_id, is_employee)
                 else:
-                    await update.message.reply_text(
+                    await _reply_html(
+                        update,
                         "That code wasn't recognized or has expired. "
                         "Please check with your agent for a new invite code.",
-                        parse_mode="HTML",
                     )
         except Exception:
             logger.exception("Unhandled error in handle_message for chat %d", chat_id)
             try:
-                await update.message.reply_text("Something went wrong. Please try again in a couple of minutes.", parse_mode="HTML")
+                await _reply_html(update, "Something went wrong. Please try again in a couple of minutes.")
             except Exception:
                 pass
 

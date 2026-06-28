@@ -17942,7 +17942,7 @@ async function handleRemoveBotCustomer(uid) {
       showToast(data.error || "Failed to remove mapping", true);
       return;
     }
-    _botCustomersMappings = _botCustomersMappings.filter((m) => uid === "employee" ? m.employee : m.contactId === Number(uid));
+    _botCustomersMappings = _botCustomersMappings.filter((m) => uid === "employee" ? !m.employee : m.contactId !== Number(uid));
     renderBotCustomerMappings();
     showToast("Mapping removed");
   } catch (err) {
