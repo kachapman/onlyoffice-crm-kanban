@@ -886,6 +886,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         _json_response(self, 200, mapping)
 
     def _handle_bot_deals(self) -> None:
+        self.log_message("BOT-DEBUG _handle_bot_deals entered")
         try:
             if not self._bot_verify_request():
                 _json_response(self, 403, {"error": "Forbidden"})

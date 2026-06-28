@@ -242,76 +242,83 @@ def main() -> None:
         await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
 
     async def handle_message(update: Update, _ctx) -> None:
-        if not update.message or not update.message.text:
-            return
-        chat_id = update.effective_chat.id
-        text = update.message.text.strip()
-        lower = text.lower()
-
-        logger.info("Message from chat %d: %s", chat_id, text[:50])
-
-        # Check if already mapped
-        mapping = await get_mapping(chat_id)
-
-        if mapping:
-            contact_id = mapping.get("contactId")
-            if not contact_id:
-                await update.message.reply_text("Your account is not fully set up. Please contact support.", parse_mode="HTML")
+        try:
+            if not update.message or not update.message.text:
                 return
+            chat_id = update.effective_chat.id
+            text = update.message.text.strip()
+            lower = text.lower()
 
-            # Help request
-            if lower in ("/help", "help", "?"):
-                await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
-                return
+            logger.info("Message from chat %d: %s", chat_id, text[:50])
 
-            # Number reply: re-run the last search to get the same result set
-            if text.isdigit():
-                search = _last_search.get(chat_id, "")
-                deals = await get_deals(contact_id, chat_id, search=search or None)
+            # Check if already mapped
+            mapping = await get_mapping(chat_id)
+
+            if mapping:
+                contact_id = mapping.get("contactId")
+                if not contact_id:
+                    await update.message.reply_text("Your account is not fully set up. Please contact support.", parse_mode="HTML")
+                    return
+
+                # Help request
+                if lower in ("/help", "help", "?"):
+                    await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
+                    return
+
+                # Number reply: re-run the last search to get the same result set
+                if text.isdigit():
+                    search = _last_search.get(chat_id, "")
+                    deals = await get_deals(contact_id, chat_id, search=search or None)
+                    if deals is None:
+                        await update.message.reply_text("I'm having trouble reaching the server. Please try again in a couple of minutes.", parse_mode="HTML")
+                        return
+                    idx = int(text) - 1
+                    if 0 <= idx < len(deals):
+                        msg = format_deal_detail(deals, idx)
+                        await update.message.reply_text(msg, parse_mode="HTML")
+                    elif not deals:
+                        await update.message.reply_text("No projects to select from. Send a project name to search.", parse_mode="HTML")
+                    else:
+                        msg = format_search_result(deals, search)
+                        await update.message.reply_text(msg, parse_mode="HTML")
+                    return
+
+                # Treat any other text as a title search
+                search = text
+                _last_search[chat_id] = search
+                deals = await get_deals(contact_id, chat_id, search=search)
                 if deals is None:
                     await update.message.reply_text("I'm having trouble reaching the server. Please try again in a couple of minutes.", parse_mode="HTML")
                     return
-                idx = int(text) - 1
-                if 0 <= idx < len(deals):
-                    msg = format_deal_detail(deals, idx)
-                    await update.message.reply_text(msg, parse_mode="HTML")
-                elif not deals:
-                    await update.message.reply_text("No projects to select from. Send a project name to search.", parse_mode="HTML")
-                else:
-                    msg = format_search_result(deals, search)
-                    await update.message.reply_text(msg, parse_mode="HTML")
-                return
-
-            # Treat any other text as a title search
-            search = text
-            _last_search[chat_id] = search
-            deals = await get_deals(contact_id, chat_id, search=search)
-            if deals is None:
-                await update.message.reply_text("I'm having trouble reaching the server. Please try again in a couple of minutes.", parse_mode="HTML")
-                return
-            msg = format_search_result(deals, search)
-            await update.message.reply_text(msg, parse_mode="HTML")
-            return
-        else:
-            # Not linked yet — treat message as invite code
-            result = await verify_code(text, chat_id)
-            if result:
-                contact_id = result.get("contactId")
-                if contact_id:
-                    msg = (
-                        "✅ You've been linked! Send a project name to find it.\n\n"
-                        "Example: <b>roof</b> or <b>Smith</b>"
-                    )
-                else:
-                    msg = "✅ You've been linked! But we couldn't find any projects yet."
+                msg = format_search_result(deals, search)
                 await update.message.reply_text(msg, parse_mode="HTML")
-                logger.info("Chat %d linked to contact %s", chat_id, contact_id)
+                return
             else:
-                await update.message.reply_text(
-                    "That code wasn't recognized or has expired. "
-                    "Please check with your agent for a new invite code.",
-                    parse_mode="HTML",
-                )
+                # Not linked yet — treat message as invite code
+                result = await verify_code(text, chat_id)
+                if result:
+                    contact_id = result.get("contactId")
+                    if contact_id:
+                        msg = (
+                            "✅ You've been linked! Send a project name to find it.\n\n"
+                            "Example: <b>roof</b> or <b>Smith</b>"
+                        )
+                    else:
+                        msg = "✅ You've been linked! But we couldn't find any projects yet."
+                    await update.message.reply_text(msg, parse_mode="HTML")
+                    logger.info("Chat %d linked to contact %s", chat_id, contact_id)
+                else:
+                    await update.message.reply_text(
+                        "That code wasn't recognized or has expired. "
+                        "Please check with your agent for a new invite code.",
+                        parse_mode="HTML",
+                    )
+        except Exception:
+            logger.exception("Unhandled error in handle_message for chat %d", chat_id)
+            try:
+                await update.message.reply_text("Something went wrong. Please try again in a couple of minutes.", parse_mode="HTML")
+            except Exception:
+                pass
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
