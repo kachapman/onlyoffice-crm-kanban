@@ -886,130 +886,138 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         _json_response(self, 200, mapping)
 
     def _handle_bot_deals(self) -> None:
-        if not self._bot_verify_request():
-            _json_response(self, 403, {"error": "Forbidden"})
-            return
-        qs = parse_qs(urlparse(self.path).query)
-        raw_contact = (qs.get("contactId") or [""])[0]
-        if not raw_contact:
-            _json_response(self, 400, {"error": "contactId is required"})
-            return
-        portal = _portal_base(self)
-        if not portal:
-            _json_response(self, 400, {"error": "Portal not configured"})
-            return
-        contact_id = int(raw_contact)
+        try:
+            if not self._bot_verify_request():
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            qs = parse_qs(urlparse(self.path).query)
+            raw_contact = (qs.get("contactId") or [""])[0]
+            if not raw_contact:
+                _json_response(self, 400, {"error": "contactId is required"})
+                return
+            portal = _portal_base(self)
+            if not portal:
+                _json_response(self, 400, {"error": "Portal not configured"})
+                return
+            contact_id = int(raw_contact)
 
-        # Get mapping to check notesCategoryId
-        raw_chat = (qs.get("chatId") or [""])[0]
-        notes_category_id = None
-        if raw_chat:
-            mapping = get_mapping_by_chat(portal, int(raw_chat))
-            if mapping:
-                notes_category_id = mapping.get("notesCategoryId")
+            # Get mapping to check notesCategoryId
+            raw_chat = (qs.get("chatId") or [""])[0]
+            notes_category_id = None
+            if raw_chat:
+                mapping = get_mapping_by_chat(portal, int(raw_chat))
+                if mapping:
+                    notes_category_id = mapping.get("notesCategoryId")
 
-        # Fetch opportunities for this contact (no stageType filter — CRM param is unreliable)
-        filter_params = urlencode({
-            "startIndex": "0",
-            "count": "500",
-            "filterValue": "",
-            "contactId": str(contact_id),
-            "sortBy": "date_created",
-            "sortOrder": "descending",
-        })
-        code, data = self._bot_crm_proxy(portal, "GET", "/api/2.0/crm/opportunity/filter", filter_params)
-        if code >= 400:
-            _json_response(self, code, data)
-            return
-        opportunities = data.get("response") if isinstance(data, dict) else []
-        # Filter to only open-stage deals locally (stageType = 0 or null)
-        open_opps = []
-        for opp in (opportunities or []):
-            if not isinstance(opp, dict):
-                continue
-            _stage = opp.get("stage") or opp.get("Stage") or {}
-            _st = _stage.get("stageType") if isinstance(_stage, dict) else None
-            if _st not in (0, "0", "Open", None, ""):
-                continue
-            open_opps.append(opp)
-
-        # Fetch history for each deal to find latest customer update notes
-        deals = []
-        for opp in open_opps:
-            try:
-                opp_id = opp.get("id") or opp.get("ID")
-                if not opp_id:
+            # Fetch opportunities for this contact (no stageType filter — CRM param is unreliable)
+            filter_params = urlencode({
+                "startIndex": "0",
+                "count": "500",
+                "filterValue": "",
+                "contactId": str(contact_id),
+                "sortBy": "date_created",
+                "sortOrder": "descending",
+            })
+            code, data = self._bot_crm_proxy(portal, "GET", "/api/2.0/crm/opportunity/filter", filter_params)
+            if code >= 400:
+                _json_response(self, code, data)
+                return
+            opportunities = data.get("response") if isinstance(data, dict) else []
+            # Filter to only open-stage deals locally (stageType = 0 or null)
+            open_opps = []
+            for opp in (opportunities or []):
+                if not isinstance(opp, dict):
                     continue
-                title = str(opp.get("title") or opp.get("Title") or f"Deal #{opp_id}")
-                stage = str(opp.get("stageTitle") or opp.get("StageTitle") or "")
-                amount_raw = opp.get("amount") or opp.get("Amount")
+                _stage = opp.get("stage") or opp.get("Stage") or {}
+                _st = _stage.get("stageType") if isinstance(_stage, dict) else None
+                if _st not in (0, "0", "Open", None, ""):
+                    continue
+                open_opps.append(opp)
+
+            # Early title search filter (before expensive history calls)
+            search = (qs.get("search") or [""])[0].strip().lower()
+            matched_opps = open_opps
+            if search:
+                matched_opps = [
+                    opp for opp in open_opps
+                    if search in str(opp.get("title") or opp.get("Title") or "").lower()
+                ]
+
+            # Fetch history only for matched deals
+            deals = []
+            for opp in matched_opps:
                 try:
-                    amount = float(amount_raw) if amount_raw else 0
-                except (TypeError, ValueError):
-                    amount = 0
-                currency = str(opp.get("currency") or opp.get("Currency") or "")
+                    opp_id = opp.get("id") or opp.get("ID")
+                    if not opp_id:
+                        continue
+                    title = str(opp.get("title") or opp.get("Title") or f"Deal #{opp_id}")
+                    stage = str(opp.get("stageTitle") or opp.get("StageTitle") or "")
+                    amount_raw = opp.get("amount") or opp.get("Amount")
+                    try:
+                        amount = float(amount_raw) if amount_raw else 0
+                    except (TypeError, ValueError):
+                        amount = 0
+                    currency = str(opp.get("currency") or opp.get("Currency") or "")
 
-                # Fetch recent history (last 5 events)
-                hist_params = urlencode({
-                    "entityType": "opportunity",
-                    "entityId": str(opp_id),
-                    "startIndex": "0",
-                    "count": "5",
-                    "sortBy": "date",
-                    "sortOrder": "descending",
-                })
-                hcode, hdata = self._bot_crm_proxy(portal, "GET", "/api/2.0/crm/history/filter", hist_params)
-                events = []
-                if hcode < 400:
-                    raw_events = hdata.get("response") if isinstance(hdata, dict) else []
-                    if isinstance(raw_events, list):
-                        for ev in raw_events:
-                            if not isinstance(ev, dict):
-                                continue
-                            ev_cat = ev.get("category") or ev.get("Category") or {}
-                            cat_id = None
-                            if isinstance(ev_cat, dict):
-                                cat_id = ev_cat.get("id") or ev_cat.get("ID") or ev_cat.get("categoryId") or ev_cat.get("CategoryId")
-                            elif isinstance(ev_cat, (int, str)):
-                                try:
-                                    cat_id = int(ev_cat)
-                                except (TypeError, ValueError):
-                                    pass
-                            content = str(ev.get("content") or ev.get("Content") or "").strip()
-                            created = str(ev.get("created") or ev.get("Created") or "")
-                            if notes_category_id:
-                                # Specific category: take only the first (most recent) matching note
-                                if cat_id == notes_category_id and content:
-                                    events.append({
-                                        "content": content[:500],
-                                        "created": created,
-                                    })
-                                    break  # most recent match found, stop iterating
-                            else:
-                                # All Notes: collect up to 5 content-bearing events
-                                if content and len(events) < 5:
-                                    events.append({
-                                        "content": content[:500],
-                                        "created": created,
-                                    })
+                    # Fetch recent history (last 5 events)
+                    hist_params = urlencode({
+                        "entityType": "opportunity",
+                        "entityId": str(opp_id),
+                        "startIndex": "0",
+                        "count": "5",
+                        "sortBy": "date",
+                        "sortOrder": "descending",
+                    })
+                    hcode, hdata = self._bot_crm_proxy(portal, "GET", "/api/2.0/crm/history/filter", hist_params)
+                    events = []
+                    if hcode < 400:
+                        raw_events = hdata.get("response") if isinstance(hdata, dict) else []
+                        if isinstance(raw_events, list):
+                            for ev in raw_events:
+                                if not isinstance(ev, dict):
+                                    continue
+                                ev_cat = ev.get("category") or ev.get("Category") or {}
+                                cat_id = None
+                                if isinstance(ev_cat, dict):
+                                    cat_id = ev_cat.get("id") or ev_cat.get("ID") or ev_cat.get("categoryId") or ev_cat.get("CategoryId")
+                                elif isinstance(ev_cat, (int, str)):
+                                    try:
+                                        cat_id = int(ev_cat)
+                                    except (TypeError, ValueError):
+                                        pass
+                                content = str(ev.get("content") or ev.get("Content") or "").strip()
+                                created = str(ev.get("created") or ev.get("Created") or "")
+                                if notes_category_id:
+                                    # Specific category: take only the first (most recent) matching note
+                                    if cat_id == notes_category_id and content:
+                                        events.append({
+                                            "content": content[:500],
+                                            "created": created,
+                                        })
+                                        break  # most recent match found, stop iterating
+                                else:
+                                    # All Notes: collect up to 5 content-bearing events
+                                    if content and len(events) < 5:
+                                        events.append({
+                                            "content": content[:500],
+                                            "created": created,
+                                        })
 
-                deals.append({
-                    "id": int(opp_id),
-                    "title": title,
-                    "stage": stage,
-                    "amount": amount,
-                    "currency": currency,
-                    "latestUpdate": events[0] if events else None,
-                })
-            except Exception as exc:
-                self.log_message("BOT-DEBUG error processing deal %s: %s", opp.get("id") or opp.get("ID"), exc)
+                    deals.append({
+                        "id": int(opp_id),
+                        "title": title,
+                        "stage": stage,
+                        "amount": amount,
+                        "currency": currency,
+                        "latestUpdate": events[0] if events else None,
+                    })
+                except Exception as exc:
+                    self.log_message("BOT-DEBUG error processing deal %s: %s", opp.get("id") or opp.get("ID"), exc)
 
-        # Optional title search (efficient: filter already-fetched contact deals)
-        search = (qs.get("search") or [""])[0].strip().lower()
-        if search:
-            deals = [d for d in deals if search in d["title"].lower()]
-
-        _json_response(self, 200, {"deals": deals})
+            _json_response(self, 200, {"deals": deals})
+        except Exception as exc:
+            self.log_message("BOT-DEBUG fatal in _handle_bot_deals: %s", exc)
+            _json_response(self, 502, {"error": "Internal error"})
 
     def _handle_health_check(self) -> None:
         auth = _require_auth(self)
