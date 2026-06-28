@@ -20,6 +20,7 @@ import asyncio
 import html
 import json
 import logging
+from html.parser import HTMLParser
 import os
 import re
 import sys
@@ -173,105 +174,156 @@ _TELEGRAM_HTML_TAGS = frozenset({
 })
 
 
-def _clean_a_tag(tag: str) -> str | None:
-    """Validate and rebuild an <a> tag with a clean, escaped href."""
-    m = re.search(r'\shref\s*=\s*("|\')(.+?)\1', tag, re.IGNORECASE)
-    if not m:
-        return None
-    href = m.group(2).strip()
-    if not href:
-        return None
-    href = (href
-            .replace('&', '&amp;')
-            .replace('"', '&quot;')
-            .replace("'", '&#39;')
-            .replace('<', '&lt;')
-            .replace('>', '&gt;'))
-    return f'<a href="{href}">'
+class _TelegramHTMLSanitizer(HTMLParser):
+    """Strip unsupported tags (keep their text) and preserve allowed Telegram tags."""
 
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.result: list[str] = []
+        self.open_tags: list[str] = []
 
-def _balance_tags(text: str) -> str:
-    """Drop dangling closers and auto-close orphaned allowed tags."""
-    tag_re = re.compile(
-        r'</?(?:' + '|'.join(re.escape(t) for t in _TELEGRAM_HTML_TAGS) + r')'
-        r'(?:\s+\w+(?:\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^>\s]*))?)*\s*/?>',
-        re.IGNORECASE,
-    )
-    open_tags: list[str] = []
-    result: list[str] = []
-    i = 0
-    for m in tag_re.finditer(text):
-        result.append(text[i:m.start()])
-        tag = m.group(0)
-        tagname = re.match(r'</?(\w+)', tag).group(1).lower()
-        if tag.startswith('</'):
-            if open_tags and open_tags[-1] == tagname:
-                open_tags.pop()
-                result.append(tag)
-        elif tag.endswith('/>'):
-            result.append(tag)
-        else:
-            result.append(tag)
-            open_tags.append(tagname)
-        i = m.end()
-    result.append(text[i:])
-    for tag in reversed(open_tags):
-        result.append(f'</{tag}>')
-    return ''.join(result)
+    def _escape_text(self, text: str) -> str:
+        return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+    def _build_attrs(self, attrs: list[tuple[str, str | None]]) -> str:
+        parts: list[str] = []
+        for key, value in attrs:
+            if value is None:
+                continue
+            # href for <a> is handled separately; skip it here.
+            if key.lower() == 'href':
+                continue
+            escaped = (value
+                       .replace('&', '&amp;')
+                       .replace('"', '&quot;')
+                       .replace("'", '&#39;')
+                       .replace('<', '&lt;')
+                       .replace('>', '&gt;'))
+            parts.append(f' {key.lower()}="{escaped}"')
+        return ''.join(parts)
+
+    def _rebuild_a_tag(self, attrs: list[tuple[str, str | None]]) -> str | None:
+        href = None
+        for key, value in attrs:
+            if key.lower() == 'href' and value:
+                href = value
+                break
+        if not href:
+            return None
+        href = (href
+                .replace('&', '&amp;')
+                .replace('"', '&quot;')
+                .replace("'", '&#39;')
+                .replace('<', '&lt;')
+                .replace('>', '&gt;'))
+        return f'<a href="{href}">'
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag_lower = tag.lower()
+        if tag_lower == 'br':
+            self.result.append('\n')
+            return
+        if tag_lower not in _TELEGRAM_HTML_TAGS:
+            return
+        if tag_lower == 'a':
+            rebuilt = self._rebuild_a_tag(attrs)
+            if rebuilt:
+                self.result.append(rebuilt)
+                self.open_tags.append('a')
+            return
+        attrs_str = self._build_attrs(attrs)
+        self.result.append(f'<{tag_lower}{attrs_str}>')
+        self.open_tags.append(tag_lower)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag_lower = tag.lower()
+        if tag_lower == 'br':
+            self.result.append('\n')
+            return
+        if tag_lower not in _TELEGRAM_HTML_TAGS:
+            return
+        if tag_lower == 'a':
+            # Self-closing <a /> is invalid in Telegram; strip it.
+            return
+        attrs_str = self._build_attrs(attrs)
+        self.result.append(f'<{tag_lower}{attrs_str}/>')
+
+    def handle_endtag(self, tag: str) -> None:
+        tag_lower = tag.lower()
+        if tag_lower not in _TELEGRAM_HTML_TAGS:
+            return
+        if self.open_tags and self.open_tags[-1] == tag_lower:
+            self.open_tags.pop()
+            self.result.append(f'</{tag_lower}>')
+        # Dangling closers are dropped.
+
+    def handle_data(self, data: str) -> None:
+        self.result.append(self._escape_text(data))
+
+    def handle_entityref(self, name: str) -> None:
+        ch = html.unescape(f'&{name};')
+        self.result.append(self._escape_text(ch))
+
+    def handle_charref(self, name: str) -> None:
+        ch = html.unescape(f'&#{name};')
+        self.result.append(self._escape_text(ch))
+
+    def close(self) -> str:  # type: ignore[override]
+        super().close()
+        for tag in reversed(self.open_tags):
+            self.result.append(f'</{tag}>')
+        return ''.join(self.result)
 
 
 def _sanitize_html(text: str) -> str:
     """Sanitize CRM HTML for Telegram's HTML parse mode.
 
-    1. Replace <br> with newlines.
-    2. Decode all HTML entities.
-    3. Preserve allowed Telegram tags with placeholders.
-    4. Escape every remaining <, >, and &.
-    5. Restore allowed tags, validating <a href> and balancing tags.
+    - Strip unsupported tags but keep their text content.
+    - Preserve allowed tags: b, strong, i, em, u, ins, s, strike, del, a, code, pre.
+    - Escape stray <, >, & in text.
+    - Convert <br> to newlines.
     """
     if not text:
         return ""
+    parser = _TelegramHTMLSanitizer()
+    parser.feed(text)
+    return parser.close()
 
-    text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
-    text = html.unescape(text)
 
-    allowed_tag_re = re.compile(
-        r'</?(?:' + '|'.join(re.escape(t) for t in _TELEGRAM_HTML_TAGS) + r')'
-        r'(?:\s+\w+(?:\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^>\s]*))?)*\s*/?>',
-        re.IGNORECASE,
-    )
+def _format_mail_event(content: str, max_len: int = 500) -> str:
+    """Parse CRM mail JSON and return a concise readable block."""
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return _sanitize_html(content)
 
-    placeholders: list[str] = []
+    from_addr = _esc(str(data.get("from") or ""))
+    to_addr = _esc(str(data.get("to") or ""))
+    subject = _esc(str(data.get("subject") or ""))
+    body = str(data.get("introduction") or data.get("body") or "")
+    if len(body) > max_len:
+        body = body[:max_len - 1] + "…"
+    body = _sanitize_html(body)
 
-    def preserve_tag(m: re.Match) -> str:
-        raw = m.group(0)
-        tagname = re.match(r'</?(\w+)', raw).group(1).lower()
-        if raw.startswith('</'):
-            placeholders.append(raw)
-        elif raw.endswith('/>'):
-            if tagname == 'a':
-                return ''
-            placeholders.append(raw)
-        else:
-            if tagname == 'a':
-                cleaned = _clean_a_tag(raw)
-                if not cleaned:
-                    return ''
-                placeholders.append(cleaned)
-            else:
-                placeholders.append(raw)
-        return f'\x00{len(placeholders) - 1}\x00'
+    lines: list[str] = []
+    if from_addr:
+        lines.append(f"From: {from_addr}")
+    if to_addr:
+        lines.append(f"To: {to_addr}")
+    if subject:
+        lines.append(f"Subject: {subject}")
+    if body:
+        lines.append(f"Body: {body}")
+    return "\n".join(lines)
 
-    text = allowed_tag_re.sub(preserve_tag, text)
 
-    # Escape all literal HTML metacharacters outside allowed tags.
-    text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-
-    def restore_tag(m: re.Match) -> str:
-        return placeholders[int(m.group(1))]
-
-    text = re.sub(r'\x00(\d+)\x00', restore_tag, text)
-    return _balance_tags(text)
+def _format_event_body(category: str, content: str, max_len: int = 500) -> str:
+    cat_lower = category.lower()
+    if 'mail' in cat_lower or 'email' in cat_lower:
+        return _format_mail_event(content, max_len=max_len)
+    if len(content) > max_len:
+        content = content[:max_len - 1] + "…"
+    return _sanitize_html(content)
 
 
 HELP_TEXT = (
@@ -319,14 +371,16 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
         events = d.get("events", [])
         if events:
             lines.append("")
-            for ev in events:
+            for idx, ev in enumerate(events):
+                if idx > 0:
+                    lines.append("───────────────")
                 cat = ev.get("categoryName") or ""
                 content = ev.get("content", "")
                 created = _fmt_date(ev.get("created", ""))
                 if cat:
-                    lines.append(f"[{_esc(cat)}]")
+                    lines.append(f"<b>[{_esc(cat)}]</b>")
                 if content:
-                    lines.append(_sanitize_html(content))
+                    lines.append(_format_event_body(cat, content))
                 if created:
                     lines.append(f"— {_esc(created)}")
                 lines.append("")
