@@ -47,8 +47,9 @@ DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://127.0.0.1:8765")
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 PORTAL = os.environ.get("ONLYOFFICE_PORTAL_URL", "")
 
-# Last search query per chat, used to interpret "1", "2", ... replies.
+# Last search results per chat, used to interpret "1", "2", ... replies.
 _last_search: dict[int, str] = {}
+_last_deals: dict[int, list[dict]] = {}
 
 # ── Helpers ──
 
@@ -265,31 +266,30 @@ def main() -> None:
                     await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
                     return
 
-                # Number reply: re-run the last search to get the same result set
+                # Number reply: read from cached results (no re-fetch)
                 if text.isdigit():
-                    search = _last_search.get(chat_id, "")
-                    deals = await get_deals(contact_id, chat_id, search=search or None)
-                    if deals is None:
-                        await update.message.reply_text("I'm having trouble reaching the server. Please try again in a couple of minutes.", parse_mode="HTML")
+                    deals = _last_deals.get(chat_id, [])
+                    if not deals:
+                        await update.message.reply_text("No projects to select from. Send a project name to search.", parse_mode="HTML")
                         return
                     idx = int(text) - 1
                     if 0 <= idx < len(deals):
                         msg = format_deal_detail(deals, idx)
                         await update.message.reply_text(msg, parse_mode="HTML")
-                    elif not deals:
-                        await update.message.reply_text("No projects to select from. Send a project name to search.", parse_mode="HTML")
                     else:
+                        search = _last_search.get(chat_id, "")
                         msg = format_search_result(deals, search)
                         await update.message.reply_text(msg, parse_mode="HTML")
                     return
 
                 # Treat any other text as a title search
                 search = text
-                _last_search[chat_id] = search
                 deals = await get_deals(contact_id, chat_id, search=search)
                 if deals is None:
                     await update.message.reply_text("I'm having trouble reaching the server. Please try again in a couple of minutes.", parse_mode="HTML")
                     return
+                _last_deals[chat_id] = deals
+                _last_search[chat_id] = search
                 msg = format_search_result(deals, search)
                 await update.message.reply_text(msg, parse_mode="HTML")
                 return

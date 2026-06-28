@@ -841,7 +841,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             pass
         return None
 
-    def _bot_crm_proxy(self, portal: str, method: str, api_path: str, query: str = "") -> tuple[int, Any]:
+    def _bot_crm_proxy(self, portal: str, method: str, api_path: str, query: str = "", timeout: int = 30) -> tuple[int, Any]:
         """Make a CRM API call using bot credentials."""
         token = self._bot_crm_token(portal)
         if not token:
@@ -855,7 +855,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             method=method,
         )
         try:
-            with urllib.request.urlopen(req, context=_ssl_context(), timeout=30) as resp:
+            with urllib.request.urlopen(req, context=_ssl_context(), timeout=timeout) as resp:
                 return resp.status, json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             data = exc.read()
@@ -886,7 +886,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         _json_response(self, 200, mapping)
 
     def _handle_bot_deals(self) -> None:
-        self.log_message("BOT-DEBUG _handle_bot_deals entered")
         try:
             if not self._bot_verify_request():
                 _json_response(self, 403, {"error": "Forbidden"})
@@ -966,10 +965,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         "entityId": str(opp_id),
                         "startIndex": "0",
                         "count": "5",
-                        "sortBy": "date",
+                        "sortBy": "created",
                         "sortOrder": "descending",
                     })
-                    hcode, hdata = self._bot_crm_proxy(portal, "GET", "/api/2.0/crm/history/filter", hist_params)
+                    hcode, hdata = self._bot_crm_proxy(portal, "GET", "/api/2.0/crm/history/filter", hist_params, timeout=10)
                     events = []
                     if hcode < 400:
                         raw_events = hdata.get("response") if isinstance(hdata, dict) else []
@@ -1013,11 +1012,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         "latestUpdate": events[0] if events else None,
                     })
                 except Exception as exc:
-                    self.log_message("BOT-DEBUG error processing deal %s: %s", opp.get("id") or opp.get("ID"), exc)
+                    self.log_message("Error processing deal %s: %s", opp.get("id") or opp.get("ID"), exc)
 
             _json_response(self, 200, {"deals": deals})
         except Exception as exc:
-            self.log_message("BOT-DEBUG fatal in _handle_bot_deals: %s", exc)
+            self.log_message("Fatal in _handle_bot_deals: %s", exc)
             _json_response(self, 502, {"error": "Internal error"})
 
     def _handle_health_check(self) -> None:
