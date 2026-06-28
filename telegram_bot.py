@@ -215,7 +215,7 @@ def _sanitize_html(text: str) -> str:
     for m in re.finditer(r'<[^>]*>', text):
         before = text[i:m.start()]
         result.append(before.replace('&', '&amp;'))
-        result.append(m.group(0))
+        result.append(m.group(0).replace('&', '&amp;'))
         i = m.end()
     result.append(text[i:].replace('&', '&amp;'))
     return ''.join(result)
