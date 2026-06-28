@@ -914,7 +914,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             "count": "100",
             "filterValue": "",
             "contactId": str(contact_id),
-            "stageType": "open",
+            "stageType": "0",
             "sortBy": "date_created",
             "sortOrder": "descending",
         })

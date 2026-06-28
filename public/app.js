@@ -3911,18 +3911,24 @@ function updateBookmarkBodyClass() {
 
 const EMOJIS = ["😀","😃","😄","😁","😆","😅","😂","🤣","😊","😇","🙂","🙃","😉","😌","😍","🥰","😘","😗","😙","😚","😋","😛","😝","😜","🤪","🤨","🧐","🤓","😎","🤩","🥳","😏","😒","😞","😔","😟","😕","🙁","☹️","😣","😖","😫","😩","🥺","😢","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🤗","🤔","🤭","🤫","🤥","😶","😐","😑","😬","🙄","😯","😦","😧","😮","😲","🥱","😴","🤤","😪","😵","🤐","🥴","🤢","🤮","🤧","😷","🤒","🤕","🤑","🤠","😈","👿","👹","👺","🤡","💩","👻","💀","☠️","👽","👾","🤖","🎃","😺","😸","😹","😻","😼","😽","🙀","😿","😾","🙈","🙉","🙊","💋","💌","💘","💝","💖","💗","💓","💞","💕","💟","❣️","💔","❤️","🧡","💛","💚","💙","💜","🤎","🖤","🤍","💯","💢","💥","💫","💦","💨","🕳️","💣","💬","👁️‍🗨️","🗨️","🗯️","💭","💤","👍","👎","👌","✌️","🤞","🤟","🤘","🤙","👈","👉","👆","👇","☝️","✋","🤚","🖐️","🖖","👋","🤙","💪","🦾","🦿","🦵","🦶","👂","🦻","👃","🧠","🦷","🦴","👀","👁️","👅","👄","💋"];
 
-function showNotesEmojiPicker(textarea, btnEl) {
-  document.querySelectorAll(".notes-emoji-picker").forEach((el) => el.remove());
+function showNotesEmojiPicker(textarea, emojiBtn) {
+  if (!textarea || !emojiBtn) return;
+  // Remove any existing picker
+  const existing = document.querySelector("#notes-emoji-picker");
+  if (existing) { existing.remove(); return; }
   const picker = document.createElement("div");
-  picker.className = "presence-emoji-picker-overlay notes-emoji-picker";
+  picker.id = "notes-emoji-picker";
+  picker.className = "presence-emoji-picker presence-emoji-picker-overlay";
   picker.tabIndex = -1;
-  for (const em of EMOJIS) {
+  EMOJIS.forEach(em => {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = "presence-emoji-btn";
     b.textContent = em;
+    b.className = "presence-emoji-btn";
     b.tabIndex = -1;
-    b.addEventListener("click", () => {
+    b.setAttribute("role", "menuitem");
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
       insertEmoji(textarea, em, { preventFocus: true });
       picker.remove();
       requestAnimationFrame(() => {
@@ -3930,12 +3936,14 @@ function showNotesEmojiPicker(textarea, btnEl) {
       });
     });
     picker.appendChild(b);
-  }
+  });
+
+  // Append to body with fixed positioning and keep it pinned to the emoji button on scroll/resize
   document.body.appendChild(picker);
 
   const positionPicker = () => {
-    const btnRect = btnEl.getBoundingClientRect();
-    const isMobile = window.innerWidth < 640;
+    const btnRect = emojiBtn.getBoundingClientRect();
+    const isMobile = window.innerWidth < 480;
     picker.style.position = "fixed";
     picker.style.zIndex = "99999";
     picker.style.width = "auto";
@@ -3962,17 +3970,24 @@ function showNotesEmojiPicker(textarea, btnEl) {
   };
   positionPicker();
 
+  const scrollTargets = [window].filter(Boolean);
   const onScroll = () => requestAnimationFrame(positionPicker);
+  scrollTargets.forEach((t) => t.addEventListener("scroll", onScroll, { passive: true }));
   window.addEventListener("resize", onScroll);
 
-  const close = (e) => {
-    if (!picker.contains(e.target) && e.target !== btnEl) {
+  // Click away to close
+  const closePicker = (e) => {
+    if (!picker.contains(e.target) && e.target !== emojiBtn && !emojiBtn.contains(e.target)) {
+      e.stopPropagation();
       picker.remove();
-      document.removeEventListener("click", close);
+      scrollTargets.forEach((t) => t.removeEventListener("scroll", onScroll));
       window.removeEventListener("resize", onScroll);
+      document.removeEventListener("click", closePicker, true);
     }
   };
-  setTimeout(() => document.addEventListener("click", close), 0);
+  requestAnimationFrame(() => {
+    document.addEventListener("click", closePicker, true);
+  });
 }
 
 function renderBasicMarkdown(text) {

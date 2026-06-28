@@ -3629,12 +3629,6 @@ body {
   box-sizing: border-box;
 }
 
-/* Notes tile uses the overlay picker; keep it fixed and sized */
-.notes-emoji-picker {
-  position: fixed;
-  width: auto;
-}
-
 .presence-emoji-picker {
   grid-area: picker;
   background: var(--surface);
