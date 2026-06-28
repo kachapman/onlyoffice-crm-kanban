@@ -922,6 +922,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, code, data)
             return
         opportunities = data.get("response") if isinstance(data, dict) else []
+        self.log_message(
+            "BOT-DEBUG contact=%s raw_count=%s deals=%s",
+            contact_id,
+            len(opportunities or []),
+            json.dumps([{"id": o.get("id") or o.get("ID"), "stage_title": o.get("stageTitle"), "stage_type": ((o.get("stage") or {}).get("stageType") if isinstance(o.get("stage"), dict) else None)} for o in (opportunities or []) if isinstance(o, dict)]),
+        )
         # Filter to only open-stage deals locally (stageType = 0 or null)
         open_opps = []
         for opp in (opportunities or []):
