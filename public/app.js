@@ -3909,12 +3909,49 @@ function updateBookmarkBodyClass() {
   syncIndicatorStack();
 }
 
+const EMOJIS = ["😀","😃","😄","😁","😆","😅","😂","🤣","😊","😇","🙂","🙃","😉","😌","😍","🥰","😘","😗","😙","😚","😋","😛","😝","😜","🤪","🤨","🧐","🤓","😎","🤩","🥳","😏","😒","😞","😔","😟","😕","🙁","☹️","😣","😖","😫","😩","🥺","😢","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🤗","🤔","🤭","🤫","🤥","😶","😐","😑","😬","🙄","😯","😦","😧","😮","😲","🥱","😴","🤤","😪","😵","🤐","🥴","🤢","🤮","🤧","😷","🤒","🤕","🤑","🤠","😈","👿","👹","👺","🤡","💩","👻","💀","☠️","👽","👾","🤖","🎃","😺","😸","😹","😻","😼","😽","🙀","😿","😾","🙈","🙉","🙊","💋","💌","💘","💝","💖","💗","💓","💞","💕","💟","❣️","💔","❤️","🧡","💛","💚","💙","💜","🤎","🖤","🤍","💯","💢","💥","💫","💦","💨","🕳️","💣","💬","👁️‍🗨️","🗨️","🗯️","💭","💤","👍","👎","👌","✌️","🤞","🤟","🤘","🤙","👈","👉","👆","👇","☝️","✋","🤚","🖐️","🖖","👋","🤙","💪","🦾","🦿","🦵","🦶","👂","🦻","👃","🧠","🦷","🦴","👀","👁️","👅","👄","💋"];
+
+function showNotesEmojiPicker(textarea, btnEl) {
+  document.querySelectorAll(".notes-emoji-picker").forEach((el) => el.remove());
+  const picker = document.createElement("div");
+  picker.className = "presence-emoji-picker presence-emoji-picker-overlay notes-emoji-picker";
+  picker.tabIndex = -1;
+  for (const em of EMOJIS) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "presence-emoji-btn";
+    b.textContent = em;
+    b.tabIndex = -1;
+    b.addEventListener("click", () => {
+      insertEmoji(textarea, em, { preventFocus: true });
+      picker.remove();
+      requestAnimationFrame(() => {
+        try { textarea.focus({ preventScroll: true }); } catch { textarea.focus(); }
+      });
+    });
+    picker.appendChild(b);
+  }
+  document.body.appendChild(picker);
+  const rect = btnEl.getBoundingClientRect();
+  picker.style.left = Math.min(rect.left, window.innerWidth - 250) + "px";
+  picker.style.top = (rect.bottom + 4) + "px";
+  const close = (e) => {
+    if (!picker.contains(e.target) && e.target !== btnEl) {
+      picker.remove();
+      document.removeEventListener("click", close);
+    }
+  };
+  setTimeout(() => document.addEventListener("click", close), 0);
+}
+
 function renderBasicMarkdown(text) {
   const lines = String(text || "").split(/\r?\n/);
   const out = [];
   let inUl = false;
   let inOl = false;
   let inCheck = false;
+
+  const sectionLevels = [];
 
   const closeLists = () => {
     if (inUl) {
@@ -3971,7 +4008,12 @@ function renderBasicMarkdown(text) {
     if (hm) {
       closeLists();
       const level = hm[1].length;
-      out.push(`<h${level} class="notes-md-h${level}">${inlineFormat(hm[2])}</h${level}>`);
+      while (sectionLevels.length > 0 && sectionLevels[sectionLevels.length - 1] >= level) {
+        out.push("</details>");
+        sectionLevels.pop();
+      }
+      out.push(`<details class="notes-md-section" open><summary class="notes-md-h${level}">${inlineFormat(hm[2])}</summary>`);
+      sectionLevels.push(level);
       continue;
     }
     if (/^>\s?/.test(trimmed)) {
@@ -4017,6 +4059,10 @@ function renderBasicMarkdown(text) {
     out.push(`<p>${inlineFormat(compact)}</p>`);
   }
   closeLists();
+  while (sectionLevels.length > 0) {
+    out.push("</details>");
+    sectionLevels.pop();
+  }
   return out.join("") || '<p class="notes-md-empty">Nothing to preview yet.</p>';
 }
 
@@ -4338,10 +4384,18 @@ function bindNotesTileChrome(section, notes, tileId) {
     showQuarterWidth: true,
   });
 
+  const emojiBtn = document.createElement("button");
+  emojiBtn.type = "button";
+  emojiBtn.className = "btn btn-ghost btn-notes-emoji";
+  emojiBtn.textContent = "😊";
+  emojiBtn.title = "Insert emoji";
+  emojiBtn.setAttribute("aria-label", "Insert emoji");
+
   utils.append(
     fileMenu,
     copyBtn,
     dateBtn,
+    emojiBtn,
     listBtnsWrap,
     formatBtnsWrap,
     printBtn,
@@ -4488,6 +4542,14 @@ function bindNotesTileChrome(section, notes, tileId) {
       wrapNotesSelection(editor, "`", "`");
       notes.content = editor.value;
       scheduleNotesTileSave(notes);
+    }
+  });
+
+  emojiBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const editor = $(".notes-editor", section);
+    if (editor && notes.viewMode !== "preview") {
+      showNotesEmojiPicker(editor, emojiBtn);
     }
   });
 

@@ -5439,6 +5439,31 @@ body {
   font-size: 0.92rem;
 }
 
+.notes-md-section {
+  margin: 0;
+  padding: 0;
+}
+.notes-md-section > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+  list-style: none;
+}
+.notes-md-section > summary::-webkit-details-marker {
+  display: none;
+}
+.notes-md-section > summary::before {
+  content: "▶";
+  font-size: 0.65em;
+  opacity: 0.5;
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+.notes-md-section[open] > summary::before {
+  content: "▼";
+}
+
 .notes-preview p {
   margin: 0.35rem 0;
 }
