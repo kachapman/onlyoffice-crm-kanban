@@ -131,14 +131,16 @@ async def get_mapping(chat_id: int) -> dict | None:
     return await _get("/api/bot/me", {"chatId": chat_id})
 
 
-async def get_deals(contact_id: int, chat_id: int | None = None, search: str | None = None) -> list[dict]:
+async def get_deals(contact_id: int, chat_id: int | None = None, search: str | None = None) -> list[dict] | None:
     params: dict = {"contactId": contact_id}
     if chat_id:
         params["chatId"] = chat_id
     if search:
         params["search"] = search
     result = await _get("/api/bot/deals", params)
-    if result and "deals" in result:
+    if result is None:
+        return None  # API error (unreachable / timeout)
+    if "deals" in result:
         return result["deals"]
     return []
 
@@ -266,6 +268,9 @@ def main() -> None:
             if text.isdigit():
                 search = _last_search.get(chat_id, "")
                 deals = await get_deals(contact_id, chat_id, search=search or None)
+                if deals is None:
+                    await update.message.reply_text("I'm having trouble reaching the server. Please try again in a couple of minutes.", parse_mode="HTML")
+                    return
                 idx = int(text) - 1
                 if 0 <= idx < len(deals):
                     msg = format_deal_detail(deals, idx)
@@ -281,6 +286,9 @@ def main() -> None:
             search = text
             _last_search[chat_id] = search
             deals = await get_deals(contact_id, chat_id, search=search)
+            if deals is None:
+                await update.message.reply_text("I'm having trouble reaching the server. Please try again in a couple of minutes.", parse_mode="HTML")
+                return
             msg = format_search_result(deals, search)
             await update.message.reply_text(msg, parse_mode="HTML")
             return
