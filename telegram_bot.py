@@ -324,6 +324,8 @@ def _extract_forward_info(body: str) -> tuple[str, str | None]:
     pos = m.end()
     fields: dict[str, str] = {}
 
+    MAX_HEADER_VALUE_LEN = 250
+
     while True:
         fm = header_field_re.match(body, pos)
         if not fm:
@@ -331,8 +333,17 @@ def _extract_forward_info(body: str) -> tuple[str, str | None]:
         key = fm.group(1).lower()
         value_start = fm.end()
         next_fm = header_field_re.search(body, value_start)
+        # Body can start with a quoted line, a markdown link/image, or a reply attribution.
         body_indicator = re.search(r'(?<=\s)[\[>]', body[value_start:])
         body_indicator_pos = value_start + body_indicator.start() if body_indicator else len(body)
+        # Also treat a reply attribution as the end of the header block.
+        reply_indicator = re.search(r'\s+On\s+(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)', body[value_start:], re.IGNORECASE)
+        if reply_indicator:
+            body_indicator_pos = min(body_indicator_pos, value_start + reply_indicator.start())
+        # Cap individual header values so a long body doesn't get swallowed.
+        max_pos = value_start + MAX_HEADER_VALUE_LEN
+        if body_indicator_pos > max_pos:
+            body_indicator_pos = max_pos
 
         if next_fm and next_fm.start() < body_indicator_pos:
             end = next_fm.start()
@@ -363,20 +374,29 @@ def _extract_forward_info(body: str) -> tuple[str, str | None]:
 
 
 def _clean_reply_attribution(body: str) -> tuple[str, str | None]:
-    """Convert 'On ... wrote:' attribution into a clean [On ... wrote] line."""
+    """Convert email-style 'On <date>, <sender> wrote:' into a clean [On ... wrote] line."""
     reply_re = re.compile(r'\s+On\s+(.+?)\s+wrote:\s*', re.IGNORECASE)
-    m = reply_re.search(body)
-    if not m:
-        return body, None
-    attribution = m.group(1).strip()
-    info = f"On {attribution} wrote"
-    before = body[:m.start()].rstrip()
-    after = body[m.end():].lstrip()
-    cleaned = (before + f"\n\n[{info}]" + ('\n\n' + after if after else '')).strip()
-    return cleaned, info
+    starts_with_date = re.compile(
+        r'^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*(?:,\s+))?'
+        r'(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{2,4})',
+        re.IGNORECASE,
+    )
+    pos = 0
+    while True:
+        m = reply_re.search(body, pos)
+        if not m:
+            return body, None
+        attribution = m.group(1).strip()
+        if starts_with_date.match(attribution):
+            info = f"On {attribution} wrote"
+            before = body[:m.start()].rstrip()
+            after = body[m.end():].lstrip()
+            cleaned = (before + f"\n\n[{info}]" + ('\n\n' + after if after else '')).strip()
+            return cleaned, info
+        pos = m.start() + 1
 
 
-def _format_mail_event(content: str, max_len: int = 1000) -> str:
+def _format_mail_event(content: str, max_len: int = 1500) -> str:
     """Parse CRM mail JSON and return a concise readable block."""
     try:
         data = json.loads(content)
@@ -401,6 +421,8 @@ def _format_mail_event(content: str, max_len: int = 1000) -> str:
     body = str(data.get("introduction") or data.get("body") or "")
     body, forward_info = _extract_forward_info(body)
     body, _ = _clean_reply_attribution(body)
+    # Convert markdown links to bare URLs so they don't render as raw `[text](url)`.
+    body = re.sub(r'\[([^\]]*)\]\(([^)]+)\)', r'\2', body)
     # Put each quoted email line on its own line for readability.
     body = re.sub(r'\s*>\s*', '\n> ', body).strip()
     if len(body) > max_len:
