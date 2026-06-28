@@ -171,20 +171,26 @@ _TELEGRAM_HTML_TAGS = frozenset({
 def _sanitize_html(text: str) -> str:
     """Sanitize CRM HTML for Telegram's HTML parse mode.
 
-    Keeps Telegram-safe tags (bold, italic, underline, etc.)
-    and escapes bare & that aren't part of valid HTML entities.
+    1. Strip non-Telegram tags (p, div, span, etc.) keeping inner text.
+    2. Decode ALL HTML entities to actual characters (handles &nbsp;,
+       &mdash;, &amp;, etc. — Telegram doesn't support named entities).
+    3. Re-escape bare & outside tag brackets to &amp;.
     """
-    text = re.sub(
-        r'&(?!(?:#\d+|#x[0-9a-fA-F]+|\w{1,32});)',
-        '&amp;',
-        text,
-    )
     text = re.sub(
         r'</?(\w+)(\s[^>]*)?>',
         lambda m: m.group(0) if m.group(1).lower() in _TELEGRAM_HTML_TAGS else '',
         text,
     )
-    return text
+    text = html.unescape(text)
+    result = []
+    i = 0
+    for m in re.finditer(r'<[^>]*>', text):
+        before = text[i:m.start()]
+        result.append(before.replace('&', '&amp;'))
+        result.append(m.group(0))
+        i = m.end()
+    result.append(text[i:].replace('&', '&amp;'))
+    return ''.join(result)
 
 
 HELP_TEXT = (
