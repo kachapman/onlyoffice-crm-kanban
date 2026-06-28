@@ -17,6 +17,7 @@ Customer flow (once linked):
 from __future__ import annotations
 
 import asyncio
+import email.utils
 import html
 import json
 import logging
@@ -297,8 +298,18 @@ def _format_mail_event(content: str, max_len: int = 500) -> str:
     except json.JSONDecodeError:
         return _sanitize_html(content)
 
-    from_addr = _esc(str(data.get("from") or ""))
-    to_addr = _esc(str(data.get("to") or ""))
+    def _parse_address(raw: str) -> str:
+        if not raw:
+            return ""
+        name, addr = email.utils.parseaddr(raw)
+        if name and addr:
+            return _esc(f"{name} <{addr}>")
+        if addr:
+            return _esc(addr)
+        return _esc(raw)
+
+    from_addr = _parse_address(str(data.get("from") or ""))
+    to_addr = _parse_address(str(data.get("to") or ""))
     subject = _esc(str(data.get("subject") or ""))
     body = str(data.get("introduction") or data.get("body") or "")
     if len(body) > max_len:
@@ -313,6 +324,7 @@ def _format_mail_event(content: str, max_len: int = 500) -> str:
     if subject:
         lines.append(f"Subject: {subject}")
     if body:
+        lines.append("")
         lines.append(f"Body: {body}")
     return "\n".join(lines)
 
