@@ -12607,6 +12607,15 @@ function renderPresenceTileCompact(snapshot = null) {
   list.className = "presence-list-compact";
 
   const renderUserRow = (u) => {
+    // Defensive: never show auto/inferred status text for offline users.
+    // The server should strip it, but stale snapshots or cross-session cache
+    // can leak "Reviewing: ..." next to "last seen X ago".
+    if (!u.online) {
+      u.autoStatus = '';
+      u.status = '';
+      u.inferred = false;
+    }
+
     const row = document.createElement("div");
     row.className = "presence-user";
 

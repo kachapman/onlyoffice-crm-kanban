@@ -2,6 +2,16 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [Unreleased]
+
+## [1.91.5] — 2026-06-27
+
+### Fixed
+- **Presence: stale autoStatus also stripped in Team tile.** The v1.91.4 cleanup only ran in the modal roster; the embedded dashboard tile (`renderPresenceTileCompact`) now clears `autoStatus`/`status`/`inferred` for offline users too.
+
+### Files changed
+- `public/app.js`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`, `docs/RELEASE_v1.91.5.md`
+
 ## [1.91.4] — 2026-06-27
 
 ### Added
