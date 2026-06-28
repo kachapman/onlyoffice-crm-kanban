@@ -168,21 +168,49 @@ _TELEGRAM_HTML_TAGS = frozenset({
 })
 
 
+_SELF_CLOSING_TAGS = frozenset({'br', 'hr', 'img', 'input', 'meta', 'link'})
+
+
 def _sanitize_html(text: str) -> str:
     """Sanitize CRM HTML for Telegram's HTML parse mode.
 
-    1. Strip non-Telegram tags (p, div, span, etc.) keeping inner text.
-    2. Decode ALL HTML entities to actual characters (handles &nbsp;,
+    1. Decode ALL HTML entities to actual characters (handles &nbsp;,
        &mdash;, &amp;, etc. — Telegram doesn't support named entities).
+    2. Strip non-Telegram tags; track and balance Telegram-safe tags
+       so orphaned openings are auto-closed and dangling closings removed.
     3. Re-escape bare & outside tag brackets to &amp;.
     """
-    text = re.sub(
-        r'</?(\w+)(\s[^>]*)?>',
-        lambda m: m.group(0) if m.group(1).lower() in _TELEGRAM_HTML_TAGS else '',
-        text,
-    )
     text = html.unescape(text)
-    result = []
+
+    open_tags: list[str] = []
+
+    def _replace_tag(m: re.Match) -> str:
+        raw = m.group(0)
+        tagname = m.group(1).lower()
+
+        if tagname in _SELF_CLOSING_TAGS or raw.endswith('/>'):
+            if tagname in _TELEGRAM_HTML_TAGS:
+                return raw
+            return ''
+
+        if raw.startswith('</'):
+            if tagname in _TELEGRAM_HTML_TAGS:
+                if open_tags and open_tags[-1] == tagname:
+                    open_tags.pop()
+                    return raw
+                return ''
+        elif tagname in _TELEGRAM_HTML_TAGS:
+            open_tags.append(tagname)
+            return raw
+
+        return ''
+
+    text = re.sub(r'</?(\w+)(\s[^>]*)?>', _replace_tag, text)
+
+    for tag in reversed(open_tags):
+        text += f'</{tag}>'
+
+    result: list[str] = []
     i = 0
     for m in re.finditer(r'<[^>]*>', text):
         before = text[i:m.start()]
