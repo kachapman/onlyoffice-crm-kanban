@@ -21,6 +21,7 @@ import html
 import json
 import logging
 import os
+import re
 import sys
 
 import httpx
@@ -160,6 +161,32 @@ def _esc(text: str) -> str:
     return html.escape(str(text), quote=False)
 
 
+_TELEGRAM_HTML_TAGS = frozenset({
+    'b', 'strong', 'i', 'em', 'u', 'ins',
+    's', 'strike', 'del',
+    'a', 'code', 'pre', 'br',
+})
+
+
+def _sanitize_html(text: str) -> str:
+    """Sanitize CRM HTML for Telegram's HTML parse mode.
+
+    Keeps Telegram-safe tags (bold, italic, underline, etc.)
+    and escapes bare & that aren't part of valid HTML entities.
+    """
+    text = re.sub(
+        r'&(?!(?:#\d+|#x[0-9a-fA-F]+|\w{1,32});)',
+        '&amp;',
+        text,
+    )
+    text = re.sub(
+        r'</?(\w+)(\s[^>]*)?>',
+        lambda m: m.group(0) if m.group(1).lower() in _TELEGRAM_HTML_TAGS else '',
+        text,
+    )
+    return text
+
+
 HELP_TEXT = (
     "Send a project name (or part of it) to look it up.\n"
     "If several match, I'll send a numbered list — reply with a number to see full details.\n"
@@ -208,7 +235,7 @@ def format_deal_detail(deals: list[dict], index: int) -> str:
         if content:
             lines.append("")
             lines.append("Latest customer update:")
-            lines.append(_esc(content))
+            lines.append(_sanitize_html(content))
             if created:
                 lines.append(f"— {_esc(created)}")
     lines.append("")
