@@ -14451,6 +14451,7 @@ const HISTORY_ICON_SMS = `<svg xmlns="http://www.w3.org/2000/svg" width="14" hei
 const HISTORY_ICON_NOTE = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8Z"/><path d="M15 3v4a2 2 0 0 0 2 2h4"/></svg>`;
 const HISTORY_ICON_MEETING = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>`;
 const HISTORY_ICON_DEFAULT = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`;
+const HISTORY_ICON_CHAT = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
 
 function historyCategoryIconHtml(ev) {
   const cat = historyEventCategoryLabel(ev).toLowerCase();
@@ -14459,6 +14460,7 @@ function historyCategoryIconHtml(ev) {
   if (/\b(text|sms)\b/.test(cat) || /\btext message\b/.test(cat)) return HISTORY_ICON_SMS;
   if (/\b(meeting|appointment)\b/.test(cat)) return HISTORY_ICON_MEETING;
   if (/\b(note|comment|event)\b/.test(cat)) return HISTORY_ICON_NOTE;
+  if (/\b(customer update)\b/.test(cat)) return HISTORY_ICON_CHAT;
   return HISTORY_ICON_DEFAULT;
 }
 
@@ -15448,6 +15450,10 @@ function renderHistoryAttachmentsAside(parent, attachments) {
 function renderHistoryEventItem(ev) {
   const li = document.createElement("li");
   li.className = "opp-preview-history-item";
+  const itemCat = historyEventCategoryLabel(ev).toLowerCase();
+  if (itemCat.includes("customer update")) {
+    li.className += " opp-preview-history-item--customer-update";
+  }
 
   const mailPayload = parseHistoryMailPayload(ev);
   const mailIds = extractMailMessageIds(ev);

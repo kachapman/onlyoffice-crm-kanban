@@ -4681,6 +4681,11 @@ body {
   border-bottom: none;
 }
 
+.opp-preview-history-item--customer-update {
+  border-left: 3px solid #22c55e;
+  padding-left: calc(0.75rem - 3px);
+}
+
 .opp-preview-history-meta-row {
   display: flex;
   align-items: flex-start;
