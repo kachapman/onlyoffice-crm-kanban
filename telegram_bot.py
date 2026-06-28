@@ -181,7 +181,10 @@ def format_search_result(deals: list[dict], search: str) -> str:
         lines.append("\n".join(parts))
     lines.append("")
     lines.append("Reply with a number (1, 2, ...) to see full details.")
-    return "\n".join(lines)
+    msg = "\n".join(lines)
+    if len(msg) > 4000:
+        msg = msg[:3980] + "\n\n\u2026 (message truncated)"
+    return msg
 
 
 def format_deal_detail(deals: list[dict], index: int) -> str:
@@ -205,7 +208,7 @@ def format_deal_detail(deals: list[dict], index: int) -> str:
         if content:
             lines.append("")
             lines.append("Latest customer update:")
-            lines.append(content)
+            lines.append(_esc(content))
             if created:
                 lines.append(f"— {_esc(created)}")
     lines.append("")
