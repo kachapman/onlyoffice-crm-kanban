@@ -2,17 +2,25 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
-## [Unreleased]
+## [1.91.4] — 2026-06-27
 
 ### Added
 - **Nickname field for bot customer mappings.** New text input in the "Invite Customer" form to label each code (e.g. "Office manager"). Nickname shown in the Existing Mappings list with a ✎ edit button (inline prompt). New server endpoint `PUT /api/bot-customers/nickname`. Stored in `crm_bot_store.py` mapping entries and preserved through the verify-code flow. (`FEAT-025`)
 - **Rich text (HTML) in bot messages.** All Telegram bot `reply_text` calls now use `parse_mode="HTML"`. CRM note content with `<b>`, `<i>`, etc. renders as formatted text. Plain-text fields (titles, stage names) are HTML-escaped to prevent breakage.
+- **Crash banner: 15s grace period after tab resume.** Suppresses the amber banner for 15s when the tab becomes visible, preventing false positives from stale-connection failures due to browser throttle during background.
 
 ### Changed
 - **Bot project summary cleaned up.** Latest customer note and amount removed from the summary list (only title + status shown). Full details including note and amount still visible in the detail view when customer replies with a number.
 
 ### Fixed
 - `.gitignore` updated to exclude `romanian_roadtrip.md`.
+- **Mobile: bot & event-log buttons no longer overlap header.** Stacked below sign-out on a second row (`@media max-width: 640px`).
+- **Mobile: opportunity preview modal fills screen.** Overrode `96vw` width to `100%` inside the modal container to prevent right-side cutoff.
+- **Presence: stale autoStatus no longer leaks for offline users.** After merging cache + snapshot, `autoStatus`/`status`/`inferred` are cleared for any entry not currently `online`. Prevents "Reviewing: … · last seen 23h ago" text.
+- **Presence: team roster no longer goes blank on poll failure.** `fetchPresenceSnapshot()` catch no longer wipes `state.presenceData` — keeps last good snapshot so the tile/modal stays populated. Amber banner still shown.
+
+### Files changed
+- `public/app.js`, `public/styles.css`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`, `docs/RELEASE_v1.91.4.md`
 
 ## [1.2.0] — 2026-06-26
 

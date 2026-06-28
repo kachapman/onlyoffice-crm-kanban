@@ -5897,6 +5897,20 @@ body {
     padding: 0.35rem 0.55rem;
   }
 
+  .event-log-btn {
+    top: 2.5rem;
+    right: 1rem;
+  }
+
+  .bot-customers-btn {
+    top: 2.5rem;
+    right: 3.75rem;
+  }
+
+  .modal-card-opp-preview {
+    width: 100%;
+  }
+
   .hero-logo {
     width: 64px;
   }

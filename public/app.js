@@ -2331,6 +2331,8 @@ function startConnectingGrace(descriptor) {
   }, CONNECTING_GRACE_MS);
 }
 
+let _crashBannerSuppressUntil = 0;
+
 function onCRMSuccess() {
   clearConnectingTimer();
   lastCRMSuccessTime = Date.now();
@@ -2342,6 +2344,7 @@ function onCRMSuccess() {
 }
 
 function showCrmCrashBanner() {
+  if (Date.now() < _crashBannerSuppressUntil) return;
   const el = $("#crm-crash-banner");
   if (!el) return;
   el.textContent = "CRM is temporarily unreachable and may have crashed. Refresh again in 30 seconds or contact system administrator.";
@@ -10884,8 +10887,9 @@ async function fetchPresenceSnapshot() {
     return state.presenceData;
   } catch {
     showCrmCrashBanner();
-    state.presenceData = { users: [], myRecentDms: [] };
-    updateClientPresenceCache(state.presenceData);
+    // Keep last good snapshot — wiping with empty users triggers "no one in team list"
+    // flash and strips the data that the modal/tile rely on when CRM comes back.
+    // Callers that need a guaranteed users array handle null via `|| { users: [] }`.
     return state.presenceData;
   }
 }
@@ -11477,6 +11481,16 @@ function renderPresenceUserList(container, snapshot, usersCache, onUserClick) {
     if (id) {
       const sid = String(id);
       presenceById.set(sid, { ...(presenceById.get(sid) || {}), ...p });
+    }
+  });
+  // Strip auto-status for any user not currently online — stale cache entries from
+  // cross-portal sessions or failed polls would otherwise leak "Reviewing: …" text
+  // alongside "last seen X ago".
+  presenceById.forEach((p) => {
+    if (!p.online) {
+      p.autoStatus = '';
+      p.status = '';
+      p.inferred = false;
     }
   });
 
@@ -18667,6 +18681,9 @@ document.addEventListener("visibilitychange", () => {
     }
     groupCardObservers.clear();
   } else {
+    // Tab just became visible — suppress crash banner for 15s to absorb
+    // stale-connection failures from browser throttle during background.
+    _crashBannerSuppressUntil = Date.now() + 15000;
     // Re-observe after a short delay to let the browser settle
     setTimeout(() => {
       for (const group of state.groups) {
