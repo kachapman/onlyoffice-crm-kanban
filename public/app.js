@@ -17484,7 +17484,7 @@ function bindEventLogModal() {
   });
 }
 
-// ── Bot Customers Modal ──
+// ── Customer Bot Modal ──
 
 function updateBotCustomersBtn() {
   const btn = $("#bot-customers-btn");

@@ -4,6 +4,22 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 ## [Unreleased]
 
+## [2.0.3] — 2026-06-27
+
+### Added
+- **Customer Bot: search by project title.** Linked customers now type a project name (or part of it). The bot searches open deals by title: 0 matches → not found; 1 match → full detail; 2+ matches → numbered list, reply with a number for detail. Added `?search=` parameter to `/api/bot/deals` (server-side filtering on already-fetched contact deals).
+- **Customer Bot: `/help` command and help trigger words.** Customers can send `/help`, "help", or "?" for instructions.
+
+### Changed
+- **Customer Bot modal renamed.** User-visible title and button label changed from "Bot Customers" to "Customer Bot".
+- **Customer Bot welcome message simplified.** After linking, customers are told to send a project name instead of receiving a full list.
+
+### Fixed
+- **Mobile: bot button actually moves below sign-out.** Previous CSS override was overridden by the desktop `.bot-customers-btn` rule due to source order. Moved mobile header-button overrides to after the desktop rule so the bot button sits at `right: 1rem` (directly under sign-out) and event-log at `right: 3.75rem`.
+
+### Files changed
+- `telegram_bot.py`, `server.py`, `public/app.js`, `public/index.html`, `public/styles.css`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`, `docs/RELEASE_v2.0.3.md`
+
 ## [2.0.2] — 2026-06-27
 
 ### Fixed

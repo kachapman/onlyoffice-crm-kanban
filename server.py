@@ -987,6 +987,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "latestUpdate": events[0] if events else None,
             })
 
+        # Optional title search (efficient: filter already-fetched contact deals)
+        search = (qs.get("search") or [""])[0].strip().lower()
+        if search:
+            deals = [d for d in deals if search in d["title"].lower()]
+
         _json_response(self, 200, {"deals": deals})
 
     def _handle_health_check(self) -> None:

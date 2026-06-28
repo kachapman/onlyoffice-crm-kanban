@@ -1,10 +1,17 @@
-"""Telegram bot for customer deal status queries.
+"""Telegram bot for customer project status queries.
 
 Usage:
   TELEGRAM_BOT_TOKEN=xxx DASHBOARD_URL=http://127.0.0.1:8765 python3 telegram_bot.py
 
 The bot polls Telegram for messages, verifies invite codes, and returns
-curated deal info from the CRM (via the dashboard proxy).
+curated project info from the CRM (via the dashboard proxy).
+
+Customer flow (once linked):
+  - Send a project name (or part of it) to search open projects.
+  - 1 match  → full detail is shown immediately.
+  - N matches → numbered list; reply with a number for full detail.
+  - 0 matches → "No projects found matching '...'".
+  - Send /help for instructions.
 """
 
 from __future__ import annotations
@@ -39,6 +46,9 @@ if os.path.isfile(_env_path):
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://127.0.0.1:8765")
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 PORTAL = os.environ.get("ONLYOFFICE_PORTAL_URL", "")
+
+# Last search query per chat, used to interpret "1", "2", ... replies.
+_last_search: dict[int, str] = {}
 
 # ── Helpers ──
 
@@ -121,10 +131,12 @@ async def get_mapping(chat_id: int) -> dict | None:
     return await _get("/api/bot/me", {"chatId": chat_id})
 
 
-async def get_deals(contact_id: int, chat_id: int | None = None) -> list[dict]:
+async def get_deals(contact_id: int, chat_id: int | None = None, search: str | None = None) -> list[dict]:
     params: dict = {"contactId": contact_id}
     if chat_id:
         params["chatId"] = chat_id
+    if search:
+        params["search"] = search
     result = await _get("/api/bot/deals", params)
     if result and "deals" in result:
         return result["deals"]
@@ -145,10 +157,19 @@ def _esc(text: str) -> str:
     return html.escape(str(text), quote=False)
 
 
-def format_deal_summary(deals: list[dict]) -> str:
+HELP_TEXT = (
+    "Send a project name (or part of it) to look it up.\n"
+    "If several match, I'll send a numbered list — reply with a number to see full details.\n"
+    "Need a new invite code? Contact your agent."
+)
+
+
+def format_search_result(deals: list[dict], search: str) -> str:
     if not deals:
-        return "No open projects found for your contact."
-    lines = ["Your open projects:", ""]
+        return f"No projects found matching '{_esc(search)}'."
+    if len(deals) == 1:
+        return format_deal_detail(deals, 0)
+    lines = [f"Projects matching '{_esc(search)}':", ""]
     for i, d in enumerate(deals, 1):
         parts = [f"{i}. {_esc(d['title'])}"]
         stage = d.get("stage", "")
@@ -185,7 +206,7 @@ def format_deal_detail(deals: list[dict], index: int) -> str:
             if created:
                 lines.append(f"— {_esc(created)}")
     lines.append("")
-    lines.append("Send any message to see your projects again.")
+    lines.append("Send another project name to search again.")
     return "\n".join(lines)
 
 
@@ -210,15 +231,20 @@ def main() -> None:
 
     async def start(update: Update, _ctx) -> None:
         await update.message.reply_text(
-            "Welcome! Send me your invite code or any message to see your project updates.",
+            "Welcome! Send me your invite code to get started. "
+            "Once linked, send a project name to find it.",
             parse_mode="HTML",
         )
+
+    async def help_command(update: Update, _ctx) -> None:
+        await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
 
     async def handle_message(update: Update, _ctx) -> None:
         if not update.message or not update.message.text:
             return
         chat_id = update.effective_chat.id
         text = update.message.text.strip()
+        lower = text.lower()
 
         logger.info("Message from chat %d: %s", chat_id, text[:50])
 
@@ -231,30 +257,43 @@ def main() -> None:
                 await update.message.reply_text("Your account is not fully set up. Please contact support.", parse_mode="HTML")
                 return
 
-            deals = await get_deals(contact_id, chat_id)
+            # Help request
+            if lower in ("/help", "help", "?"):
+                await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
+                return
 
+            # Number reply: re-run the last search to get the same result set
             if text.isdigit():
+                search = _last_search.get(chat_id, "")
+                deals = await get_deals(contact_id, chat_id, search=search or None)
                 idx = int(text) - 1
                 if 0 <= idx < len(deals):
                     msg = format_deal_detail(deals, idx)
                     await update.message.reply_text(msg, parse_mode="HTML")
-                    return
+                elif not deals:
+                    await update.message.reply_text("No projects to select from. Send a project name to search.", parse_mode="HTML")
                 else:
-                    msg = format_deal_summary(deals)
+                    msg = format_search_result(deals, search)
                     await update.message.reply_text(msg, parse_mode="HTML")
-                    return
-            else:
-                msg = format_deal_summary(deals)
-                await update.message.reply_text(msg, parse_mode="HTML")
                 return
+
+            # Treat any other text as a title search
+            search = text
+            _last_search[chat_id] = search
+            deals = await get_deals(contact_id, chat_id, search=search)
+            msg = format_search_result(deals, search)
+            await update.message.reply_text(msg, parse_mode="HTML")
+            return
         else:
+            # Not linked yet — treat message as invite code
             result = await verify_code(text, chat_id)
             if result:
                 contact_id = result.get("contactId")
                 if contact_id:
-                    deals = await get_deals(contact_id, chat_id)
-                    msg = "✅ You've been linked! Here are your open projects:\n\n"
-                    msg += format_deal_summary(deals)
+                    msg = (
+                        "✅ You've been linked! Send a project name to find it.\n\n"
+                        "Example: <b>roof</b> or <b>Smith</b>"
+                    )
                 else:
                     msg = "✅ You've been linked! But we couldn't find any projects yet."
                 await update.message.reply_text(msg, parse_mode="HTML")
@@ -267,6 +306,7 @@ def main() -> None:
                 )
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("Bot polling...")
