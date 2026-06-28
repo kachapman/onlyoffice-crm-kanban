@@ -291,12 +291,32 @@ def _sanitize_html(text: str) -> str:
     return parser.close()
 
 
+def _extract_mail_fields(content: str) -> dict[str, str] | None:
+    """Best-effort extraction from possibly truncated CRM mail JSON."""
+    fields: dict[str, str] = {}
+    patterns = {
+        "from": r'"from"\s*:\s*"((?:\\.|[^"\\])*)"',
+        "to": r'"to"\s*:\s*"((?:\\.|[^"\\])*)"',
+        "subject": r'"subject"\s*:\s*"((?:\\.|[^"\\])*)"',
+        "introduction": r'"introduction"\s*:\s*"((?:\\.|[^"\\])*)"',
+    }
+    for key, pattern in patterns.items():
+        m = re.search(pattern, content, re.IGNORECASE)
+        if m:
+            value = m.group(1)
+            value = value.replace('\\\\', '\\').replace('\\"', '"').replace('\\n', '\n').replace('\\r', '').replace('\\t', '\t')
+            fields[key] = value
+    return fields if fields else None
+
+
 def _format_mail_event(content: str, max_len: int = 500) -> str:
     """Parse CRM mail JSON and return a concise readable block."""
     try:
         data = json.loads(content)
     except json.JSONDecodeError:
-        return _sanitize_html(content)
+        data = _extract_mail_fields(content)
+        if data is None:
+            return _sanitize_html(content)
 
     def _parse_address(raw: str) -> str:
         if not raw:
