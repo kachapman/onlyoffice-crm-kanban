@@ -936,70 +936,73 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # Fetch history for each deal to find latest customer update notes
         deals = []
         for opp in open_opps:
-            opp_id = opp.get("id") or opp.get("ID")
-            if not opp_id:
-                continue
-            title = str(opp.get("title") or opp.get("Title") or f"Deal #{opp_id}")
-            stage = str(opp.get("stageTitle") or opp.get("StageTitle") or "")
-            amount_raw = opp.get("amount") or opp.get("Amount")
             try:
-                amount = float(amount_raw) if amount_raw else 0
-            except (TypeError, ValueError):
-                amount = 0
-            currency = str(opp.get("currency") or opp.get("Currency") or "")
+                opp_id = opp.get("id") or opp.get("ID")
+                if not opp_id:
+                    continue
+                title = str(opp.get("title") or opp.get("Title") or f"Deal #{opp_id}")
+                stage = str(opp.get("stageTitle") or opp.get("StageTitle") or "")
+                amount_raw = opp.get("amount") or opp.get("Amount")
+                try:
+                    amount = float(amount_raw) if amount_raw else 0
+                except (TypeError, ValueError):
+                    amount = 0
+                currency = str(opp.get("currency") or opp.get("Currency") or "")
 
-            # Fetch recent history (last 5 events)
-            hist_params = urlencode({
-                "entityType": "opportunity",
-                "entityId": str(opp_id),
-                "startIndex": "0",
-                "count": "5",
-                "sortBy": "date",
-                "sortOrder": "descending",
-            })
-            hcode, hdata = self._bot_crm_proxy(portal, "GET", "/api/2.0/crm/history/filter", hist_params)
-            events = []
-            if hcode < 400:
-                raw_events = hdata.get("response") if isinstance(hdata, dict) else []
-                if isinstance(raw_events, list):
-                    for ev in raw_events:
-                        if not isinstance(ev, dict):
-                            continue
-                        ev_cat = ev.get("category") or ev.get("Category") or {}
-                        cat_id = None
-                        if isinstance(ev_cat, dict):
-                            cat_id = ev_cat.get("id") or ev_cat.get("ID") or ev_cat.get("categoryId") or ev_cat.get("CategoryId")
-                        elif isinstance(ev_cat, (int, str)):
-                            try:
-                                cat_id = int(ev_cat)
-                            except (TypeError, ValueError):
-                                pass
-                        content = str(ev.get("content") or ev.get("Content") or "").strip()
-                        created = str(ev.get("created") or ev.get("Created") or "")
-                        if notes_category_id:
-                            # Specific category: take only the first (most recent) matching note
-                            if cat_id == notes_category_id and content:
-                                events.append({
-                                    "content": content[:500],
-                                    "created": created,
-                                })
-                                break  # most recent match found, stop iterating
-                        else:
-                            # All Notes: collect up to 5 content-bearing events
-                            if content and len(events) < 5:
-                                events.append({
-                                    "content": content[:500],
-                                    "created": created,
-                                })
+                # Fetch recent history (last 5 events)
+                hist_params = urlencode({
+                    "entityType": "opportunity",
+                    "entityId": str(opp_id),
+                    "startIndex": "0",
+                    "count": "5",
+                    "sortBy": "date",
+                    "sortOrder": "descending",
+                })
+                hcode, hdata = self._bot_crm_proxy(portal, "GET", "/api/2.0/crm/history/filter", hist_params)
+                events = []
+                if hcode < 400:
+                    raw_events = hdata.get("response") if isinstance(hdata, dict) else []
+                    if isinstance(raw_events, list):
+                        for ev in raw_events:
+                            if not isinstance(ev, dict):
+                                continue
+                            ev_cat = ev.get("category") or ev.get("Category") or {}
+                            cat_id = None
+                            if isinstance(ev_cat, dict):
+                                cat_id = ev_cat.get("id") or ev_cat.get("ID") or ev_cat.get("categoryId") or ev_cat.get("CategoryId")
+                            elif isinstance(ev_cat, (int, str)):
+                                try:
+                                    cat_id = int(ev_cat)
+                                except (TypeError, ValueError):
+                                    pass
+                            content = str(ev.get("content") or ev.get("Content") or "").strip()
+                            created = str(ev.get("created") or ev.get("Created") or "")
+                            if notes_category_id:
+                                # Specific category: take only the first (most recent) matching note
+                                if cat_id == notes_category_id and content:
+                                    events.append({
+                                        "content": content[:500],
+                                        "created": created,
+                                    })
+                                    break  # most recent match found, stop iterating
+                            else:
+                                # All Notes: collect up to 5 content-bearing events
+                                if content and len(events) < 5:
+                                    events.append({
+                                        "content": content[:500],
+                                        "created": created,
+                                    })
 
-            deals.append({
-                "id": int(opp_id),
-                "title": title,
-                "stage": stage,
-                "amount": amount,
-                "currency": currency,
-                "latestUpdate": events[0] if events else None,
-            })
+                deals.append({
+                    "id": int(opp_id),
+                    "title": title,
+                    "stage": stage,
+                    "amount": amount,
+                    "currency": currency,
+                    "latestUpdate": events[0] if events else None,
+                })
+            except Exception as exc:
+                self.log_message("BOT-DEBUG error processing deal %s: %s", opp.get("id") or opp.get("ID"), exc)
 
         # Optional title search (efficient: filter already-fetched contact deals)
         search = (qs.get("search") or [""])[0].strip().lower()
