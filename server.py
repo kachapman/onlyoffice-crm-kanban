@@ -34,9 +34,9 @@ except Exception:
     pass
 from user_profile_store import load_user_profile, save_user_profile
 from event_log_store import append_event_log, load_event_log, list_users_with_logs
-from crm_bot_store import (add_mapping, cancel_code, generate_code,
-                           get_mapping_by_chat, get_pending_codes, list_mappings,
-                           remove_mapping, remove_mapping_by_chat,
+from crm_bot_store import (add_mapping, cancel_code, cancel_code_by_value,
+                           generate_code, get_mapping_by_chat, get_pending_codes,
+                           list_mappings, remove_mapping, remove_mapping_by_chat,
                            set_nickname, set_verify_chat_id, verify_code)
 from presence_store import (
     append_dm,
@@ -700,12 +700,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         contact_name = str(payload.get("contactName") or "").strip()
         notes_category_id = payload.get("notesCategoryId")
         nickname = str(payload.get("nickname") or "").strip()
-        if not contact_id:
+        employee = payload.get("employee", False)
+        if not employee and not contact_id:
             _json_response(self, 400, {"error": "contactId is required"})
             return
-        result = generate_code(portal, int(contact_id), contact_name,
+        result = generate_code(portal,
+                               int(contact_id) if contact_id else None,
+                               contact_name,
                                int(notes_category_id) if notes_category_id else None,
-                               nickname)
+                               nickname,
+                               employee=bool(employee))
         _json_response(self, 200, result)
 
     def _handle_bot_customers_cancel_code(self) -> None:
@@ -722,10 +726,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": "Invalid JSON body"})
             return
         contact_id = payload.get("contactId")
-        if not contact_id:
-            _json_response(self, 400, {"error": "contactId is required"})
+        code = str(payload.get("code") or "").strip()
+        if contact_id:
+            ok = cancel_code(portal, int(contact_id))
+        elif code:
+            ok = cancel_code_by_value(portal, code)
+        else:
+            _json_response(self, 400, {"error": "contactId or code is required"})
             return
-        ok = cancel_code(portal, int(contact_id))
         _json_response(self, 200, {"ok": ok})
 
     def _handle_bot_customers_unlink(self) -> None:
@@ -737,6 +745,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 403, {"error": "Forbidden"})
             return
         qs = parse_qs(urlparse(self.path).query)
+        is_employee = (qs.get("employee") or [""])[0].lower() == "true"
+        if is_employee:
+            ok = remove_mapping(portal, None)
+            _json_response(self, 200, {"ok": ok})
+            return
         raw = (qs.get("contactId") or [""])[0]
         if not raw:
             _json_response(self, 400, {"error": "contactId is required"})
@@ -759,10 +772,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         contact_id = payload.get("contactId")
         nickname = str(payload.get("nickname") or "").strip()
-        if not contact_id:
-            _json_response(self, 400, {"error": "contactId is required"})
-            return
-        ok = set_nickname(portal, int(contact_id), nickname)
+        if contact_id is None:
+            ok = set_nickname(portal, None, nickname)
+        else:
+            ok = set_nickname(portal, int(contact_id), nickname)
         _json_response(self, 200, {"ok": ok})
 
     def _handle_bot_customers_verify_code(self) -> None:
@@ -891,15 +904,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 403, {"error": "Forbidden"})
                 return
             qs = parse_qs(urlparse(self.path).query)
-            raw_contact = (qs.get("contactId") or [""])[0]
-            if not raw_contact:
-                _json_response(self, 400, {"error": "contactId is required"})
-                return
             portal = _portal_base(self)
             if not portal:
                 _json_response(self, 400, {"error": "Portal not configured"})
                 return
-            contact_id = int(raw_contact)
+            is_employee = (qs.get("employee") or [""])[0].lower() == "true"
+            raw_contact = (qs.get("contactId") or [""])[0]
+            if not is_employee and not raw_contact:
+                _json_response(self, 400, {"error": "contactId is required"})
+                return
+            contact_id = int(raw_contact) if raw_contact else None
 
             # Get mapping to check notesCategoryId
             raw_chat = (qs.get("chatId") or [""])[0]
@@ -909,15 +923,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 if mapping:
                     notes_category_id = mapping.get("notesCategoryId")
 
-            # Fetch opportunities for this contact (no stageType filter — CRM param is unreliable)
-            filter_params = urlencode({
+            # Fetch opportunities (all contacts for employee, filtered for customers)
+            filter_params = {
                 "startIndex": "0",
                 "count": "500",
                 "filterValue": "",
-                "contactId": str(contact_id),
                 "sortBy": "date_created",
                 "sortOrder": "descending",
-            })
+            }
+            if contact_id is not None:
+                filter_params["contactId"] = str(contact_id)
+            filter_params = urlencode(filter_params)
             code, data = self._bot_crm_proxy(portal, "GET", "/api/2.0/crm/opportunity/filter", filter_params)
             if code >= 400:
                 _json_response(self, code, data)
@@ -978,8 +994,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                     continue
                                 ev_cat = ev.get("category") or ev.get("Category") or {}
                                 cat_id = None
+                                cat_name = ""
                                 if isinstance(ev_cat, dict):
                                     cat_id = ev_cat.get("id") or ev_cat.get("ID") or ev_cat.get("categoryId") or ev_cat.get("CategoryId")
+                                    cat_name = str(ev_cat.get("title") or ev_cat.get("Title") or "")
                                 elif isinstance(ev_cat, (int, str)):
                                     try:
                                         cat_id = int(ev_cat)
@@ -987,30 +1005,42 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                         pass
                                 content = str(ev.get("content") or ev.get("Content") or "").strip()
                                 created = str(ev.get("created") or ev.get("Created") or "")
-                                if notes_category_id:
-                                    # Specific category: take only the first (most recent) matching note
-                                    if cat_id == notes_category_id and content:
-                                        events.append({
-                                            "content": content[:500],
-                                            "created": created,
-                                        })
-                                        break  # most recent match found, stop iterating
-                                else:
-                                    # All Notes: collect up to 5 content-bearing events
+                                if is_employee:
+                                    # Employee: collect up to 5 content-bearing events with category
                                     if content and len(events) < 5:
                                         events.append({
                                             "content": content[:500],
                                             "created": created,
+                                            "categoryName": cat_name,
+                                            "categoryId": cat_id,
+                                        })
+                                elif notes_category_id:
+                                    if cat_id == notes_category_id and content:
+                                        events.append({
+                                            "content": content[:500],
+                                            "created": created,
+                                            "categoryName": cat_name,
+                                        })
+                                        break
+                                else:
+                                    if content and len(events) < 5:
+                                        events.append({
+                                            "content": content[:500],
+                                            "created": created,
+                                            "categoryName": cat_name,
                                         })
 
-                    deals.append({
+                    deal_entry = {
                         "id": int(opp_id),
                         "title": title,
                         "stage": stage,
                         "amount": amount,
                         "currency": currency,
                         "latestUpdate": events[0] if events else None,
-                    })
+                    }
+                    if is_employee:
+                        deal_entry["events"] = events
+                    deals.append(deal_entry)
                 except Exception as exc:
                     self.log_message("Error processing deal %s: %s", opp.get("id") or opp.get("ID"), exc)
 

@@ -51,6 +51,7 @@ PORTAL = os.environ.get("ONLYOFFICE_PORTAL_URL", "")
 # Last search results per chat, used to interpret "1", "2", ... replies.
 _last_search: dict[int, str] = {}
 _last_deals: dict[int, list[dict]] = {}
+_last_employee: dict[int, bool] = {}
 
 # ── Helpers ──
 
@@ -133,12 +134,16 @@ async def get_mapping(chat_id: int) -> dict | None:
     return await _get("/api/bot/me", {"chatId": chat_id})
 
 
-async def get_deals(contact_id: int, chat_id: int | None = None, search: str | None = None) -> list[dict] | None:
-    params: dict = {"contactId": contact_id}
+async def get_deals(contact_id: int | None, chat_id: int | None = None, search: str | None = None, employee: bool = False) -> list[dict] | None:
+    params: dict = {}
+    if contact_id is not None:
+        params["contactId"] = contact_id
     if chat_id:
         params["chatId"] = chat_id
     if search:
         params["search"] = search
+    if employee:
+        params["employee"] = "true"
     result = await _get("/api/bot/deals", params)
     if result is None:
         return None  # API error (unreachable / timeout)
@@ -226,11 +231,11 @@ HELP_TEXT = (
 )
 
 
-def format_search_result(deals: list[dict], search: str) -> str:
+def format_search_result(deals: list[dict], search: str, is_employee: bool = False) -> str:
     if not deals:
         return f"No projects found matching '{_esc(search)}'."
     if len(deals) == 1:
-        return format_deal_detail(deals, 0)
+        return format_deal_detail(deals, 0, is_employee=is_employee)
     lines = [f"Projects matching '{_esc(search)}':", ""]
     for i, d in enumerate(deals, 1):
         parts = [f"{i}. {_esc(d['title'])}"]
@@ -246,7 +251,7 @@ def format_search_result(deals: list[dict], search: str) -> str:
     return msg
 
 
-def format_deal_detail(deals: list[dict], index: int) -> str:
+def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False) -> str:
     if index < 0 or index >= len(deals):
         return "Invalid selection."
     d = deals[index]
@@ -260,17 +265,34 @@ def format_deal_detail(deals: list[dict], index: int) -> str:
         lines.append(f"Status: {_esc(stage)}")
     if amt:
         lines.append(f"Amount: {_esc(amt)}")
-    update = d.get("latestUpdate")
-    if update:
-        content = update.get("content", "")
-        created = _fmt_date(update.get("created", ""))
-        if content:
+    if is_employee:
+        events = d.get("events", [])
+        if events:
             lines.append("")
-            lines.append("Latest customer update:")
-            lines.append(_sanitize_html(content))
-            if created:
-                lines.append(f"— {_esc(created)}")
-    lines.append("")
+            for ev in events:
+                cat = ev.get("categoryName") or ""
+                content = ev.get("content", "")
+                created = _fmt_date(ev.get("created", ""))
+                if cat:
+                    lines.append(f"[{_esc(cat)}]")
+                if content:
+                    lines.append(_sanitize_html(content))
+                if created:
+                    lines.append(f"— {_esc(created)}")
+                lines.append("")
+    else:
+        update = d.get("latestUpdate")
+        if update:
+            content = update.get("content", "")
+            created = _fmt_date(update.get("created", ""))
+            if content:
+                lines.append("")
+                lines.append("Latest customer update:")
+                lines.append(_sanitize_html(content))
+                if created:
+                    lines.append(f"— {_esc(created)}")
+    if lines and lines[-1] != "":
+        lines.append("")
     lines.append("Send another project name to search again.")
     return "\n".join(lines)
 
@@ -319,9 +341,12 @@ def main() -> None:
 
             if mapping:
                 contact_id = mapping.get("contactId")
-                if not contact_id:
+                is_employee = mapping.get("employee", False)
+                if not contact_id and not is_employee:
                     await update.message.reply_text("Your account is not fully set up. Please contact support.", parse_mode="HTML")
                     return
+
+                _last_employee[chat_id] = is_employee
 
                 # Help request
                 if lower in ("/help", "help", "?"):
@@ -331,28 +356,29 @@ def main() -> None:
                 # Number reply: read from cached results (no re-fetch)
                 if text.isdigit():
                     deals = _last_deals.get(chat_id, [])
+                    emp = _last_employee.get(chat_id, False)
                     if not deals:
                         await update.message.reply_text("No projects to select from. Send a project name to search.", parse_mode="HTML")
                         return
                     idx = int(text) - 1
                     if 0 <= idx < len(deals):
-                        msg = format_deal_detail(deals, idx)
+                        msg = format_deal_detail(deals, idx, is_employee=emp)
                         await update.message.reply_text(msg, parse_mode="HTML")
                     else:
                         search = _last_search.get(chat_id, "")
-                        msg = format_search_result(deals, search)
+                        msg = format_search_result(deals, search, is_employee=emp)
                         await update.message.reply_text(msg, parse_mode="HTML")
                     return
 
                 # Treat any other text as a title search
                 search = text
-                deals = await get_deals(contact_id, chat_id, search=search)
+                deals = await get_deals(contact_id, chat_id, search=search, employee=is_employee)
                 if deals is None:
                     await update.message.reply_text("I'm having trouble reaching the server. Please try again in a couple of minutes.", parse_mode="HTML")
                     return
                 _last_deals[chat_id] = deals
                 _last_search[chat_id] = search
-                msg = format_search_result(deals, search)
+                msg = format_search_result(deals, search, is_employee=is_employee)
                 await update.message.reply_text(msg, parse_mode="HTML")
                 return
             else:
@@ -360,15 +386,21 @@ def main() -> None:
                 result = await verify_code(text, chat_id)
                 if result:
                     contact_id = result.get("contactId")
+                    is_employee = result.get("employee", False)
                     if contact_id:
                         msg = (
                             "✅ You've been linked! Send a project name to find it.\n\n"
                             "Example: <b>roof</b> or <b>Smith</b>"
                         )
+                    elif is_employee:
+                        msg = (
+                            "✅ You've been linked as an employee! Send a project name to search across all projects.\n\n"
+                            "Example: <b>roof</b> or <b>Smith</b>"
+                        )
                     else:
                         msg = "✅ You've been linked! But we couldn't find any projects yet."
                     await update.message.reply_text(msg, parse_mode="HTML")
-                    logger.info("Chat %d linked to contact %s", chat_id, contact_id)
+                    logger.info("Chat %d linked to contact %s (employee=%s)", chat_id, contact_id, is_employee)
                 else:
                     await update.message.reply_text(
                         "That code wasn't recognized or has expired. "

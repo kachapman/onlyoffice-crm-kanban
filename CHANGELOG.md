@@ -2,7 +2,22 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
-## [Unreleased]
+## [2.0.4] — 2026-06-28
+
+### Added
+- **Customer Bot: employee access mode.** Admins can now generate invite codes for employees by checking "Employee access (view all deals)" in the Customer Bot modal. Employees see all open deals across the CRM (no contact filter) and up to 5 recent events per deal, each labeled with its history category.
+- **Customer Bot: employee mapping support in backend.** `crm_bot_store.py` persists an `employee` flag on codes and mappings. `server.py` `/api/bot/deals` accepts `employee=true` and returns an `events` array with `categoryName`. Invite code generation, cancellation, unlinking, and nickname changes all support employee mappings.
+- **Customer Bot: employee rendering in Telegram bot.** `telegram_bot.py` passes the employee flag through search/selection flows and renders deal detail with `[Category]` labels for employees.
+- **Customer Bot: employee UI affordances.** Modal title switches to "Invite Employee", contact picker is hidden, and existing mappings show an "Employee" badge.
+
+### Fixed
+- **Customer Bot: number replies no longer re-fetch deals.** The bot now caches the last search results per chat (`_last_deals`) and interprets "1", "2", ... replies from the cache instead of calling the CRM API again.
+- **Customer Bot: history API uses correct sort column.** Changed `/api/2.0/crm/history/filter` from `sortBy=date` to `sortBy=created` to match the native CRM field and return the most recent events reliably.
+- **Customer Bot: reduced history API timeout.** History calls now use a 10s timeout (down from 30s) so a slow/hanging history endpoint fails fast and does not block the entire response.
+- **Customer Bot: CRM HTML sanitized for Telegram.** Added `_sanitize_html()` in `telegram_bot.py` to decode HTML entities, replace `<br>` with actual newlines, strip unsupported tags, balance Telegram-safe tags, and escape bare `&` characters inside tag attributes. This fixes "Something went wrong" crashes on deals with complex note content.
+
+### Files changed
+- `crm_bot_store.py`, `server.py`, `telegram_bot.py`, `public/app.js`, `public/index.html`, `public/styles.css`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`
 
 ## [2.0.3] — 2026-06-27
 

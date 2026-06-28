@@ -17613,7 +17613,9 @@ async function openBotCustomersModal() {
   const modal = $("#bot-customers-modal");
   if (!modal) return;
 
-  _botCustomersDraft = { contactId: null, contactLabel: "", notesCategoryId: null };
+  _botCustomersDraft = { contactId: null, contactLabel: "", notesCategoryId: null, employee: false };
+  $("#bot-employee-toggle") && ($("#bot-employee-toggle").checked = false);
+  updateBotCustomersEmployeeSection();
 
   if (state.historyCategories && state.historyCategories.length) {
     populateBotCustomersCategorySelect();
@@ -17625,6 +17627,7 @@ async function openBotCustomersModal() {
   await loadBotCustomersFromServer();
   renderBotCustomerMappings();
   updateBotGeneratedCodeBox();
+  updateBotCustomersEmployeeSection();
 
   const search = $("#bot-customers-contact-search");
   if (search) search.value = "";
@@ -17676,8 +17679,9 @@ async function loadBotCustomersFromServer() {
   }
 }
 
-async function handleSetNickname(contactId, nickname) {
+async function handleSetNickname(uid, nickname) {
   try {
+    const contactId = uid === "employee" ? null : Number(uid);
     const res = await fetch("/api/bot-customers/nickname", {
       method: "PUT",
       credentials: "same-origin",
@@ -17689,7 +17693,7 @@ async function handleSetNickname(contactId, nickname) {
       showToast(data.error || "Failed to set nickname", true);
       return false;
     }
-    const m = _botCustomersMappings.find((m2) => m2.contactId === contactId);
+    const m = _botCustomersMappings.find((m2) => uid === "employee" ? m2.employee : m2.contactId === Number(uid));
     if (m) m.nickname = nickname;
     renderBotCustomerMappings();
     return true;
@@ -17721,35 +17725,40 @@ function renderBotCustomerMappings() {
     const statusHtml = hasChat
       ? '<span class="bot-mapping-status linked">Linked</span>'
       : '<span class="bot-mapping-status pending">Pending</span>';
+    const isEmployee = m.employee;
+    const nameHtml = isEmployee
+      ? `<span class="bot-mapping-name">${escapeHtml(m.contactName || "Employee")} <span class="bot-mapping-employee-badge">Employee</span></span>`
+      : `<span class="bot-mapping-name">${escapeHtml(m.contactName || `Contact #${m.contactId}`)}</span>`;
     const nick = (m.nickname || "").trim();
     const nickHtml = nick
       ? `<span class="bot-mapping-nickname">${escapeHtml(nick)}</span>`
       : `<span class="bot-mapping-nickname bot-mapping-nickname-empty">No nickname</span>`;
+    const uid = isEmployee ? "employee" : String(m.contactId);
     return `<div class="bot-mapping-row">
-      <span class="bot-mapping-name">${escapeHtml(m.contactName || `Contact #${m.contactId}`)}</span>
+      ${nameHtml}
       ${nickHtml}
       ${catHtml}
       ${statusHtml}
-      <button type="button" class="btn btn-ghost btn-sm bot-nickname-edit-btn" data-contact-id="${escapeHtml(String(m.contactId))}" data-nickname="${escapeHtml(nick)}" title="Edit nickname">&#9998;</button>
-      <button type="button" class="btn btn-ghost btn-sm bot-unlink-btn" data-contact-id="${escapeHtml(String(m.contactId))}" title="Remove mapping">&times;</button>
+      <button type="button" class="btn btn-ghost btn-sm bot-nickname-edit-btn" data-bot-uid="${escapeHtml(uid)}" data-nickname="${escapeHtml(nick)}" title="Edit nickname">&#9998;</button>
+      <button type="button" class="btn btn-ghost btn-sm bot-unlink-btn" data-bot-uid="${escapeHtml(uid)}" title="Remove mapping">&times;</button>
     </div>`;
   }).join("");
 
   list.querySelectorAll(".bot-unlink-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const cid = Number(btn.dataset.contactId);
-      if (!confirm("Remove this customer mapping?")) return;
-      handleRemoveBotCustomer(cid);
+      const uid = btn.dataset.botUid;
+      if (!confirm("Remove this mapping?")) return;
+      handleRemoveBotCustomer(uid);
     });
   });
 
   list.querySelectorAll(".bot-nickname-edit-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const cid = Number(btn.dataset.contactId);
+      const uid = btn.dataset.botUid;
       const current = btn.dataset.nickname || "";
-      const newNick = prompt("Enter a nickname for this customer:", current);
+      const newNick = prompt("Enter a nickname:", current);
       if (newNick === null) return;
-      handleSetNickname(cid, newNick.trim());
+      handleSetNickname(uid, newNick.trim());
     });
   });
 }
@@ -17849,7 +17858,8 @@ function updateBotGeneratedCodeBox() {
 
 async function handleGenerateCode() {
   const draft = _botCustomersDraft;
-  if (!draft || !draft.contactId) {
+  if (!draft) return;
+  if (!draft.employee && !draft.contactId) {
     showToast("Please select a contact first.", true);
     return;
   }
@@ -17863,10 +17873,11 @@ async function handleGenerateCode() {
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        contactId: draft.contactId,
-        contactName: draft.contactLabel,
+        contactId: draft.employee ? null : draft.contactId,
+        contactName: draft.employee ? "Employee" : draft.contactLabel,
         notesCategoryId: catId,
         nickname,
+        employee: draft.employee,
       }),
     });
     const data = await res.json();
@@ -17889,13 +17900,17 @@ async function handleGenerateCode() {
 
 async function handleCancelCode() {
   const draft = _botCustomersDraft;
-  if (!draft || !draft.pendingContactId) return;
+  if (!draft) return;
+  if (!draft.pendingContactId && !draft.pendingCode) return;
   try {
+    const body = draft.pendingContactId
+      ? { contactId: draft.pendingContactId }
+      : { code: draft.pendingCode };
     const res = await fetch("/api/bot-customers/cancel-code", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contactId: draft.pendingContactId }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
       const data = await res.json();
@@ -17912,9 +17927,13 @@ async function handleCancelCode() {
   }
 }
 
-async function handleRemoveBotCustomer(contactId) {
+async function handleRemoveBotCustomer(uid) {
   try {
-    const res = await fetch(`/api/bot-customers/mapping?contactId=${contactId}`, {
+    const contactId = uid === "employee" ? null : Number(uid);
+    const params = new URLSearchParams();
+    if (contactId != null) params.set("contactId", String(contactId));
+    else params.set("employee", "true");
+    const res = await fetch(`/api/bot-customers/mapping?${params}`, {
       method: "DELETE",
       credentials: "same-origin",
     });
@@ -17923,12 +17942,22 @@ async function handleRemoveBotCustomer(contactId) {
       showToast(data.error || "Failed to remove mapping", true);
       return;
     }
-    _botCustomersMappings = _botCustomersMappings.filter((m) => m.contactId !== contactId);
+    _botCustomersMappings = _botCustomersMappings.filter((m) => uid === "employee" ? m.employee : m.contactId === Number(uid));
     renderBotCustomerMappings();
     showToast("Mapping removed");
   } catch (err) {
     showToast(err.message, true);
   }
+}
+
+function updateBotCustomersEmployeeSection() {
+  const draft = _botCustomersDraft;
+  if (!draft) return;
+  const isEmployee = !!draft.employee;
+  const contactField = document.getElementById("bot-customers-contact-field");
+  if (contactField) contactField.style.display = isEmployee ? "none" : "";
+  const title = document.getElementById("bot-section-title");
+  if (title) title.textContent = isEmployee ? "Invite Employee" : "Invite Customer";
 }
 
 function bindBotCustomersModal() {
@@ -17959,6 +17988,17 @@ function bindBotCustomersModal() {
   });
 
   bindBotCustomersContactPicker();
+
+  const employeeToggle = document.getElementById("bot-employee-toggle");
+  if (employeeToggle) {
+    employeeToggle.addEventListener("change", () => {
+      const draft = _botCustomersDraft;
+      if (!draft) return;
+      draft.employee = employeeToggle.checked;
+      if (draft.employee) draft.contactId = null;
+      updateBotCustomersEmployeeSection();
+    });
+  }
 }
 
 /* ================================================================================

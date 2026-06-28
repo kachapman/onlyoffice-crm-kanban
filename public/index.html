@@ -881,8 +881,14 @@
       <p class="modal-message">Manage customer mappings for the Telegram bot.</p>
 
       <div class="bot-section">
-        <h3 class="bot-section-title">Invite Customer</h3>
+        <h3 class="bot-section-title" id="bot-section-title">Invite Customer</h3>
         <div class="bot-add-form">
+          <div class="field">
+            <label class="checkbox-label">
+              <input type="checkbox" id="bot-employee-toggle" />
+              <span>Employee access (view all deals)</span>
+            </label>
+          </div>
           <div class="field contact-field" id="bot-customers-contact-field">
             <label for="bot-customers-contact-search">Contact</label>
             <input type="search" id="bot-customers-contact-search" placeholder="Search contact…" autocomplete="off" />

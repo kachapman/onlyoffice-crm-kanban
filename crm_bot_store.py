@@ -53,8 +53,9 @@ def list_mappings(portal: str) -> list[dict[str, Any]]:
     return store.get("mappings", [])
 
 
-def add_mapping(portal: str, chat_id: int, contact_id: int, contact_name: str,
-                notes_category_id: int | None, nickname: str = "") -> dict[str, Any]:
+def add_mapping(portal: str, chat_id: int, contact_id: int | None, contact_name: str,
+                notes_category_id: int | None, nickname: str = "",
+                employee: bool = False) -> dict[str, Any]:
     path = _store_path(portal)
     store = _load_file(path)
     mappings = store.get("mappings", [])
@@ -72,6 +73,7 @@ def add_mapping(portal: str, chat_id: int, contact_id: int, contact_name: str,
         "contactName": contact_name,
         "notesCategoryId": notes_category_id,
         "nickname": nickname,
+        "employee": employee,
         "createdAt": now,
         "updatedAt": now,
     }
@@ -87,11 +89,14 @@ def add_mapping(portal: str, chat_id: int, contact_id: int, contact_name: str,
     return entry
 
 
-def remove_mapping(portal: str, contact_id: int) -> bool:
+def remove_mapping(portal: str, contact_id: int | None) -> bool:
     path = _store_path(portal)
     store = _load_file(path)
     mappings = store.get("mappings", [])
-    new_mappings = [m for m in mappings if m.get("contactId") != contact_id]
+    if contact_id is not None:
+        new_mappings = [m for m in mappings if m.get("contactId") != contact_id]
+    else:
+        new_mappings = [m for m in mappings if not m.get("employee")]
     if len(new_mappings) == len(mappings):
         return False
     store["mappings"] = new_mappings
@@ -147,13 +152,14 @@ def get_pending_codes(portal: str) -> list[dict[str, Any]]:
     return active
 
 
-def generate_code(portal: str, contact_id: int, contact_name: str,
-                  notes_category_id: int | None, nickname: str = "") -> dict[str, Any]:
+def generate_code(portal: str, contact_id: int | None, contact_name: str,
+                  notes_category_id: int | None, nickname: str = "",
+                  employee: bool = False) -> dict[str, Any]:
     path = _store_path(portal)
     store = _load_file(path)
     codes = store.get("pendingCodes", [])
-    # Remove any existing pending code for this contact
-    codes = [c for c in codes if c.get("contactId") != contact_id]
+    if not employee and contact_id is not None:
+        codes = [c for c in codes if c.get("contactId") != contact_id]
     code = _generate_code()
     now = datetime.now(timezone.utc)
     expires = now + timedelta(hours=CODE_EXPIRE_HOURS)
@@ -163,6 +169,7 @@ def generate_code(portal: str, contact_id: int, contact_name: str,
         "contactName": contact_name,
         "notesCategoryId": notes_category_id,
         "nickname": nickname,
+        "employee": employee,
         "portal": portal,
         "createdAt": now.isoformat(),
         "expiresAt": expires.isoformat(),
@@ -176,6 +183,7 @@ def generate_code(portal: str, contact_id: int, contact_name: str,
         "contactName": contact_name,
         "notesCategoryId": notes_category_id,
         "nickname": nickname,
+        "employee": employee,
         "expiresAt": entry["expiresAt"],
     }
 
@@ -185,6 +193,19 @@ def cancel_code(portal: str, contact_id: int) -> bool:
     store = _load_file(path)
     codes = store.get("pendingCodes", [])
     new_codes = [c for c in codes if c.get("contactId") != contact_id]
+    if len(new_codes) == len(codes):
+        return False
+    store["pendingCodes"] = new_codes
+    _save_file(path, store)
+    return True
+
+
+def cancel_code_by_value(portal: str, code: str) -> bool:
+    path = _store_path(portal)
+    store = _load_file(path)
+    codes = store.get("pendingCodes", [])
+    target = code.upper().strip()
+    new_codes = [c for c in codes if c.get("code", "").upper().strip() != target]
     if len(new_codes) == len(codes):
         return False
     store["pendingCodes"] = new_codes
@@ -203,11 +224,14 @@ def verify_code(portal: str, code: str) -> dict[str, Any] | None:
             entry = codes.pop(i)
             store["pendingCodes"] = codes
             # Auto-create mapping
-            contact_id = c["contactId"]
+            is_employee = c.get("employee", False)
+            contact_id = c.get("contactId")
             mappings = store.get("mappings", [])
             existing = None
             for j, m in enumerate(mappings):
-                if m.get("contactId") == contact_id:
+                if is_employee and m.get("chatId") == 0:
+                    continue
+                if m.get("contactId") == contact_id and not is_employee:
                     existing = j
                     break
             now_iso = now.isoformat()
@@ -217,6 +241,7 @@ def verify_code(portal: str, code: str) -> dict[str, Any] | None:
                 "contactName": c.get("contactName", ""),
                 "notesCategoryId": c.get("notesCategoryId"),
                 "nickname": c.get("nickname", ""),
+                "employee": is_employee,
                 "createdAt": now_iso,
                 "updatedAt": now_iso,
             }
@@ -231,13 +256,18 @@ def verify_code(portal: str, code: str) -> dict[str, Any] | None:
     return None
 
 
-def set_verify_chat_id(portal: str, contact_id: int, chat_id: int) -> bool:
+def set_verify_chat_id(portal: str, contact_id: int | None, chat_id: int) -> bool:
     """Set chatId after initial verify (code flow created mapping with chatId=0)."""
     path = _store_path(portal)
     store = _load_file(path)
     mappings = store.get("mappings", [])
     for m in mappings:
-        if m.get("contactId") == contact_id:
+        if contact_id is not None and m.get("contactId") == contact_id:
+            m["chatId"] = chat_id
+            m["updatedAt"] = datetime.now(timezone.utc).isoformat()
+            _save_file(path, store)
+            return True
+        if contact_id is None and m.get("employee") and m.get("chatId") == 0:
             m["chatId"] = chat_id
             m["updatedAt"] = datetime.now(timezone.utc).isoformat()
             _save_file(path, store)
@@ -245,12 +275,17 @@ def set_verify_chat_id(portal: str, contact_id: int, chat_id: int) -> bool:
     return False
 
 
-def set_nickname(portal: str, contact_id: int, nickname: str) -> bool:
+def set_nickname(portal: str, contact_id: int | None, nickname: str) -> bool:
     path = _store_path(portal)
     store = _load_file(path)
     mappings = store.get("mappings", [])
     for m in mappings:
-        if m.get("contactId") == contact_id:
+        if contact_id is not None and m.get("contactId") == contact_id:
+            m["nickname"] = nickname
+            m["updatedAt"] = datetime.now(timezone.utc).isoformat()
+            _save_file(path, store)
+            return True
+        if contact_id is None and m.get("employee"):
             m["nickname"] = nickname
             m["updatedAt"] = datetime.now(timezone.utc).isoformat()
             _save_file(path, store)
