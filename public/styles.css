@@ -3629,6 +3629,12 @@ body {
   box-sizing: border-box;
 }
 
+/* Notes tile uses the overlay picker; keep it fixed and sized */
+.notes-emoji-picker {
+  position: fixed;
+  width: auto;
+}
+
 .presence-emoji-picker {
   grid-area: picker;
   background: var(--surface);
@@ -4682,7 +4688,7 @@ body {
 }
 
 .opp-preview-history-item--customer-update {
-  border-left: 3px solid #22c55e;
+  border-left: 3px solid #f97316;
   padding-left: calc(0.75rem - 3px);
 }
 

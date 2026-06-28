@@ -3914,7 +3914,7 @@ const EMOJIS = ["😀","😃","😄","😁","😆","😅","😂","🤣","😊","
 function showNotesEmojiPicker(textarea, btnEl) {
   document.querySelectorAll(".notes-emoji-picker").forEach((el) => el.remove());
   const picker = document.createElement("div");
-  picker.className = "presence-emoji-picker presence-emoji-picker-overlay notes-emoji-picker";
+  picker.className = "presence-emoji-picker-overlay notes-emoji-picker";
   picker.tabIndex = -1;
   for (const em of EMOJIS) {
     const b = document.createElement("button");
@@ -3932,13 +3932,44 @@ function showNotesEmojiPicker(textarea, btnEl) {
     picker.appendChild(b);
   }
   document.body.appendChild(picker);
-  const rect = btnEl.getBoundingClientRect();
-  picker.style.left = Math.min(rect.left, window.innerWidth - 250) + "px";
-  picker.style.top = (rect.bottom + 4) + "px";
+
+  const positionPicker = () => {
+    const btnRect = btnEl.getBoundingClientRect();
+    const isMobile = window.innerWidth < 640;
+    picker.style.position = "fixed";
+    picker.style.zIndex = "99999";
+    picker.style.width = "auto";
+    picker.style.minWidth = "200px";
+    picker.style.maxWidth = "calc(100vw - 16px)";
+
+    if (isMobile) {
+      picker.style.left = "8px";
+      picker.style.right = "8px";
+      picker.style.top = `${btnRect.bottom + 4}px`;
+      picker.style.bottom = "auto";
+      picker.style.minWidth = "unset";
+      picker.style.maxWidth = "none";
+    } else {
+      const naturalWidth = picker.offsetWidth || 220;
+      let left = btnRect.right - naturalWidth;
+      if (left < 8) left = 8;
+      if (left + naturalWidth > window.innerWidth - 8) left = window.innerWidth - naturalWidth - 8;
+      picker.style.left = `${left}px`;
+      picker.style.top = `${btnRect.bottom + 4}px`;
+      picker.style.right = "auto";
+      picker.style.bottom = "auto";
+    }
+  };
+  positionPicker();
+
+  const onScroll = () => requestAnimationFrame(positionPicker);
+  window.addEventListener("resize", onScroll);
+
   const close = (e) => {
     if (!picker.contains(e.target) && e.target !== btnEl) {
       picker.remove();
       document.removeEventListener("click", close);
+      window.removeEventListener("resize", onScroll);
     }
   };
   setTimeout(() => document.addEventListener("click", close), 0);
