@@ -1,12 +1,12 @@
-# Release v1.91.4
+# Release v2.0.1
 
-**Tag:** `v1.91.4`  
+**Tag:** `v2.0.1`  
 **Date:** 2026-06-27  
 **Repository:** [onlyoffice-crm-kanban](https://github.com/kachapman/onlyoffice-crm-kanban)
 
 ## Summary
 
-v1.91.4 is a mobile UI + presence reliability hotfix.
+v2.0.1 is a mobile UI + presence reliability hotfix.
 
 ## Changes
 
@@ -25,7 +25,7 @@ v1.91.4 is a mobile UI + presence reliability hotfix.
 - **Presence: team roster no longer blanks on poll failure.** `state.presenceData` is preserved across failed fetches — tile/modal stays populated. Amber banner still shown.
 
 ### Files changed
-- `public/app.js`, `public/styles.css`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`, `docs/RELEASE_v1.91.4.md`
+- `public/app.js`, `public/styles.css`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`, `docs/RELEASE_v2.0.1.md`
 
 ## Deploy steps (on production droplet)
 ```

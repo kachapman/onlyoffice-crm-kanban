@@ -4,15 +4,15 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 ## [Unreleased]
 
-## [1.91.5] — 2026-06-27
+## [2.0.2] — 2026-06-27
 
 ### Fixed
-- **Presence: stale autoStatus also stripped in Team tile.** The v1.91.4 cleanup only ran in the modal roster; the embedded dashboard tile (`renderPresenceTileCompact`) now clears `autoStatus`/`status`/`inferred` for offline users too.
+- **Presence: stale autoStatus also stripped in Team tile.** The v2.0.1 cleanup only ran in the modal roster; the embedded dashboard tile (`renderPresenceTileCompact`) now clears `autoStatus`/`status`/`inferred` for offline users too.
 
 ### Files changed
-- `public/app.js`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`, `docs/RELEASE_v1.91.5.md`
+- `public/app.js`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`, `docs/RELEASE_v2.0.2.md`
 
-## [1.91.4] — 2026-06-27
+## [2.0.1] — 2026-06-27
 
 ### Added
 - **Nickname field for bot customer mappings.** New text input in the "Invite Customer" form to label each code (e.g. "Office manager"). Nickname shown in the Existing Mappings list with a ✎ edit button (inline prompt). New server endpoint `PUT /api/bot-customers/nickname`. Stored in `crm_bot_store.py` mapping entries and preserved through the verify-code flow. (`FEAT-025`)
@@ -30,9 +30,9 @@ All notable changes to the CRM Kanban dashboard are documented here.
 - **Presence: team roster no longer goes blank on poll failure.** `fetchPresenceSnapshot()` catch no longer wipes `state.presenceData` — keeps last good snapshot so the tile/modal stays populated. Amber banner still shown.
 
 ### Files changed
-- `public/app.js`, `public/styles.css`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`, `docs/RELEASE_v1.91.4.md`
+- `public/app.js`, `public/styles.css`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`, `docs/RELEASE_v2.0.1.md`
 
-## [1.2.0] — 2026-06-26
+## [2.0.0] — 2026-06-26
 
 ### Added
 - **Telegram customer bot (`@vanguardupdates_bot`).** New async Python bot (`telegram_bot.py`) using `python-telegram-bot` v22.8. Customers send their invite code to get linked; then they can view open projects and reply with a number for full details.
@@ -51,7 +51,7 @@ All notable changes to the CRM Kanban dashboard are documented here.
 - `telegram_bot.py` (new), `crm_bot_store.py` (new)
 - `server.py`, `public/index.html`, `public/app.js`, `public/styles.css`
 - `VERSION`, `CHANGELOG.md`, `AGENTS.md`, `README.md`, `config.example.env`
-- `docs/RELEASE_v1.2.md`, `docs/GITHUB_RELEASES.md`
+- `docs/RELEASE_v2.0.0.md`, `docs/GITHUB_RELEASES.md`
 
 ## [1.91.3] — 2026-06-26
 

@@ -1,6 +1,6 @@
-# Release v1.2.0
+# Release v2.0.0
 
-**Tag:** `v1.2.0`  
+**Tag:** `v2.0.0`  
 **Date:** 2026-06-26  
 **Repository:** [onlyoffice-crm-kanban](https://github.com/kachapman/onlyoffice-crm-kanban)
 
