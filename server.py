@@ -908,13 +908,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if mapping:
                 notes_category_id = mapping.get("notesCategoryId")
 
-        # Fetch open opportunities for this contact
+        # Fetch opportunities for this contact (no stageType filter — CRM param is unreliable)
         filter_params = urlencode({
             "startIndex": "0",
             "count": "100",
             "filterValue": "",
             "contactId": str(contact_id),
-            "stageType": "0",
             "sortBy": "date_created",
             "sortOrder": "descending",
         })
@@ -923,12 +922,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, code, data)
             return
         opportunities = data.get("response") if isinstance(data, dict) else []
-
-        # Fetch history for each deal to find latest customer update notes
-        deals = []
+        # Filter to only open-stage deals locally (stageType = 0 or null)
+        open_opps = []
         for opp in (opportunities or []):
             if not isinstance(opp, dict):
                 continue
+            _stage = opp.get("stage") or opp.get("Stage") or {}
+            _st = _stage.get("stageType") if isinstance(_stage, dict) else None
+            if _st not in (0, "0", "Open", None, ""):
+                continue
+            open_opps.append(opp)
+
+        # Fetch history for each deal to find latest customer update notes
+        deals = []
+        for opp in open_opps:
             opp_id = opp.get("id") or opp.get("ID")
             if not opp_id:
                 continue
@@ -961,22 +968,29 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         ev_cat = ev.get("category") or ev.get("Category") or {}
                         cat_id = None
                         if isinstance(ev_cat, dict):
-                            cat_id = ev_cat.get("id") or ev_cat.get("ID")
+                            cat_id = ev_cat.get("id") or ev_cat.get("ID") or ev_cat.get("categoryId") or ev_cat.get("CategoryId")
                         elif isinstance(ev_cat, (int, str)):
                             try:
                                 cat_id = int(ev_cat)
                             except (TypeError, ValueError):
                                 pass
-                        # Filter to only notes matching the allowed category
                         content = str(ev.get("content") or ev.get("Content") or "").strip()
                         created = str(ev.get("created") or ev.get("Created") or "")
-                        if cat_id and notes_category_id and cat_id == notes_category_id and content:
-                            events.append({
-                                "content": content[:500],
-                                "created": created,
-                            })
-                    # Sort by date descending
-                    events.sort(key=lambda e: e.get("created", ""), reverse=True)
+                        if notes_category_id:
+                            # Specific category: take only the first (most recent) matching note
+                            if cat_id == notes_category_id and content:
+                                events.append({
+                                    "content": content[:500],
+                                    "created": created,
+                                })
+                                break  # most recent match found, stop iterating
+                        else:
+                            # All Notes: collect up to 5 content-bearing events
+                            if content and len(events) < 5:
+                                events.append({
+                                    "content": content[:500],
+                                    "created": created,
+                                })
 
             deals.append({
                 "id": int(opp_id),
