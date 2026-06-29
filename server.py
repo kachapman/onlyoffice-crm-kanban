@@ -1122,8 +1122,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                         event_content = content
                                         if "mail" in cat_name.lower() or "email" in cat_name.lower():
                                             mail_id = self._extract_mail_message_id(ev)
+                                            self.log_message(
+                                                "MAIL-DEBUG category=%s content_len=%d mail_id=%s",
+                                                cat_name, len(content), mail_id,
+                                            )
                                             if mail_id:
                                                 full_body = self._fetch_full_mail_body(portal, mail_id)
+                                                self.log_message(
+                                                    "MAIL-DEBUG full_body_len=%s for mail_id=%s",
+                                                    len(full_body) if full_body else "None", mail_id,
+                                                )
                                                 if full_body:
                                                     try:
                                                         data = json.loads(content)
