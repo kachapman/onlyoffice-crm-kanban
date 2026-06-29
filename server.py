@@ -970,22 +970,65 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         return None
 
     def _fetch_full_mail_body(self, portal: str, mail_id: int) -> str | None:
-        """Fetch full mail message body from CRM mail API."""
+        """Fetch full mail message body from CRM mail API.
+
+        The CRM preview modal / MailViewer.aspx loads email bodies via the
+        legacy filehandler.ashx endpoint, not via /api/2.0/mail/messages/{id}.
+        We try the handler first, then fall back to the REST endpoint.
+        """
+        # 1. Try the same ASPX handler the CRM MailViewer uses.
+        handler_url = f"{portal}/Products/CRM/HttpHandlers/filehandler.ashx?action=mailmessage&message_id={mail_id}"
+        token = self._bot_crm_token(portal)
+        if token:
+            try:
+                req = urllib.request.Request(
+                    handler_url,
+                    headers={"Accept": "application/json, text/html, */*", "Authorization": token},
+                    method="GET",
+                )
+                with urllib.request.urlopen(req, context=_ssl_context(), timeout=30) as resp:
+                    raw = resp.read()
+                    ctype = resp.headers.get_content_type() if resp.headers else ""
+                    text = raw.decode("utf-8", errors="replace")
+                    self.log_message(
+                        "MAIL-DEBUG handler status=%d ctype=%s len=%d snippet=%s",
+                        resp.status, ctype, len(text), repr(text[:200]),
+                    )
+                    # Handler may return JSON or HTML.
+                    if "application/json" in ctype or text.lstrip().startswith(("{", "[")):
+                        try:
+                            payload = json.loads(text)
+                        except json.JSONDecodeError:
+                            payload = None
+                        body = self._extract_body_from_mail_payload(payload)
+                        if body:
+                            return body
+                    if text.strip():
+                        return text
+            except urllib.error.HTTPError as exc:
+                self.log_message("MAIL-DEBUG handler HTTPError %s for mail_id=%s", exc.code, mail_id)
+            except Exception as exc:
+                self.log_message("MAIL-DEBUG handler exception %s for mail_id=%s", exc, mail_id)
+
+        # 2. Fallback to the REST mail API.
         code, data = self._bot_crm_proxy(portal, "GET", f"/api/2.0/mail/messages/{mail_id}")
+        self.log_message("MAIL-DEBUG REST status=%s keys=%s", code, list(data.keys()) if isinstance(data, dict) else type(data))
         if code >= 400:
             return None
-        mail = data.get("response") if isinstance(data, dict) else None
+        return self._extract_body_from_mail_payload(data)
+
+    @staticmethod
+    def _extract_body_from_mail_payload(payload: Any) -> str | None:
+        """Pull the best available body text out of a CRM mail payload."""
+        if not isinstance(payload, dict):
+            return None
+        mail = payload.get("response") if isinstance(payload.get("response"), dict) else payload
         if not isinstance(mail, dict):
             return None
-        html_body = mail.get("htmlBody") or mail.get("HtmlBody")
-        if html_body:
-            return str(html_body)
-        text_body = mail.get("textBody") or mail.get("TextBody") or mail.get("body") or mail.get("Body")
-        if text_body:
-            return str(text_body)
-        introduction = mail.get("introduction") or mail.get("Introduction") or mail.get("preview") or mail.get("Preview")
-        if introduction:
-            return str(introduction)
+        for key in ("htmlBody", "HtmlBody", "bodyHtml", "BodyHtml", "body", "Body", "textBody", "TextBody", "introduction", "Introduction", "preview", "Preview"):
+            val = mail.get(key)
+            if val is not None and str(val).strip():
+                return str(val)
         return None
 
     def _handle_bot_me(self) -> None:
