@@ -619,14 +619,11 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
         if update:
             content = update.get("content", "")
             created = _fmt_date(update.get("created", ""))
-            author = str(update.get("author") or "").strip()
             if content:
                 lines.append("")
                 header = "Latest customer update"
                 if created:
                     header += f" — <i>{_esc(created)}</i>"
-                if author:
-                    header += f" ({_esc(author)})"
                 lines.append(header + ":")
                 lines.append(_sanitize_html(content))
     if lines and lines[-1] != "":
