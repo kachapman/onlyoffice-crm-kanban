@@ -745,6 +745,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 403, {"error": "Forbidden"})
             return
         qs = parse_qs(urlparse(self.path).query)
+        # Prefer removing by chatId (unique per mapping) so deleting one mapping
+        # never removes multiple mappings that share a contactId or employee flag.
+        chat_id_raw = (qs.get("chatId") or [""])[0]
+        if chat_id_raw:
+            try:
+                chat_id = int(chat_id_raw)
+            except (TypeError, ValueError):
+                _json_response(self, 400, {"error": "Invalid chatId"})
+                return
+            ok = remove_mapping_by_chat(portal, chat_id)
+            _json_response(self, 200, {"ok": ok})
+            return
+        # Legacy fallback for any old callers still using contactId/employee.
         is_employee = (qs.get("employee") or [""])[0].lower() == "true"
         if is_employee:
             ok = remove_mapping(portal, None)
@@ -752,7 +765,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         raw = (qs.get("contactId") or [""])[0]
         if not raw:
-            _json_response(self, 400, {"error": "contactId is required"})
+            _json_response(self, 400, {"error": "chatId or contactId is required"})
             return
         ok = remove_mapping(portal, int(raw))
         _json_response(self, 200, {"ok": ok})

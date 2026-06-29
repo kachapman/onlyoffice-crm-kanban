@@ -14994,6 +14994,13 @@ function isNoteCategoryEvent(ev) {
   return /\b(note|comment|activity|meeting|call|task)\b/.test(cat);
 }
 
+function isDeletableHistoryCategory(ev) {
+  const cat = historyEventCategoryLabel(ev).toLowerCase();
+  // Allow deleting note-like events, customer updates, and text/sms messages.
+  // Mail events are handled separately (Show linked email / unlink).
+  return /\b(note|comment|activity|meeting|call|task|customer update|text message|text|sms)\b/.test(cat);
+}
+
 function historyContentLooksLikeEmailDump(raw) {
   const s = String(raw || "");
   if (!s.trim()) return false;
@@ -15566,7 +15573,7 @@ function renderHistoryEventItem(ev) {
   const mailPayload = parseHistoryMailPayload(ev);
   const mailIds = extractMailMessageIds(ev);
   const messageId = mailIds[0] || mailPayload?.messageId || null;
-  const isDeletableNote = isNoteCategoryEvent(ev) && !messageId && !mailPayload && !isHistoryMailEvent(ev, mailPayload);
+  const isDeletableNote = isDeletableHistoryCategory(ev) && !messageId && !mailPayload && !isHistoryMailEvent(ev, mailPayload);
 
   const metaRow = document.createElement("div");
   metaRow.className = "opp-preview-history-meta-row";
@@ -17740,15 +17747,16 @@ function renderBotCustomerMappings() {
       ${catHtml}
       ${statusHtml}
       <button type="button" class="btn btn-ghost btn-sm bot-nickname-edit-btn" data-bot-uid="${escapeHtml(uid)}" data-nickname="${escapeHtml(nick)}" title="Edit nickname">&#9998;</button>
-      <button type="button" class="btn btn-ghost btn-sm bot-unlink-btn" data-bot-uid="${escapeHtml(uid)}" title="Remove mapping">&times;</button>
+      <button type="button" class="btn btn-ghost btn-sm bot-unlink-btn" data-bot-chat-id="${escapeHtml(String(m.chatId || ""))}" title="Remove mapping">&times;</button>
     </div>`;
   }).join("");
 
   list.querySelectorAll(".bot-unlink-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const uid = btn.dataset.botUid;
+      const chatId = btn.dataset.botChatId;
+      if (!chatId) return;
       if (!confirm("Remove this mapping?")) return;
-      handleRemoveBotCustomer(uid);
+      handleRemoveBotCustomer(chatId);
     });
   });
 
@@ -17927,12 +17935,15 @@ async function handleCancelCode() {
   }
 }
 
-async function handleRemoveBotCustomer(uid) {
+async function handleRemoveBotCustomer(chatIdOrUid) {
   try {
-    const contactId = uid === "employee" ? null : Number(uid);
+    const chatId = Number(chatIdOrUid);
+    if (!Number.isFinite(chatId) || chatId <= 0) {
+      showToast("Invalid mapping ID", true);
+      return;
+    }
     const params = new URLSearchParams();
-    if (contactId != null) params.set("contactId", String(contactId));
-    else params.set("employee", "true");
+    params.set("chatId", String(chatId));
     const res = await fetch(`/api/bot-customers/mapping?${params}`, {
       method: "DELETE",
       credentials: "same-origin",
@@ -17942,7 +17953,7 @@ async function handleRemoveBotCustomer(uid) {
       showToast(data.error || "Failed to remove mapping", true);
       return;
     }
-    _botCustomersMappings = _botCustomersMappings.filter((m) => uid === "employee" ? !m.employee : m.contactId !== Number(uid));
+    _botCustomersMappings = _botCustomersMappings.filter((m) => m.chatId !== chatId);
     renderBotCustomerMappings();
     showToast("Mapping removed");
   } catch (err) {
