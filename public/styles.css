@@ -2688,12 +2688,21 @@ body {
    !important to override inline styles from execCommand hiliteColor.
    Targets both <mark> (if produced) and spans. */
 .note-editor mark,
-.note-editor span[style*="background-color"],
+.note-editor span[style*="background-color"] {
+  background-color: rgba(34, 197, 94, 0.12) !important;
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+/* Preview modal history highlights need a darker tint so light/dark text is readable.
+   This applies to the main preview modal, bookmark preview, and search popup preview
+   since they all reuse .opp-preview-history-body. */
 .opp-preview-history-body mark,
 .opp-preview-history-body span[style*="background-color"],
 .opp-preview-history-body--html mark,
 .opp-preview-history-body--html span[style*="background-color"] {
-  background-color: rgba(34, 197, 94, 0.12) !important;
+  background-color: rgba(34, 197, 94, 0.35) !important;
   color: inherit;
   padding: 0 2px;
   border-radius: 2px;
