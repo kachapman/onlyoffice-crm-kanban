@@ -513,7 +513,8 @@ def _format_mail_event(content: str, max_len: int = 1500) -> str:
     # Put each quoted email line on its own line for readability.
     body = re.sub(r'\s*>\s*', '\n> ', body).strip()
     if len(body) > max_len:
-        body = body[:max_len - 1] + "…"
+        marker = " [truncated]"
+        body = body[:max_len - len(marker)] + marker
     body = _sanitize_html(body)
 
     lines: list[str] = []
@@ -611,7 +612,7 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
                 if header:
                     lines.append(header)
                 if content:
-                    lines.append(_format_event_body(cat, content, max_len=1500))
+                    lines.append(_format_event_body(cat, content, max_len=1200))
                 lines.append("")
     else:
         update = d.get("latestUpdate")
