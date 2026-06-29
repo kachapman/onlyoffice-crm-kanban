@@ -291,6 +291,33 @@ def _sanitize_html(text: str) -> str:
     return parser.close()
 
 
+def _html_to_text(text: str) -> str:
+    """Crude but fast HTML-to-plain-text conversion for email bodies.
+
+    Strips tags, unescapes entities, and normalizes whitespace.
+    """
+    if not text:
+        return ""
+    # Replace common line breaks with newlines.
+    text = re.sub(r"<\s*br\s*/?\s*>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<\s*/\s*(?:p|div|h[1-6]|li)\s*>", "\n", text, flags=re.IGNORECASE)
+    # Flatten simple table rows to "Header: Value" lines.
+    text = re.sub(r"<\s*/\s*th\s*>\s*<\s*td\s*>", " ", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<\s*/\s*td\s*>\s*<\s*td\s*>", ", ", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<\s*/\s*tr\s*>", "\n", text, flags=re.IGNORECASE)
+    # Drop remaining table/tags.
+    text = re.sub(r"<\s*(?:table|tbody|thead|tfoot|tr|th|td).*?>", "", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<\s*/\s*(?:table|tbody|thead|tfoot|tr|th|td)\s*>", "", text, flags=re.IGNORECASE)
+    # Strip any leftover tags.
+    text = re.sub(r"<[^>]+>", "", text)
+    # Unescape entities.
+    text = html.unescape(text)
+    # Normalize whitespace.
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n\s*\n+", "\n\n", text)
+    return text.strip()
+
+
 def _extract_mail_fields(content: str) -> dict[str, str] | None:
     """Best-effort extraction from possibly truncated CRM mail JSON."""
     fields: dict[str, str] = {}
@@ -333,22 +360,28 @@ def _extract_forward_info(body: str) -> tuple[str, str | None]:
         key = fm.group(1).lower()
         value_start = fm.end()
         next_fm = header_field_re.search(body, value_start)
-        # Body can start with a quoted line, a markdown link/image, or a reply attribution.
-        body_indicator = re.search(r'(?<=\s)[\[>]', body[value_start:])
-        body_indicator_pos = value_start + body_indicator.start() if body_indicator else len(body)
-        # Also treat a reply attribution as the end of the header block.
-        reply_indicator = re.search(r'\s+On\s+(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)', body[value_start:], re.IGNORECASE)
-        if reply_indicator:
-            body_indicator_pos = min(body_indicator_pos, value_start + reply_indicator.start())
-        # Cap individual header values so a long body doesn't get swallowed.
-        max_pos = value_start + MAX_HEADER_VALUE_LEN
-        if body_indicator_pos > max_pos:
-            body_indicator_pos = max_pos
 
-        if next_fm and next_fm.start() < body_indicator_pos:
+        if next_fm:
+            # More headers follow; stop exactly at the next header.
             end = next_fm.start()
             pos = next_fm.start()
         else:
+            # Last header: look for the body start (blank line, reply attribution,
+            # quoted line, or a hard cap).
+            body_indicator_pos = len(body)
+            blank_line = re.search(r'\n\s*\n', body[value_start:])
+            if blank_line:
+                body_indicator_pos = value_start + blank_line.start()
+            reply_indicator = re.search(r'\s+On\s+(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)', body[value_start:], re.IGNORECASE)
+            if reply_indicator:
+                body_indicator_pos = min(body_indicator_pos, value_start + reply_indicator.start())
+            body_indicator = re.search(r'(?<=\s)[\[>]', body[value_start:])
+            if body_indicator:
+                body_indicator_pos = min(body_indicator_pos, value_start + body_indicator.start())
+            # Cap individual header values so a long body doesn't get swallowed.
+            max_pos = value_start + MAX_HEADER_VALUE_LEN
+            if body_indicator_pos > max_pos:
+                body_indicator_pos = max_pos
             end = body_indicator_pos
             pos = end
 
@@ -419,6 +452,10 @@ def _format_mail_event(content: str, max_len: int = 1500) -> str:
     to_addr = _parse_address(str(data.get("to") or ""))
     subject = _esc(str(data.get("subject") or ""))
     body = str(data.get("introduction") or data.get("body") or "")
+    # The CRM mail handler returns raw HTML; convert it to readable text before
+    # we apply forward/reply cleanup and truncation.
+    if "<" in body and ">" in body:
+        body = _html_to_text(body)
     body, forward_info = _extract_forward_info(body)
     body, _ = _clean_reply_attribution(body)
     # Convert markdown links to bare URLs so they don't render as raw `[text](url)`.
@@ -512,7 +549,7 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
                 elif created:
                     lines.append(f"<i>{_esc(created)}</i>")
                 if content:
-                    lines.append(_format_event_body(cat, content))
+                    lines.append(_format_event_body(cat, content, max_len=3000))
                 lines.append("")
     else:
         update = d.get("latestUpdate")
