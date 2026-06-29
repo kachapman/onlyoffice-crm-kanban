@@ -528,7 +528,7 @@ def _format_mail_event(content: str, max_len: int = 1500) -> str:
         lines.append(forward_info)
     if body:
         lines.append("")
-        lines.append(f"Body: {body}")
+        lines.append(body)
     return "\n".join(lines)
 
 
@@ -561,7 +561,8 @@ def format_search_result(deals: list[dict], search: str, is_employee: bool = Fal
             parts.append(f"   Status: {_esc(stage)}")
         lines.append("\n".join(parts))
     lines.append("")
-    lines.append("Reply with a number (1, 2, ...) to see full details.")
+    lines.append("───────────────")
+    lines.append("<i>Reply with a number (1, 2, ...) to see full details.</i>")
     msg = "\n".join(lines)
     if len(msg) > 4000:
         msg = _truncate_html(msg, 4000)
@@ -592,12 +593,20 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
                 cat = ev.get("categoryName") or ""
                 content = ev.get("content", "")
                 created = _fmt_date(ev.get("created", ""))
-                if cat and created:
-                    lines.append(f"<b>[{_esc(cat)}]</b> — <i>{_esc(created)}</i>")
-                elif cat:
-                    lines.append(f"<b>[{_esc(cat)}]</b>")
-                elif created:
-                    lines.append(f"<i>{_esc(created)}</i>")
+                author = str(ev.get("author") or "").strip()
+                is_mail = "mail" in cat.lower() or "email" in cat.lower()
+                header_parts: list[str] = []
+                if cat:
+                    header_parts.append(f"<b>[{_esc(cat)}]</b>")
+                if created:
+                    header_parts.append(f"<i>{_esc(created)}</i>")
+                header = " — ".join(header_parts) if header_parts else ""
+                # Show author for all event types except mail messages, which already
+                # display From/To lines inside the formatted body.
+                if author and not is_mail:
+                    header = f"{header} ({_esc(author)})" if header else f"({_esc(author)})"
+                if header:
+                    lines.append(header)
                 if content:
                     lines.append(_format_event_body(cat, content, max_len=1500))
                 lines.append("")
@@ -606,16 +615,20 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
         if update:
             content = update.get("content", "")
             created = _fmt_date(update.get("created", ""))
+            author = str(update.get("author") or "").strip()
             if content:
                 lines.append("")
+                header = "Latest customer update"
                 if created:
-                    lines.append(f"Latest customer update — <i>{_esc(created)}</i>")
-                else:
-                    lines.append("Latest customer update:")
+                    header += f" — <i>{_esc(created)}</i>"
+                if author:
+                    header += f" ({_esc(author)})"
+                lines.append(header + ":")
                 lines.append(_sanitize_html(content))
     if lines and lines[-1] != "":
         lines.append("")
-    lines.append("Send another project name to search again.")
+    lines.append("───────────────")
+    lines.append("<i>Send another project name to search again.</i>")
     msg = "\n".join(lines)
     if len(msg) > 4000:
         msg = _truncate_html(msg, 4000)

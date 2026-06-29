@@ -969,6 +969,21 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
         return None
 
+    @staticmethod
+    def _extract_event_author(ev: dict) -> str:
+        """Return a display name for the user who created this history event."""
+        create_by = ev.get("createBy") or ev.get("CreateBy") or ev.get("createdBy") or ev.get("CreatedBy")
+        if not isinstance(create_by, dict):
+            return ""
+        author = (
+            create_by.get("displayName")
+            or create_by.get("DisplayName")
+            or create_by.get("userName")
+            or create_by.get("UserName")
+            or ""
+        )
+        return str(author).strip()
+
     def _fetch_full_mail_body(self, portal: str, mail_id: int) -> str | None:
         """Fetch full mail message body from CRM mail API.
 
@@ -1188,6 +1203,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                             "created": created,
                                             "categoryName": cat_name,
                                             "categoryId": cat_id,
+                                            "author": self._extract_event_author(ev),
                                         })
                                 elif notes_category_id:
                                     if cat_id == notes_category_id and content:
@@ -1195,6 +1211,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                             "content": content[:500],
                                             "created": created,
                                             "categoryName": cat_name,
+                                            "author": self._extract_event_author(ev),
                                         })
                                         break
                                 else:
@@ -1203,6 +1220,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                             "content": content[:500],
                                             "created": created,
                                             "categoryName": cat_name,
+                                            "author": self._extract_event_author(ev),
                                         })
 
                     deal_entry = {
