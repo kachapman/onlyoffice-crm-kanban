@@ -2,6 +2,27 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [2.0.5] — 2026-06-29
+
+### Added
+- **Customer Bot (employee mode): show event author.** Non-mail history events now display the creator's display name next to the date, e.g. `[Note] — Jun 28, 2026 (Ken Chapman)`. Author is intentionally hidden for `Customer Update` events so customers never see employee names.
+- **Customer Bot (employee mode): full mail body fetch.** The dashboard proxy fetches the complete email body from the CRM `filehandler.ashx?action=mailmessage&message_id={id}` endpoint and injects it into employee history events, replacing the truncated CRM history content.
+
+### Changed
+- **Customer Bot (employee mode): mail body cap and truncation marker.** Long email bodies are capped at 1200 characters and end with `[truncated]` so users know the full message continues in CRM.
+- **Customer Bot: distinct footer.** The closing prompt now has a separator line and is italicized so it doesn't blend into email/note content.
+- **Customer Bot: customer update author hidden.** `Customer Update` events no longer show the author name.
+
+### Fixed
+- **Customer Bot (employee mode): HTML parse errors from email addresses.** Forward/reply attribution lines like `Grasshopper <notifications@grasshopper.com>` are now HTML-escaped so Telegram doesn't treat the email address as an unsupported tag.
+- **Customer Bot: plain-text fallback stripped tags.** If Telegram rejects the HTML message, the fallback now strips HTML tags instead of sending literal `<b>`/`<i>` text to the user.
+- **Customer Bot: HTML-safe message truncation.** When a deal detail exceeds Telegram's length limit, truncation now closes open HTML tags and removes partial tags so the message stays valid HTML.
+- **Customer Bot (employee mode): tight email formatting.** Raw CRM email HTML is converted to plain text with normalized whitespace so forwarded emails no longer have leading spaces or words broken across lines.
+- **Customer Bot (employee mode): forwarded-header parsing.** The bot correctly extracts `From`/`Date` from forwarded email headers and no longer swallows the first paragraph of the body.
+
+### Files changed
+- `server.py`, `telegram_bot.py`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`, `ISSUES.md`, `docs/RELEASE_v2.0.5.md`
+
 ## [2.0.4] — 2026-06-28
 
 ### Added

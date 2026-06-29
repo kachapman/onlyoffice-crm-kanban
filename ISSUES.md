@@ -322,3 +322,67 @@ New feature: Show a modal with the changelog content when the user logs in after
 | `server.py` | `GET /api/changelog` endpoint |
 | `CHANGELOG.md` | Updated with v1.8.1 release notes |
 | `docs/RELEASE_v1.8.1.md` | Release notes file |
+
+---
+
+## ISSUE-010 — Customer Bot employee mode: CRM mail API quirks and workarounds
+
+**Status:** ✅ Documented / implemented 2026-06-29 — v2.0.5
+**Priority:** Medium
+**Area:** Customer Bot employee mode (`server.py`, `telegram_bot.py`)
+
+### Summary
+
+When building employee-mode deal detail for the Telegram bot, we need the full text of linked email history events. The CRM `/api/2.0/crm/history/filter` endpoint only returns a truncated mail summary (often just a `mailto:` link), so we had to find an alternate source and handle several OnlyOffice API quirks.
+
+### API quirks discovered
+
+1. **CRM history stores truncated mail content.**
+   - Mail events returned by `/api/2.0/crm/history/filter` have `category.title` = "Mail Message" and `content` is a JSON string.
+   - The JSON contains `from`, `to`, `subject`, and an `introduction` field, but `introduction` is truncated (e.g. ends with `[ ](mailto:notifications@grasshopper.co…`).
+   - The full email body is **not** present in the history response.
+
+2. **`/api/2.0/mail/messages/{id}` does not return the rendered email body.**
+   - The history event contains a `messageId`/`mailMessageId` (e.g. `27639`).
+   - Calling `/api/2.0/mail/messages/{id}` with that ID returns a mail object, but the body fields (`htmlBody`, `textBody`, `body`) were empty/unusable in production.
+   - This endpoint is used by the dashboard preview modal for metadata, but it is **not** the endpoint the native CRM MailViewer uses to render the message body.
+
+3. **The CRM MailViewer uses a legacy ASPX handler for the body.**
+   - Native CRM opens emails with `/Products/CRM/MailViewer.aspx?id={some_id}`.
+   - That page fetches the body via `/Products/CRM/HttpHandlers/filehandler.ashx?action=mailmessage&message_id={messageId}`.
+   - The `message_id` query parameter is the same `messageId` from the history event (e.g. `27639`), **not** the `id` shown in `MailViewer.aspx?id=...` (e.g. `38596`). These are two different IDs.
+
+4. **Bot account needs admin + mail access.**
+   - The bot authenticates as `BOT_CRM_EMAIL` and calls the filehandler with an `Authorization: <token>` header.
+   - Initially the bot account was a regular user and the filehandler returned no body / permission errors.
+   - Making the bot account an OnlyOffice admin and enabling mail module access for it allowed the filehandler to return full email HTML.
+
+5. **Email addresses in angle brackets break Telegram HTML parse mode.**
+   - Forward/reply attributions contain text like `"Grasshopper" <notifications@grasshopper.com>`.
+   - Telegram's HTML parser treats `<notifications@grasshopper.com>` as an unsupported start tag and rejects the message with: `Can't parse entities: unsupported start tag "notifications@grasshopper.com"`.
+   - Fix: escape `<` and `>` in attribution lines before sending.
+
+6. **CRM mail bodies are raw HTML with tables and wrapped text.**
+   - The filehandler returns HTML with `<table>` headers for forwarded messages and hard-wrapped lines inside `<p>` tags.
+   - Direct sanitization leaves broken words (`payment of$432 ,851.60`) and leading whitespace.
+   - Fix: convert HTML to plain text first, flatten tables to `Header: Value` lines, collapse whitespace, then sanitize for Telegram.
+
+7. **History event author lives in `createBy`/`createdBy`.**
+   - The event creator is in `ev.createBy.displayName` (or `createdBy`), not a top-level `author` field.
+   - Employee mode now extracts this and shows it for non-mail events. It is intentionally hidden for `Customer Update` events.
+
+### Current implementation
+
+- `server.py` `_extract_mail_message_id()` finds the mail message ID from nested objects, top-level fields, `additionalData`, or regex.
+- `server.py` `_fetch_full_mail_body()` calls the ASPX filehandler, parses JSON/HTML, and replaces the truncated `introduction` in the event content.
+- `telegram_bot.py` `_html_to_text()` converts CRM email HTML to tight plain text.
+- `telegram_bot.py` `_extract_forward_info()` / `_clean_reply_attribution()` handle forwarded/reply headers.
+- Mail bodies are capped at 1200 characters and end with `[truncated]`.
+- Plain-text fallback (`_strip_html_tags()`) strips tags if Telegram rejects HTML.
+
+### Files changed
+
+| File | Role |
+|------|------|
+| `server.py` | `_extract_mail_message_id()`, `_fetch_full_mail_body()`, `_extract_event_author()` |
+| `telegram_bot.py` | `_html_to_text()`, `_extract_forward_info()`, `_clean_reply_attribution()`, `_truncate_html()`, `_strip_html_tags()`, `_format_mail_event()` |
