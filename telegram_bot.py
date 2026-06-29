@@ -291,30 +291,72 @@ def _sanitize_html(text: str) -> str:
     return parser.close()
 
 
-def _html_to_text(text: str) -> str:
-    """Crude but fast HTML-to-plain-text conversion for email bodies.
+def _truncate_html(msg: str, max_len: int, ellipsis: str = "\n\n… (message truncated)") -> str:
+    """Truncate an HTML message without leaving dangling tags.
 
-    Strips tags, unescapes entities, and normalizes whitespace.
+    Removes any partial tag at the truncation point and closes any tags
+    that are still open, so Telegram's HTML parse mode stays valid.
+    """
+    if len(msg) <= max_len:
+        return msg
+    limit = max_len - len(ellipsis)
+    truncated = msg[:limit]
+    # Drop a partial HTML tag at the end.
+    truncated = re.sub(r"<[^>]*$", "", truncated)
+    # Close any tags that are still open.
+    open_tags: list[str] = []
+    for m in re.finditer(r"<(/?)([a-zA-Z][a-zA-Z0-9]*)[^>]*>", truncated):
+        is_close = m.group(1) == "/"
+        tag = m.group(2).lower()
+        if tag in ("br", "img", "hr"):
+            continue
+        if is_close:
+            if open_tags and open_tags[-1] == tag:
+                open_tags.pop()
+        else:
+            open_tags.append(tag)
+    for tag in reversed(open_tags):
+        truncated += f"</{tag}>"
+    return truncated + ellipsis
+
+
+def _html_to_text(text: str) -> str:
+    """Convert CRM email HTML to tight plain text.
+
+    Preserves paragraph breaks, flattens tables to "Header: Value" lines,
+    and removes the stray newlines that break words across lines.
     """
     if not text:
         return ""
-    # Replace common line breaks with newlines.
-    text = re.sub(r"<\s*br\s*/?\s*>", "\n", text, flags=re.IGNORECASE)
-    text = re.sub(r"<\s*/\s*(?:p|div|h[1-6]|li)\s*>", "\n", text, flags=re.IGNORECASE)
-    # Flatten simple table rows to "Header: Value" lines.
+    PARA = "\x00"        # regular block boundary -> single newline
+    TABLE_END = "\x02"    # end of table -> blank line
+    ROW = "\x01"
+    # <br> inside a paragraph should be a space, not a line break.
+    text = re.sub(r"<\s*br\s*/?\s*>", " ", text, flags=re.IGNORECASE)
+    # Block element boundaries become paragraph markers.
+    text = re.sub(r"<\s*/\s*(?:p|div|h[1-6]|li)\s*>", PARA, text, flags=re.IGNORECASE)
+    # End of a table marks a stronger break so the following body text is
+    # separated from the forwarded-message header rows.
+    text = re.sub(r"<\s*/\s*(?:table|tbody|thead|tfoot)\s*>", TABLE_END, text, flags=re.IGNORECASE)
+    # Flatten simple table rows to single lines.
     text = re.sub(r"<\s*/\s*th\s*>\s*<\s*td\s*>", " ", text, flags=re.IGNORECASE | re.DOTALL)
     text = re.sub(r"<\s*/\s*td\s*>\s*<\s*td\s*>", ", ", text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r"<\s*/\s*tr\s*>", "\n", text, flags=re.IGNORECASE)
-    # Drop remaining table/tags.
-    text = re.sub(r"<\s*(?:table|tbody|thead|tfoot|tr|th|td).*?>", "", text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r"<\s*/\s*(?:table|tbody|thead|tfoot|tr|th|td)\s*>", "", text, flags=re.IGNORECASE)
-    # Strip any leftover tags.
+    text = re.sub(r"<\s*/\s*tr\s*>", ROW, text, flags=re.IGNORECASE)
+    # Drop remaining table/structural tags.
+    text = re.sub(r"<\s*(?:table|tbody|thead|tfoot|tr|th|td|p|div|h[1-6]|li).*?>", "", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<\s*/\s*(?:table|tbody|thead|tfoot|tr|th|td|p|div|h[1-6]|li)\s*>", "", text, flags=re.IGNORECASE)
+    # Strip any other tags (anchors lose their href, but link text remains).
     text = re.sub(r"<[^>]+>", "", text)
     # Unescape entities.
     text = html.unescape(text)
-    # Normalize whitespace.
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n\s*\n+", "\n\n", text)
+    # Collapse runs of whitespace to single spaces, but keep our markers.
+    text = re.sub(r"[ \t\r\n]+", " ", text)
+    # Restore row breaks and paragraph breaks, trimming surrounding spaces.
+    text = re.sub(rf" ?{re.escape(ROW)} ?", "\n", text)
+    text = re.sub(rf" ?{re.escape(PARA)} ?", "\n", text)
+    text = re.sub(rf" ?{re.escape(TABLE_END)} ?", "\n\n", text)
+    # Clean up excessive blank lines.
+    text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
 
@@ -514,7 +556,7 @@ def format_search_result(deals: list[dict], search: str, is_employee: bool = Fal
     lines.append("Reply with a number (1, 2, ...) to see full details.")
     msg = "\n".join(lines)
     if len(msg) > 4000:
-        msg = msg[:3980] + "\n\n\u2026 (message truncated)"
+        msg = _truncate_html(msg, 4000)
     return msg
 
 
@@ -568,7 +610,7 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
     lines.append("Send another project name to search again.")
     msg = "\n".join(lines)
     if len(msg) > 4000:
-        msg = msg[:3980] + "\n\n… (message truncated)"
+        msg = _truncate_html(msg, 4000)
     return msg
 
 
