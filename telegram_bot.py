@@ -291,7 +291,7 @@ def _sanitize_html(text: str) -> str:
     return parser.close()
 
 
-def _truncate_html(msg: str, max_len: int, ellipsis: str = "\n\n… (message truncated)") -> str:
+def _truncate_html(msg: str, max_len: int, ellipsis: str = "\n\n… (Telegram message limit reached)") -> str:
     """Truncate an HTML message without leaving dangling tags.
 
     Removes any partial tag at the truncation point and closes any tags
@@ -318,6 +318,14 @@ def _truncate_html(msg: str, max_len: int, ellipsis: str = "\n\n… (message tru
     for tag in reversed(open_tags):
         truncated += f"</{tag}>"
     return truncated + ellipsis
+
+
+def _strip_html_tags(text: str) -> str:
+    """Remove HTML tags and decode entities for plain-text fallback."""
+    if not text:
+        return ""
+    text = re.sub(r"<[^>]+>", "", text)
+    return html.unescape(text)
 
 
 def _html_to_text(text: str) -> str:
@@ -445,7 +453,7 @@ def _extract_forward_info(body: str) -> tuple[str, str | None]:
     before = body[:m.start()].rstrip()
     after = body[pos:].lstrip()
     cleaned = (before + ("\n\n" if before else "") + after).strip()
-    return cleaned, f"[{info}]"
+    return cleaned, _esc(f"[{info}]")
 
 
 def _clean_reply_attribution(body: str) -> tuple[str, str | None]:
@@ -463,7 +471,7 @@ def _clean_reply_attribution(body: str) -> tuple[str, str | None]:
             return body, None
         attribution = m.group(1).strip()
         if starts_with_date.match(attribution):
-            info = f"On {attribution} wrote"
+            info = _esc(f"On {attribution} wrote")
             before = body[:m.start()].rstrip()
             after = body[m.end():].lstrip()
             cleaned = (before + f"\n\n[{info}]" + ('\n\n' + after if after else '')).strip()
@@ -591,7 +599,7 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
                 elif created:
                     lines.append(f"<i>{_esc(created)}</i>")
                 if content:
-                    lines.append(_format_event_body(cat, content, max_len=3000))
+                    lines.append(_format_event_body(cat, content, max_len=1500))
                 lines.append("")
     else:
         update = d.get("latestUpdate")
@@ -642,7 +650,7 @@ def main() -> None:
             sample = text[:500].replace("\n", "\\n")
             logger.warning("Offending message sample: %s", sample)
             try:
-                await update.message.reply_text(text, parse_mode=None)
+                await update.message.reply_text(_strip_html_tags(text), parse_mode=None)
             except Exception as exc2:
                 logger.exception("Plain-text fallback also failed for chat %s", update.effective_chat.id)
 
