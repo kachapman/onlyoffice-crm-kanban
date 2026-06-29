@@ -879,6 +879,115 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except urllib.error.URLError as exc:
             return 502, {"error": str(exc.reason)}
 
+    @staticmethod
+    def _extract_mail_message_id(ev: dict) -> int | None:
+        """Try to find the associated mail message ID in a CRM history event."""
+        # 1. Nested mail object
+        for key in ("mailMessage", "MailMessage", "mail", "Mail", "email", "Email", "message", "Message"):
+            nested = ev.get(key)
+            if isinstance(nested, dict):
+                for mid_key in ("message_id", "messageId", "MessageId", "mailMessageId", "id", "ID"):
+                    val = nested.get(mid_key)
+                    if val is not None:
+                        try:
+                            mid = int(val)
+                            if mid > 0:
+                                return mid
+                        except (TypeError, ValueError):
+                            pass
+
+        # 2. Top-level event fields
+        for key in ("messageId", "MessageId", "mailMessageId", "MailMessageId", "idMessage", "IdMessage"):
+            val = ev.get(key)
+            if val is not None:
+                try:
+                    mid = int(val)
+                    if mid > 0:
+                        return mid
+                except (TypeError, ValueError):
+                    pass
+
+        # 3. additionalData object or JSON string
+        additional = ev.get("additionalData") or ev.get("AdditionalData")
+        if isinstance(additional, str):
+            try:
+                additional = json.loads(additional)
+            except json.JSONDecodeError:
+                additional = None
+        if isinstance(additional, dict):
+            for key in ("message_id", "messageId", "MessageId", "mailMessageId", "MailMessageId"):
+                val = additional.get(key)
+                if val is not None:
+                    try:
+                        mid = int(val)
+                        if mid > 0:
+                            return mid
+                    except (TypeError, ValueError):
+                        pass
+            url = additional.get("message_url") or additional.get("messageUrl") or additional.get("MessageUrl")
+            if url:
+                m = re.search(r"[?&]id=(\d+)", str(url))
+                if m:
+                    try:
+                        mid = int(m.group(1))
+                        if mid > 0:
+                            return mid
+                    except (TypeError, ValueError):
+                        pass
+
+        # 4. Parse content JSON for message_id
+        content = ev.get("content") or ev.get("Content")
+        if isinstance(content, str):
+            try:
+                data = json.loads(content)
+                if isinstance(data, dict):
+                    for key in ("message_id", "messageId", "MessageId", "mailMessageId", "MailMessageId"):
+                        val = data.get(key)
+                        if val is not None:
+                            try:
+                                mid = int(val)
+                                if mid > 0:
+                                    return mid
+                            except (TypeError, ValueError):
+                                pass
+            except json.JSONDecodeError:
+                pass
+
+        # 5. Regex extraction from stringified event values
+        for value in (ev.get("additionalData"), ev.get("AdditionalData"), ev.get("content"), ev.get("Content")):
+            if value is None:
+                continue
+            s = json.dumps(value) if not isinstance(value, str) else value
+            m = re.search(r"(?:mail/messages/|messageId[=:]|message_id[=:]|#message/|action=mailmessage(?:&amp;|&)?message_id=|idmessage[=:]|mailmessageid[=:])(\d+)", s, re.IGNORECASE)
+            if m:
+                try:
+                    mid = int(m.group(1))
+                    if mid > 0:
+                        return mid
+                except (TypeError, ValueError):
+                    pass
+
+        return None
+
+    def _fetch_full_mail_body(self, portal: str, mail_id: int) -> str | None:
+        """Fetch full mail message body from CRM mail API."""
+        code, data = self._bot_crm_proxy(portal, "GET", f"/api/2.0/mail/messages/{mail_id}")
+        if code >= 400:
+            return None
+        mail = data.get("response") if isinstance(data, dict) else None
+        if not isinstance(mail, dict):
+            return None
+        html_body = mail.get("htmlBody") or mail.get("HtmlBody")
+        if html_body:
+            return str(html_body)
+        text_body = mail.get("textBody") or mail.get("TextBody") or mail.get("body") or mail.get("Body")
+        if text_body:
+            return str(text_body)
+        introduction = mail.get("introduction") or mail.get("Introduction") or mail.get("preview") or mail.get("Preview")
+        if introduction:
+            return str(introduction)
+        return None
+
     def _handle_bot_me(self) -> None:
         if not self._bot_verify_request():
             _json_response(self, 403, {"error": "Forbidden"})
@@ -1008,8 +1117,23 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                 if is_employee:
                                     # Employee: collect up to 5 content-bearing events with category
                                     if content and len(events) < 5:
+                                        # For mail events, fetch the full email body from the mail API
+                                        # because CRM history only stores a truncated summary/link.
+                                        event_content = content
+                                        if "mail" in cat_name.lower() or "email" in cat_name.lower():
+                                            mail_id = self._extract_mail_message_id(ev)
+                                            if mail_id:
+                                                full_body = self._fetch_full_mail_body(portal, mail_id)
+                                                if full_body:
+                                                    try:
+                                                        data = json.loads(content)
+                                                        if isinstance(data, dict):
+                                                            data["introduction"] = full_body
+                                                            event_content = json.dumps(data)
+                                                    except json.JSONDecodeError:
+                                                        event_content = full_body
                                         events.append({
-                                            "content": content[:20000],
+                                            "content": event_content[:20000],
                                             "created": created,
                                             "categoryName": cat_name,
                                             "categoryId": cat_id,
