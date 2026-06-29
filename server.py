@@ -1009,7 +1009,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                     # Employee: collect up to 5 content-bearing events with category
                                     if content and len(events) < 5:
                                         events.append({
-                                            "content": content[:5000],
+                                            "content": content[:20000],
                                             "created": created,
                                             "categoryName": cat_name,
                                             "categoryId": cat_id,
