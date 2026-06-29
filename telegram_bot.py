@@ -594,16 +594,19 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
                 content = ev.get("content", "")
                 created = _fmt_date(ev.get("created", ""))
                 author = str(ev.get("author") or "").strip()
-                is_mail = "mail" in cat.lower() or "email" in cat.lower()
+                cat_lower = cat.lower()
+                is_mail = "mail" in cat_lower or "email" in cat_lower
+                is_customer_update = "customer update" in cat_lower
                 header_parts: list[str] = []
                 if cat:
                     header_parts.append(f"<b>[{_esc(cat)}]</b>")
                 if created:
                     header_parts.append(f"<i>{_esc(created)}</i>")
                 header = " — ".join(header_parts) if header_parts else ""
-                # Show author for all event types except mail messages, which already
-                # display From/To lines inside the formatted body.
-                if author and not is_mail:
+                # Show author for event types except:
+                # - mail messages (already show From/To lines)
+                # - customer updates (customers should not see employee names)
+                if author and not is_mail and not is_customer_update:
                     header = f"{header} ({_esc(author)})" if header else f"({_esc(author)})"
                 if header:
                     lines.append(header)
