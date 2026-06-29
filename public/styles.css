@@ -2697,13 +2697,31 @@ body {
 
 /* Preview modal history highlights need a darker tint and dark text so they are
    readable on the modal's dark background. This applies to the main preview modal,
-   bookmark preview, and search popup preview since they all reuse .opp-preview-history-body. */
+   bookmark preview, and search popup preview since they all reuse .opp-preview-history-body.
+   CRM rich-text notes use <b> tags with inline background-color for highlights, so we
+   target mark, span, and b with both background-color and background shorthand. */
 .opp-preview-history-body mark,
 .opp-preview-history-body span[style*="background-color"],
+.opp-preview-history-body span[style*="background:"],
+.opp-preview-history-body b[style*="background-color"],
+.opp-preview-history-body b[style*="background:"],
 .opp-preview-history-body--html mark,
-.opp-preview-history-body--html span[style*="background-color"] {
-  background-color: rgba(34, 197, 94, 0.45) !important;
-  color: #0f172a !important;
+.opp-preview-history-body--html span[style*="background-color"],
+.opp-preview-history-body--html span[style*="background:"],
+.opp-preview-history-body--html b[style*="background-color"],
+.opp-preview-history-body--html b[style*="background:"],
+.opp-preview-history-body--plain mark,
+.opp-preview-history-body--plain span[style*="background-color"],
+.opp-preview-history-body--plain span[style*="background:"],
+.opp-preview-history-body--plain b[style*="background-color"],
+.opp-preview-history-body--plain b[style*="background:"],
+.opp-preview-note-detail mark,
+.opp-preview-note-detail span[style*="background-color"],
+.opp-preview-note-detail span[style*="background:"],
+.opp-preview-note-detail b[style*="background-color"],
+.opp-preview-note-detail b[style*="background:"] {
+  background-color: rgba(34, 197, 94, 0.65) !important;
+  color: #000 !important;
   padding: 0 2px;
   border-radius: 2px;
 }

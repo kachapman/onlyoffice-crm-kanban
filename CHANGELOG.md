@@ -2,6 +2,17 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [2.0.6] — 2026-06-29
+
+### Fixed
+- **Preview modal: highlighted `<b>` text now readable.** The CRM note editor uses `<b style="background-color: rgb(200, 230, 201);">` for highlighted text. The CSS override now targets `b`/`span`/`mark` elements with `background-color` or `background` inline styles across all preview history body variants (main preview, bookmark preview, search popup), using a darker `rgba(34, 197, 94, 0.65)` background and black text so highlighted content is legible on the dark modal background.
+- **Customer Bot modal: deleting one mapping no longer removes multiple mappings.** Delete buttons now use the mapping's unique `chatId`, and the server removes by `chatId` via `remove_mapping_by_chat()`. This fixes the bug where multiple employee mappings (or mappings sharing a `contactId`) were all deleted when removing one.
+- **Preview modal: delete button restored for Customer Update and Text/SMS events.** The × button now appears for history categories matching `customer update`, `text message`, `text`, and `sms` (in addition to existing note/comment/activity/meeting/call/task categories). The underlying `DELETE /api/2.0/crm/history/{id}` endpoint already supports these events.
+- **Customer Bot: customer mode latest update no longer shows author.** The "Latest customer update" header in non-employee mode now omits the employee name, matching the decision to hide authors from Customer Update events.
+
+### Files changed
+- `public/styles.css`, `public/app.js`, `server.py`, `telegram_bot.py`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`, `docs/RELEASE_v2.0.6.md`
+
 ## [2.0.5] — 2026-06-29
 
 ### Added
