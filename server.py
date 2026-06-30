@@ -92,6 +92,28 @@ BOT_CRM_EMAIL = os.environ.get("BOT_CRM_EMAIL", "")
 BOT_CRM_PASSWORD = os.environ.get("BOT_CRM_PASSWORD", "")
 
 
+def _crm_display_name(user_dict: dict[str, Any], user_id: str = "") -> str:
+    """Best-effort display name from a CRM people/user record.
+
+    Falls back through common OnlyOffice user fields so a missing displayName
+    does not leak the raw user id / UUID into the UI.
+    """
+    p = user_dict
+    first = str(p.get("firstName") or p.get("FirstName") or "").strip()
+    last = str(p.get("lastName") or p.get("LastName") or "").strip()
+    full_name = f"{first} {last}".strip()
+    return str(
+        p.get("displayName")
+        or p.get("DisplayName")
+        or p.get("userName")
+        or p.get("UserName")
+        or p.get("email")
+        or p.get("Email")
+        or full_name
+        or user_id
+    )
+
+
 class ResponseCache:
     """Simple in-memory response cache with per-entry TTL."""
 
@@ -1390,7 +1412,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
             row: dict[str, Any] = {
                 "id": uid,
-                "displayName": str(p.get("displayName") or p.get("DisplayName") or p.get("userName") or p.get("UserName") or uid),
+                "displayName": _crm_display_name(p, uid),
                 "email": str(p.get("email") or p.get("Email") or "").strip().lower(),
                 "online": online,
                 "idle": idle and online,
