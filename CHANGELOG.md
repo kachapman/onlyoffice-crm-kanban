@@ -2,6 +2,15 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [2.0.7] — 2026-06-30
+
+### Fixed
+- **Preview modal: pasted email content now renders for Email-category notes.** Email-category history events were always collapsed to the generic "An email has been received." summary, even when a user pasted real content into the note. The summary is now shown only for genuine linked emails (messageId present / mail payload) or the CRM placeholder text; otherwise the actual content renders normally.
+- **Presence/Team tile: no more UUID display names.** When a CRM user record lacks `displayName` and `userName`, the server now falls back through `email`, `firstName`+`lastName` before using the raw user id. The Team tile also uses the same robust label helper as the modal roster.
+
+### Files changed
+- `public/app.js`, `server.py`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`, `docs/RELEASE_v2.0.7.md`
+
 ## [2.0.6] — 2026-06-29
 
 ### Fixed
