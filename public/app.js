@@ -10961,7 +10961,19 @@ async function ensurePresenceUsersCache(force = false) {
 
 function getPresenceUserLabel(u) {
   if (!u) return "";
-  return u.displayName || u.DisplayName || u.userName || u.UserName || (u.id != null ? String(u.id) : "User");
+  const first = String(u.firstName || u.FirstName || "").trim();
+  const last = String(u.lastName || u.LastName || "").trim();
+  const fullName = (first + " " + last).trim();
+  return (
+    u.displayName ||
+    u.DisplayName ||
+    u.userName ||
+    u.UserName ||
+    u.email ||
+    u.Email ||
+    fullName ||
+    (u.id != null ? String(u.id) : "User")
+  );
 }
 
 function getPresenceUserId(u) {
@@ -12737,7 +12749,8 @@ function renderPresenceTileCompact(snapshot = null) {
 
     const nm = document.createElement("span");
     nm.className = "presence-name";
-    nm.textContent = u.displayName || u.id || "";
+    const userLabel = getPresenceUserLabel(u);
+    nm.textContent = userLabel || "";
 
     // Detect server version: new server sends inferred/autoStatus fields
     const serverHasInferred = typeof u.inferred !== 'undefined';
@@ -12772,7 +12785,7 @@ function renderPresenceTileCompact(snapshot = null) {
     row.append(dot, nm, manualStatus, st);
     row.addEventListener("click", () => {
       switchToPresenceMessagesTab();
-      openDMInline(u.id, u.displayName);
+      openDMInline(u.id, userLabel);
     });
     list.appendChild(row);
   };
@@ -14648,6 +14661,20 @@ function crmMailReceivedLine(subject) {
   return `The email ["${subj}"] has been received.`;
 }
 
+function historyContentIsMailPlaceholder(raw, subject) {
+  const s = String(raw || "").trim();
+  if (!s) return true;
+  if (/^An email has been received\.?$/i.test(s)) return true;
+  if (/^The email \["[^"]+"\] has been received\.?$/i.test(s)) return true;
+  const subj = String(subject || "").trim();
+  if (subj) {
+    const escaped = subj.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`^The email \["${escaped}"\] has been received\.?$`, "i");
+    if (re.test(s)) return true;
+  }
+  return false;
+}
+
 function historyEventAuthor(ev) {
   const createBy = ev.createBy || ev.CreateBy || ev.createdBy || ev.CreatedBy;
   return String(
@@ -15353,7 +15380,19 @@ function renderHistoryNoteBody(container, ev) {
   const mailPayload = parseHistoryMailPayload(ev);
   const mailIds = extractMailMessageIds(ev);
 
-  if (isHistoryMailEvent(ev, mailPayload) || ((shouldCollapseHistoryNoteContent(ev, raw) && !isNoteCategoryEvent(ev)) && (mailPayload || mailIds.length))) {
+  const isMailEvent =
+    isHistoryMailEvent(ev, mailPayload) ||
+    ((shouldCollapseHistoryNoteContent(ev, raw) && !isNoteCategoryEvent(ev)) && (mailPayload || mailIds.length));
+  // Show the mail summary only when it is a genuine linked email or the CRM
+  // placeholder text. If a user pasted real content into an Email-category note,
+  // fall through and render the content instead of hiding it behind "An email has
+  // been received."
+  if (
+    isMailEvent &&
+    (mailIds.length > 0 ||
+      mailPayload ||
+      historyContentIsMailPlaceholder(raw, historyEventMailSubject(ev, mailPayload)))
+  ) {
     renderHistoryMailReceivedSummary(container, ev, mailPayload);
     return;
   }
