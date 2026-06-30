@@ -15375,24 +15375,28 @@ function renderHistoryMailReceivedSummary(container, ev, mailPayload = null) {
   container.replaceChildren(p);
 }
 
+function shouldRenderMailSummary(ev, raw, mailPayload, mailIds) {
+  const isMailEvent =
+    isHistoryMailEvent(ev, mailPayload) ||
+    ((shouldCollapseHistoryNoteContent(ev, raw) && !isNoteCategoryEvent(ev)) && (mailPayload || mailIds.length));
+  if (!isMailEvent) return false;
+  // Show the mail summary only when it is a genuine linked email or the CRM
+  // placeholder text. If a user pasted real content into an Email-category note,
+  // fall through and render the content instead of hiding it behind "An email has
+  // been received."
+  return (
+    mailIds.length > 0 ||
+    mailPayload ||
+    historyContentIsMailPlaceholder(raw, historyEventMailSubject(ev, mailPayload))
+  );
+}
+
 function renderHistoryNoteBody(container, ev) {
   const raw = historyEventRawContent(ev).trim();
   const mailPayload = parseHistoryMailPayload(ev);
   const mailIds = extractMailMessageIds(ev);
 
-  const isMailEvent =
-    isHistoryMailEvent(ev, mailPayload) ||
-    ((shouldCollapseHistoryNoteContent(ev, raw) && !isNoteCategoryEvent(ev)) && (mailPayload || mailIds.length));
-  // Show the mail summary only when it is a genuine linked email or the CRM
-  // placeholder text. If a user pasted real content into an Email-category note,
-  // fall through and render the content instead of hiding it behind "An email has
-  // been received."
-  if (
-    isMailEvent &&
-    (mailIds.length > 0 ||
-      mailPayload ||
-      historyContentIsMailPlaceholder(raw, historyEventMailSubject(ev, mailPayload)))
-  ) {
+  if (shouldRenderMailSummary(ev, raw, mailPayload, mailIds)) {
     renderHistoryMailReceivedSummary(container, ev, mailPayload);
     return;
   }
@@ -15406,7 +15410,7 @@ function renderHistoryNoteBody(container, ev) {
     // Only treat as mail summary if it actually has mail indicators or is a mail category.
     // Regular rich-text event notes (even long HTML with <mark>/<strong> etc.) should continue
     // to the HTML rendering path below so bold/italic/underline/highlight are visible.
-    if (isHistoryMailEvent(ev, mailPayload) || mailPayload || mailIds.length) {
+    if (shouldRenderMailSummary(ev, raw, mailPayload, mailIds)) {
       renderHistoryMailReceivedSummary(container, ev, mailPayload);
       return;
     }
