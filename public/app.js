@@ -1903,6 +1903,10 @@ function refreshDashboardTileLayouts() {
 
 function parseApiError(body, status) {
   if (typeof body === "string") {
+    if (/<!DOCTYPE\s+html|<html[\s>]/i.test(body)) {
+      const clean = body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+      return clean.slice(0, 200) || `CRM returned an HTML error page (HTTP ${status})`;
+    }
     try {
       body = JSON.parse(body);
     } catch {
@@ -1931,7 +1935,11 @@ async function api(path, options = {}) {
     body = text ? JSON.parse(text) : {};
   } catch {
     if (!res.ok) {
-      throw new Error(text.slice(0, 300) || res.statusText);
+      const isHtml = /<!DOCTYPE\s+html|<html[\s>]/i.test(text);
+      const clean = isHtml
+        ? text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200)
+        : text.slice(0, 300);
+      throw new Error(clean || res.statusText || `HTTP ${res.status}`);
     } else {
       // Some endpoints (e.g. form-urlencoded history with attachments) may return non-JSON on success.
       // Do not throw; return a minimal object so caller can proceed.
@@ -5993,7 +6001,8 @@ function populateQuickNoteCategorySelect() {
 }
 
 function dealEditStepError(step, err) {
-  const msg = err?.message || String(err);
+  let msg = err?.message || String(err);
+  if (msg.length > 300) msg = msg.slice(0, 300) + "…";
   return new Error(`${step}: ${msg}`);
 }
 
