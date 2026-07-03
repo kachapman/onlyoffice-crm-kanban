@@ -1,10 +1,12 @@
-# Deploy v1.1.0 on the server — verify each step
+# Deploy on the server — verify each step (updated for 2026-07 host-nginx reality)
 
 Use this on the **DigitalOcean droplet** only.  
-**Do not** change Bluehost DNS, `/opt/estimate-enhancer/nginx.conf`, or host `certbot --nginx` for a normal app update.
+**Do not** change Bluehost DNS or run host `certbot --nginx` for a normal app update.
 
 **Repo path:** `/opt/vanguard/onlyoffice-crm-kanban`  
-**Public URL:** https://dashboard.vanguardadj.com
+**Public URL:** https://dashboard.publicadjustermidwest.com
+
+> **2026-07 note:** Public traffic for the dashboard domain is handled by the host's nginx (systemd site file `/etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com`), not the Docker `estimate-nginx` container. Old references to `estimate-nginx` and `/opt/estimate-enhancer/nginx.conf` below are historical. See `docs/DASHBOARD_INFRASTRUCTURE.md`.
 
 ---
 
@@ -163,47 +165,47 @@ curl -s http://127.0.0.1:8765/api/config
 
 ---
 
-## Step 9 — Nginx can reach the dashboard (Docker network)
+## Step 9 — App reachable from host (localhost, bypassing nginx)
 
 ```bash
-docker exec estimate-nginx wget -qO- http://vanguard-crm-dashboard:8765/api/config
+curl -s http://127.0.0.1:8765/api/config
 ```
 
 **STOP — verify**
 
-- Same JSON as Step 8.
-- If this **fails** but Step 8 worked, fix network only (no DNS/nginx.conf edit yet):
-
-```bash
-docker network connect estimate-enhancer_estimate-network vanguard-crm-dashboard 2>/dev/null || true
-docker exec estimate-nginx wget -qO- http://vanguard-crm-dashboard:8765/api/config
-```
-
-- Repeat until JSON appears. **Do not open the public URL until this passes.**
+- JSON includes `"portalUrl"`.
+- If refused, the container is not listening — check `docker compose logs dashboard`.
 
 ---
 
-## Step 10 — Public HTTPS and domain
+## Step 10 — Public HTTPS and domain (host nginx)
 
 ```bash
-curl -sI https://dashboard.vanguardadj.com/ | head -5
-curl -s https://dashboard.vanguardadj.com/api/config
+curl -sI https://dashboard.publicadjustermidwest.com/ | head -5
+curl -s https://dashboard.publicadjustermidwest.com/api/config
 ```
 
 **STOP — verify**
 
 - First command: **`HTTP/2 200`** or **`HTTP/1.1 200`** (not 502/503/521).
-- Second command: same JSON as Step 8.
-- If **502** after Step 9 passed: reload nginx only:
+- Second command: same JSON as Step 9.
+- If **502** here but Step 9 passed: the host nginx site is the problem.
 
 ```bash
-docker exec estimate-nginx nginx -t
-docker exec estimate-nginx nginx -s reload
-curl -sI https://dashboard.vanguardadj.com/ | head -5
+sudo nginx -t
+sudo systemctl reload nginx
+curl -sI https://dashboard.publicadjustermidwest.com/ | head -5
 ```
 
-- **Do not edit** `/opt/estimate-enhancer/nginx.conf` unless Step 9 never worked.
-- **Do not run** host `certbot --nginx` on this droplet.
+- For uploads to work, the host site file must contain (inside the https server block):
+
+```nginx
+client_max_body_size 100m;
+proxy_request_buffering off;
+proxy_read_timeout 120s;
+```
+
+- **Do not run** host `certbot --nginx` on this droplet for the dashboard domain.
 
 ---
 
@@ -236,12 +238,12 @@ Then repeat **Steps 8–11**. User data in the Docker volume is kept.
 
 ---
 
-## What this deploy does **not** change
+## What this deploy does **not** change (2026-07 host-nginx world)
 
 | Item | Action |
 |------|--------|
 | Bluehost DNS A record `dashboard` | No change |
-| `estimate-nginx` config file | No change |
+| Host nginx site file for dashboard | Do not touch unless you are intentionally fixing upload/timeout settings |
 | TLS certificates | No change |
 | Server `.env` | No change |
 | Docker volume `dashboard-data` | Preserved |

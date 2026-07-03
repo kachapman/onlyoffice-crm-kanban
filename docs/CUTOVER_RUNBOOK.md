@@ -34,6 +34,10 @@ dig +short dashboard.publicadjustermidwest.com A @8.8.8.8
 
 ### 1a. Reverse proxy / TLS
 
+**Note (2026-07):** As of the sherwood-toolbox cutover, `dashboard.publicadjustermidwest.com` is served by the **host's nginx** (systemd site file `/etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com`), not the Docker `estimate-nginx` container. The steps below are the historical path. For the current world, back up and edit the host site file instead, ensure the upload lines are present (`client_max_body_size 100m; proxy_request_buffering off; proxy_read_timeout 120s;`), and reload with `sudo nginx -t && sudo systemctl reload nginx`. See `docs/DASHBOARD_INFRASTRUCTURE.md`.
+
+Historical steps (estimate-nginx era):
+
 Back up nginx config:
 
 ```bash
@@ -263,7 +267,7 @@ sudo certbot renew --dry-run
 ## Rollback (if cutover fails)
 
 1. Restore old DNS records at Bluehost.
-2. On dashboard droplet: restore `/opt/estimate-enhancer/nginx.conf.bak.*`, reload nginx, revert `.env` to old domain, and `docker compose up -d --build`.
+2. On dashboard droplet: restore the relevant nginx backup (host site file `/etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com.bak.*` in the 2026-07+ world, or `/opt/estimate-enhancer/nginx.conf.bak.*` in the old estimate-nginx world), reload nginx, revert `.env` to old domain, and `docker compose up -d --build`.
 3. On CRM droplet: stop/remove the new container and recreate the original one using `/root/onlyoffice-backup-YYYYMMDD-inspect.json`.
 4. Delete the new portal-key data directories if needed.
 

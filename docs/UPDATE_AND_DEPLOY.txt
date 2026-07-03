@@ -183,30 +183,44 @@ PART B — ON THE SERVER (DigitalOcean droplet)
 NGINX / TLS (only when you change hostnames or certs)
 --------------------------------------------------------------------------------
 
-The public site is served by Docker container "estimate-nginx", not host nginx.
+As of 2026-07, public traffic for dashboard.publicadjustermidwest.com is handled
+by the HOST's nginx (systemd), not the Docker estimate-nginx container.
 
-   Config file on server: /opt/estimate-enhancer/nginx.conf
+   Active site file on server:
 
-   Reload after nginx edits:
+     /etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com
 
-   docker exec estimate-nginx nginx -t
-   docker exec estimate-nginx nginx -s reload
+   Required inside the https server block for uploads to work:
+
+     client_max_body_size 100m;
+     proxy_request_buffering off;
+     proxy_read_timeout 120s;
+
+   Reload after editing the host site:
+
+     sudo nginx -t
+     sudo systemctl reload nginx
 
    Renew certificate (if needed):
 
-   certbot certonly --webroot -w /var/www/certbot -d dashboard.vanguardadj.com
+     certbot certonly --webroot -w /var/www/certbot -d dashboard.publicadjustermidwest.com
 
 
 --------------------------------------------------------------------------------
 DOCKER NETWORK (if dashboard cannot be reached after recreate)
 --------------------------------------------------------------------------------
 
-The CRM container must be on the same network as estimate-nginx.
+The container binds to 127.0.0.1:8765. Host nginx proxies to that address.
+The external network declaration is kept for compatibility but is not required
+for public routing.
 
-   docker network connect estimate-enhancer_estimate-network vanguard-crm-dashboard
-   docker exec estimate-nginx wget -qO- http://vanguard-crm-dashboard:8765/api/config
+   Manual reachability test from host:
 
-   Permanent fix: add external network to docker-compose.yml (see docs/DEPLOY.md).
+     curl -s http://127.0.0.1:8765/api/config
+
+   If other containers on the old network need to reach it:
+
+     docker network connect estimate-enhancer_estimate-network vanguard-crm-dashboard 2>/dev/null || true
 
 
 --------------------------------------------------------------------------------

@@ -2,6 +2,22 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [2.0.8] — 2026-07-03
+
+### Infrastructure / Upload fix (post-sherwood-toolbox)
+- **Host nginx is now the permanent front-end for `dashboard.publicadjustermidwest.com`.** After the sherwood-toolbox deployment, public traffic no longer goes through the Docker `estimate-nginx` container. The active config is `/etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com`.
+- **Restored PDF/image attachments in edit/quick-note/side modals.** Added the three required directives to the host site file (matching sherwood-toolbox convention on the host):
+  - `client_max_body_size 100m;`
+  - `proxy_request_buffering off;`
+  - `proxy_read_timeout 120s;`
+- These live inside the https server block before `location /`. Without them, `UploadProgress.ashx` multipart uploads failed with 413 "client intended to send too large body".
+- All documentation, deploy scripts, and references updated to reflect the new permanent architecture (host nginx directly to `127.0.0.1:8765`). Old `estimate-nginx`/`/opt/estimate-enhancer/nginx.conf` paths are now explicitly marked historical for the dashboard domain.
+- `docker-compose.yml` network declaration left unchanged (harmless, keeps future options open).
+- Backups of the host site file, full `nginx -T`, container state, certs, and user data volume were taken before the edit.
+
+### Files changed
+- Host nginx site file (server), `docs/DASHBOARD_INFRASTRUCTURE.md`, `docs/PRODUCTION_SERVER_NOTES.txt`, `docs/UPDATE_AND_DEPLOY.txt`, `docs/DEPLOY_v1.1_VERIFY_STEPS.md`, `AGENTS.md`, `docs/MIGRATE_DOMAINS.md`, `docs/CUTOVER_RUNBOOK.md`, `romanian_roadtrip.md`, `FUTURE_FEATURES.md`, `CHANGELOG.md`, deploy/ historical script headers (`nginx-dashboard.conf`, `nginx-dashboard-estimate-nginx.snippet`, `dashboard-add-new-domain.sh`, `dashboard-add-new-domain-v2.py`).
+
 ## [2.0.7] — 2026-06-30
 
 ### Fixed

@@ -53,7 +53,7 @@ Other built-in tiles: **Feed** (CRM notifications), **Tasks**, **Team presence**
 ## Documentation
 
 - **[DEPLOY.md](./DEPLOY.md)** — update the production server after a GitHub commit
-- **[docs/PRODUCTION_SERVER_NOTES.txt](./docs/PRODUCTION_SERVER_NOTES.txt)** — droplet-only config (estimate-nginx, DNS, certs; not overwritten by git pull)
+- **[docs/PRODUCTION_SERVER_NOTES.txt](./docs/PRODUCTION_SERVER_NOTES.txt)** — droplet-only config (host nginx for dashboard, Docker network, certs; not overwritten by git pull)
 - **[FUTURE_FEATURES.md](./FUTURE_FEATURES.md)** — roadmap and feature ideas
 - **[Toaster_Features](./Toaster_Features)** — suggested dashboard tiles/widgets
 - **[ISSUES.md](./ISSUES.md)** — tracked bugs and follow-up work

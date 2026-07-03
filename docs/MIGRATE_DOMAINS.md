@@ -222,29 +222,44 @@ curl -s https://office.publicadjustermidwest.com/api/2.0/authentication.json | h
 
 ## 3. Dashboard Droplet (`159.89.229.126`)
 
-> **Production context:** On this droplet, ports 80/443 are handled by the `estimate-nginx` Docker container, **not** by the host’s nginx. The host nginx is inactive. See `docs/PRODUCTION_SERVER_NOTES.txt` for background.
+> **Production context (pre-2026-07):** On this droplet, ports 80/443 for the dashboard were handled by the `estimate-nginx` Docker container. As of 2026-07 the dashboard domain is served directly by the host's nginx (systemd site file `/etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com`). See `docs/DASHBOARD_INFRASTRUCTURE.md` (2026-07 section) and `docs/PRODUCTION_SERVER_NOTES.txt` for the current layout.
 >
-> - Nginx config: `/opt/estimate-enhancer/nginx.conf`
-> - Reverse-proxy container: `estimate-nginx`
-> - Dashboard app container: `vanguard-crm-dashboard`
+> - Current authoritative nginx file: `/etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com`
+> - Historical (old world): `/opt/estimate-enhancer/nginx.conf` + `estimate-nginx`
+> - Dashboard app container: `vanguard-crm-dashboard` (127.0.0.1:8765)
 > - Dashboard app path: `/opt/vanguard/onlyoffice-crm-kanban`
-> - Certificates on host: `/etc/letsencrypt/live/dashboard.publicadjustermidwest.com/` (mounted read-only into `estimate-nginx`)
+> - Certificates on host: `/etc/letsencrypt/live/dashboard.publicadjustermidwest.com/` (used by host nginx)
 
-### 3a. Back up the nginx config
+### 3a. Back up the current nginx config for the domain
+
+As of 2026-07 the authoritative file is the **host** site:
 
 ```bash
-sudo cp /opt/estimate-enhancer/nginx.conf /opt/estimate-enhancer/nginx.conf.$(date +%Y%m%d).bak
+sudo cp /etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com \
+  /etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com.$(date +%Y%m%d).bak
 ```
 
-### 3b. Update the nginx config for the new domain
+(If you are following the old cutover steps from before the sherwood-toolbox change, you would have backed up `/opt/estimate-enhancer/nginx.conf` instead.)
 
-Edit `/opt/estimate-enhancer/nginx.conf`. In the existing `dashboard.vanguardadj.com` server blocks, change:
+### 3b. Update the nginx config for the new domain (host nginx world)
 
-- `server_name dashboard.vanguardadj.com` → `server_name dashboard.publicadjustermidwest.com`
-- Certificate paths to the new domain:
+Edit the **host** site file `/etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com`.
+
+In the existing `dashboard.vanguardadj.com` (or placeholder) server blocks, change:
+
+- `server_name ...` → `server_name dashboard.publicadjustermidwest.com`
+- Certificate paths:
   - `ssl_certificate /etc/letsencrypt/live/dashboard.publicadjustermidwest.com/fullchain.pem;`
   - `ssl_certificate_key /etc/letsencrypt/live/dashboard.publicadjustermidwest.com/privkey.pem;`
-- Keep the `proxy_pass http://vanguard-crm-dashboard:8765;` line unchanged.
+- Keep `proxy_pass http://127.0.0.1:8765;` (or the equivalent for the container binding at the time).
+- Ensure the three upload/timeout lines are present inside the https server block:
+
+```nginx
+client_max_body_size 100m;
+proxy_request_buffering off;
+proxy_read_timeout 120s;
+```
+
 - Ensure the HTTP server block still serves the ACME webroot:
 
 ```nginx
@@ -253,17 +268,11 @@ location /.well-known/acme-challenge/ {
 }
 ```
 
-If `/var/www/certbot` is not already mounted into `estimate-nginx`, add it to `/opt/estimate-enhancer/docker-compose.yml` under the nginx service volumes:
-
-```yaml
-- /var/www/certbot:/var/www/certbot:ro
-```
-
-Then recreate the nginx container:
+Then reload the host nginx:
 
 ```bash
-cd /opt/estimate-enhancer
-docker compose up -d
+sudo nginx -t
+sudo systemctl reload nginx
 ```
 
 ### 3c. Generate the new SSL certificate

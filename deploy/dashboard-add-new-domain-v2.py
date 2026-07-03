@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 """
+HISTORICAL — used for estimate-nginx / sherwood-toolbox era (pre-2026-07).
+For dashboard.publicadjustermidwest.com the authoritative nginx config is now
+the host site file: /etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com
+(client_max_body_size 100m, proxy_request_buffering off, proxy_read_timeout 120s required).
+
 Add dashboard.publicadjustermidwest.com server blocks to estimate-nginx,
 issue a Let's Encrypt certificate, and reload nginx.
 

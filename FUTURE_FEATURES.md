@@ -131,7 +131,7 @@ The deal-edit modal only supported **plain-text** event notes (old hint removed)
 
 4. **UI**
    - `<input type="file" multiple>` in deal-edit fieldset.
-   - Show selected file names; max size aligned with nginx `client_max_body_size` (50M on estimate-nginx).
+    - Show selected file names; max size aligned with nginx `client_max_body_size` (100m on host nginx for dashboard.publicadjustermidwest.com).
    - On submit: upload files first, then create history event with returned ids embedded per API spec.
 
 5. **Acceptance criteria**

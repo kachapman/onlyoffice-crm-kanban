@@ -1,7 +1,9 @@
 # Dashboard Infrastructure & NGINX Reference
 
-**Last updated:** 2026-06-25  
+**Last updated:** 2026-07-03  
 **Applies to:** Production server `ubuntu-webapp1-estimateanalyzer` (`159.89.229.126`)
+
+> **2026-07 reality:** Public traffic for `dashboard.publicadjustermidwest.com` is handled by the host's nginx (systemd), not the Docker `estimate-nginx` container. The active config is `/etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com`. See the "2026-07 Infrastructure Reality Change" section below.
 
 ## Purpose
 
@@ -9,38 +11,36 @@ This document exists so future code agents (and humans) understand how the CRM K
 
 ---
 
-## High-level architecture
+## High-level architecture (2026-07)
 
-The server runs **multiple web apps** via Docker Compose. All public traffic enters through a single nginx container (`estimate-nginx`) that proxies to the correct backend container based on `server_name`.
+Public traffic for `dashboard.publicadjustermidwest.com` is handled by the **host's nginx** (systemd service), not a Docker nginx container.
 
 ```
 Internet
    │
    ▼
-ports 80/443 on host
+ports 80/443 on host (systemd nginx)
    │
    ▼
-┌─────────────────────────────────────┐
-│  estimate-nginx (nginx:alpine)     │
-│  /opt/estimate-enhancer/nginx.conf  │
-│  ports: 80:80, 443:443              │
-└─────────────────────────────────────┘
+/etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com
    │
-   ├──► app:8000                  estimate-enhancer  → enhancer.sherwoodestimates.com
-   ├──► iws-calculator:80         IWS Calculator     → iwscalc.sherwoodestimates.com
-   └──► dashboard:8765            CRM Kanban Dashboard → dashboard.publicadjustermidwest.com
+   ├──► vanguard-crm-dashboard:8765   (127.0.0.1 only)
    │
-   └──► systemd: crm-telegram-bot   Telegram bot (@vanguardupdates_bot)
-                                    polls Telegram API, calls dashboard at
-                                    http://127.0.0.1:8765 (host loopback → container)
+   └──► other host services (sherwood-toolbox on 8777, etc.)
+
+systemd: crm-telegram-bot   Telegram bot (@vanguardupdates_bot)
+                            polls Telegram API, calls dashboard at
+                            http://127.0.0.1:8765 (host loopback → container)
 ```
 
-### Critical facts
+### Critical facts (2026-07)
 
-1. **The host nginx service is STOPPED.** Public traffic is handled by the Docker nginx container, not by `/etc/nginx`.
-2. **The nginx config lives on the host at** `/opt/estimate-enhancer/nginx.conf` and is mounted read-only into the container at `/etc/nginx/conf.d/default.conf`.
-3. **The dashboard lives in a separate Compose project** (`/opt/vanguard/onlyoffice-crm-kanban/docker-compose.yml`) but is attached to the **same Docker network** as the estimate-enhancer project (`estimate-enhancer_estimate-network`).
-4. **The dashboard container exposes port `8765`** and is reachable from nginx by the Docker Compose **service name** `dashboard` (or container name `vanguard-crm-dashboard`).
+1. **Host nginx (systemd) owns ports 80/443 for this domain.** The Docker `estimate-nginx` container is no longer in the path for `dashboard.publicadjustermidwest.com`.
+2. **The source-of-truth nginx file for the dashboard domain is now:**
+   `/etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com`
+3. **The dashboard container** binds only to `127.0.0.1:8765` and joins `estimate-enhancer_estimate-network` (harmless but not required for routing).
+4. **Upload requirements** (`client_max_body_size 100m`, `proxy_request_buffering off`, `proxy_read_timeout 120s`) **must live in the host site file** for this domain.
+5. **The old Docker nginx path** (`/opt/estimate-enhancer/nginx.conf` mounted into `estimate-nginx`) is historical for this domain. See the 2026-07 section below.
 
 ---
 
@@ -96,11 +96,11 @@ networks:
     name: estimate-enhancer_estimate-network
 ```
 
-### Why this matters
+### Why this matters (2026-07)
 
-Because the dashboard's Compose file declares `estimate-network` as an **external** network, it joins the same network namespace as the estimate-enhancer services. This is why nginx can proxy to `http://dashboard:8765` even though the projects are in different directories.
+The dashboard still declares the external network so the container can join it if other services on the host need to reach it directly. For public traffic the host nginx now proxies straight to `http://127.0.0.1:8765`.
 
-**Do NOT change the network name** in either file without updating the other.
+**Do NOT change the network name** in `docker-compose.yml` without a good reason — it is currently harmless and keeps future options open.
 
 ---
 
@@ -149,41 +149,35 @@ systemctl restart crm-telegram-bot
 
 ---
 
-## NGINX config location & reload
+## NGINX config location & reload (2026-07)
 
 | File | Purpose |
 |------|---------|
-| `/opt/estimate-enhancer/nginx.conf` | Source-of-truth nginx config on the host |
-| `/etc/nginx/conf.d/default.conf` (inside `estimate-nginx` container) | Read-only mount of the above |
+| `/etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com` | **Source-of-truth** for `dashboard.publicadjustermidwest.com` (host nginx) |
+| `/opt/estimate-enhancer/nginx.conf` | Historical (used by `estimate-nginx` for other apps) |
 
-### How to edit
+### How to edit (dashboard domain)
 
-Edit `/opt/estimate-enhancer/nginx.conf` on the host, then reload the container:
+1. Edit `/etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com` on the host.
+2. Validate + reload:
 
 ```bash
-# Validate
-sudo docker exec estimate-nginx nginx -t
-
-# Reload
-sudo docker exec estimate-nginx nginx -s reload
+sudo nginx -t
+sudo systemctl reload nginx
 ```
 
-**Never edit the file inside the running container** — it is mounted read-only and the change would be lost on restart.
+**Never edit the old Docker-mounted file for this domain** — it is no longer in the request path.
 
 ---
 
-## Dashboard nginx server block
+## Dashboard nginx server block (host nginx — current)
 
-The following blocks must exist in `/opt/estimate-enhancer/nginx.conf` for the dashboard to work. They live alongside the existing `enhancer.sherwoodestimates.com` and `iwscalc.sherwoodestimates.com` blocks.
+The following blocks are in the **host** nginx site file for `dashboard.publicadjustermidwest.com` (`/etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com`).
 
 ```nginx
 server {
     listen 80;
     server_name dashboard.publicadjustermidwest.com;
-
-    location /.well-known/acme-challenge/ {
-        root /var/www/certbot;
-    }
 
     location / {
         return 301 https://$host$request_uri;
@@ -191,40 +185,39 @@ server {
 }
 
 server {
-    listen 443 ssl;
-    http2 on;
+    listen 443 ssl http2;
     server_name dashboard.publicadjustermidwest.com;
 
-    ssl_certificate /etc/letsencrypt/live/dashboard.publicadjustermidwest.com/fullchain.pem;
+    ssl_certificate     /etc/letsencrypt/live/dashboard.publicadjustermidwest.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/dashboard.publicadjustermidwest.com/privkey.pem;
-    ssl_trusted_certificate /etc/letsencrypt/live/dashboard.publicadjustermidwest.com/chain.pem;
 
-    client_max_body_size 50M;
+    # Required for PDF/image attachments (UploadProgress.ashx) and large notes.
+    client_max_body_size 100m;
     proxy_request_buffering off;
+    proxy_read_timeout 120s;
 
     location / {
-        proxy_pass http://dashboard:8765;
-        proxy_http_version 1.1;
+        proxy_pass http://127.0.0.1:8765;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 120s;
     }
 }
 ```
 
-### Why these settings
+### Why these settings (2026-07)
 
-- `client_max_body_size 50M` — required for file uploads (attachments on event notes).
-- `proxy_request_buffering off` — prevents nginx from buffering large uploads before forwarding them to the dashboard proxy.
-- `proxy_pass http://dashboard:8765` — uses the Docker Compose service name; resolves inside the shared `estimate-network`.
+- `client_max_body_size 100m` — required for file uploads (attachments on event notes via UploadProgress.ashx). Matches sherwood-toolbox convention on this host.
+- `proxy_request_buffering off` — prevents nginx from buffering large uploads before forwarding them to the dashboard proxy (required for multipart).
+- `proxy_read_timeout 120s` — prevents upstream timeouts on long-running CRM calls (tags, history, user-profile, large uploads).
+- `proxy_pass http://127.0.0.1:8765` — the dashboard container is bound to loopback on the host.
 
 ---
 
-## Certificates
+## Certificates (2026-07)
 
-All certificates are managed by Certbot and mounted into the nginx container at `/etc/letsencrypt`.
+Certificates are managed by Certbot on the host at `/etc/letsencrypt` and are used directly by the host nginx (systemd).
 
 | Domain | Certificate path | Managed by |
 |--------|------------------|------------|
@@ -233,55 +226,97 @@ All certificates are managed by Certbot and mounted into the nginx container at 
 | `enhancer.sherwoodestimates.com` | `/etc/letsencrypt/live/enhancer.sherwoodestimates.com/` | Certbot |
 | `iwscalc.sherwoodestimates.com` | same as above (SAN) | Certbot |
 
-The host nginx config at `/etc/nginx/sites-enabled/dashboard.vanguardadj.com` is **not active** because the host nginx service is disabled. It is legacy and can be ignored unless the host nginx is intentionally re-enabled.
+The old host site `/etc/nginx/sites-enabled/dashboard.vanguardadj.com` (and any `dashboard.vanguardadj.com` references) is legacy. The active site for the current domain is `dashboard.publicadjustermidwest.com`.
 
 ---
 
-## Common failure mode (2026-06-25 incident)
+## Common failure mode (2026-06-25 incident — old world)
 
 **Symptom:** `dashboard.publicadjustermidwest.com` serves the wrong app or shows "not secure."
 
-**Root cause:** The dashboard `server_name` block was missing from `/opt/estimate-enhancer/nginx.conf`. When nginx receives a request for a `server_name` it does not recognize, it falls back to the **first server block** in the config (in this case, `enhancer.sherwoodestimates.com`), so the dashboard domain displayed the estimate-enhancer app.
+**Root cause (historical):** The dashboard `server_name` block was missing from `/opt/estimate-enhancer/nginx.conf`. Nginx fell back to the first server block (`enhancer.sherwoodestimates.com`).
 
-**Fix:** Add the dashboard server block shown above and reload nginx.
+**Fix (at the time):** Add the block to `/opt/estimate-enhancer/nginx.conf` and reload `estimate-nginx`.
 
-### Lessons
+### Lessons from that era
 
-- Any update to the estimate-enhancer project that regenerates or replaces `nginx.conf` must preserve the dashboard `server_name` blocks.
-- If you add another app/domain, add a new `server` block — do not overwrite `default.conf` blindly.
-- Always back up `/opt/estimate-enhancer/nginx.conf` before editing.
+- Any update that touches the old Docker nginx config must preserve dashboard blocks.
+- Always back up before editing.
 
 ---
 
-## Verification commands
+## 2026-07 Infrastructure Reality Change (sherwood-toolbox cutover)
 
-```bash
-# 1. Check nginx is using the right config
-sudo docker exec estimate-nginx nginx -T | grep -E 'server_name|proxy_pass|ssl_certificate'
+After the sherwood-toolbox deployment, `dashboard.publicadjustermidwest.com` is served directly by the **host's nginx** (systemd service at `/etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com`). The Docker `estimate-nginx` container and `/opt/estimate-enhancer/nginx.conf` are no longer in the request path for this domain.
 
-# 2. Test HTTPS cert
-openssl s_client -connect dashboard.publicadjustermidwest.com:443 -servername dashboard.publicadjustermidwest.com </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer
+### Required upload settings (must live in the host site file)
 
-# 3. Test HTTP → HTTPS redirect
-curl -I http://dashboard.publicadjustermidwest.com/
-
-# 4. Test dashboard response
-curl -I https://dashboard.publicadjustermidwest.com/
-
-# 5. Check dashboard container is healthy
-sudo docker ps --filter name=vanguard-crm-dashboard
+```nginx
+client_max_body_size 100m;
+proxy_request_buffering off;
+proxy_read_timeout 120s;
 ```
 
----
+These are inside the `listen 443` server block for `dashboard.publicadjustermidwest.com`, before the `location /` block.
 
-## Update checklist for agents
+Without them:
+- Attachments (PDFs, images) via `UploadProgress.ashx` fail with 413 "client intended to send too large body".
+- Long CRM calls (tags, history, user-profile) can hit upstream timeouts.
+
+### Current container binding
+
+The dashboard container binds only to `127.0.0.1:8765`. Host nginx proxies to that address. The external Docker network declaration is kept for compatibility but is not required for public routing.
+
+### Verification commands (2026-07)
+
+```bash
+# Check the active host config for the dashboard domain
+sudo nginx -T 2>/dev/null | sed -n '/dashboard.publicadjustermidwest.com/,/^\}/p'
+
+# Confirm the three critical lines are present
+sudo nginx -T 2>/dev/null | grep -E 'client_max_body_size|proxy_request_buffering|proxy_read_timeout' | cat
+
+# Basic health
+curl -sI https://dashboard.publicadjustermidwest.com/ | head -3
+curl -s https://dashboard.publicadjustermidwest.com/api/config | head -c 200
+
+# Container
+docker ps --filter name=vanguard-crm-dashboard
+curl -I http://127.0.0.1:8765/ 2>&1 | head -5
+```
+
+### Update checklist for agents (2026-07)
 
 Before making any nginx/compose change on this server:
 
-1. [ ] Read this document.
-2. [ ] Back up `/opt/estimate-enhancer/nginx.conf`.
-3. [ ] Validate config with `docker exec estimate-nginx nginx -t`.
-4. [ ] Reload with `docker exec estimate-nginx nginx -s reload`.
-5. [ ] Verify `https://dashboard.publicadjustermidwest.com/` still loads correctly.
-6. [ ] Verify `https://enhancer.sherwoodestimates.com/` still loads correctly.
-7. [ ] Verify `https://iwscalc.sherwoodestimates.com/` still loads correctly.
+1. [ ] Read this document (especially the 2026-07 section).
+2. [ ] Identify whether you are editing the **host** site file for `dashboard.publicadjustermidwest.com` or a different app's config.
+3. [ ] Back up the target file (`/etc/nginx/sites-enabled/...` or the old `/opt/estimate-enhancer/nginx.conf`).
+4. [ ] For dashboard uploads: ensure the three lines (`100m`, `off`, `120s`) are present in the host site file.
+5. [ ] `sudo nginx -t && sudo systemctl reload nginx` (or the Docker equivalent for other apps).
+6. [ ] Verify `https://dashboard.publicadjustermidwest.com/` still loads.
+7. [ ] Test a real attachment upload in the edit modal if you touched upload-related settings.
+8. [ ] Verify other host apps (`enhancer.sherwoodestimates.com`, `tools.sherwoodestimates.com`, etc.) still work if you touched shared nginx state.
+
+---
+
+## Verification commands (see also the 2026-07 section above)
+
+```bash
+# Host nginx view for the dashboard domain (current)
+sudo nginx -T 2>/dev/null | sed -n '/dashboard.publicadjustermidwest.com/,/^\}/p'
+
+# Test HTTPS cert
+openssl s_client -connect dashboard.publicadjustermidwest.com:443 -servername dashboard.publicadjustermidwest.com </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer
+
+# Test HTTP → HTTPS redirect
+curl -I http://dashboard.publicadjustermidwest.com/
+
+# Test dashboard response
+curl -I https://dashboard.publicadjustermidwest.com/
+curl -s https://dashboard.publicadjustermidwest.com/api/config | head -c 200
+
+# Container health (localhost)
+curl -I http://127.0.0.1:8765/ 2>&1 | head -5
+docker ps --filter name=vanguard-crm-dashboard
+```

@@ -1,17 +1,19 @@
-# AGENT BRIEF: Dashboard + Shared NGINX Infrastructure
+# AGENT BRIEF: Dashboard + Shared NGINX Infrastructure (historical)
 
 **Server:** `ubuntu-webapp1-estimateanalyzer` (`159.89.229.126`)  
 **Incident:** 2026-06-25 — `dashboard.publicadjustermidwest.com` served the wrong app after another web app deployment overwrote the shared nginx config.
 
+> **Note (2026-07+):** This document describes the pre-sherwood-toolbox architecture (Docker `estimate-nginx` + `/opt/estimate-enhancer/nginx.conf`). As of 2026-07, `dashboard.publicadjustermidwest.com` is served directly by the host's nginx (systemd site file `/etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com`). See `docs/DASHBOARD_INFRASTRUCTURE.md` (2026-07 section) for the current layout and required upload settings.
+
 ---
 
-## Architecture (read before touching nginx)
+## Architecture (read before touching nginx — historical)
 
-- Three web apps share one public-facing nginx container: `estimate-nginx`.
-- `estimate-nginx` owns host ports `80` and `443`.
-- The host's `/etc/nginx` nginx service is **disabled and stopped**. Do not enable it.
-- Nginx config source-of-truth: `/opt/estimate-enhancer/nginx.conf` (mounted into the container at `/etc/nginx/conf.d/default.conf:ro`).
-- The dashboard app runs in a separate Compose project at `/opt/vanguard/onlyoffice-crm-kanban` but joins the same Docker network (`estimate-enhancer_estimate-network`).
+- Three web apps shared one public-facing nginx container: `estimate-nginx`.
+- `estimate-nginx` owned host ports `80` and `443`.
+- The host's `/etc/nginx` nginx service was **disabled and stopped**.
+- Nginx config source-of-truth (at the time): `/opt/estimate-enhancer/nginx.conf` (mounted into the container at `/etc/nginx/conf.d/default.conf:ro`).
+- The dashboard app ran in a separate Compose project at `/opt/vanguard/onlyoffice-crm-kanban` but joined the same Docker network (`estimate-enhancer_estimate-network`).
 
 ### Container/service map
 

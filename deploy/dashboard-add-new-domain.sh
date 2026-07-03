@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# HISTORICAL — used for estimate-nginx / sherwood-toolbox era (pre-2026-07).
+# For dashboard.publicadjustermidwest.com the authoritative file is now
+# the host nginx site: /etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com
+# (requires client_max_body_size 100m; proxy_request_buffering off; proxy_read_timeout 120s).
+#
 # Add dashboard.publicadjustermidwest.com server blocks to estimate-nginx,
 # issue a Let's Encrypt certificate, and reload nginx.
 #
