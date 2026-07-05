@@ -51,6 +51,19 @@ const PRESENCE_CUSTOM_MAX = 120; // modest char limit for custom status (emojis 
 const PRESENCE_IDLE_15M_MS = 15 * 60 * 1000; // auto-derived idle threshold
 const PRESENCE_AUTO_STATUS_TIMEOUT_MS = 300000; // 5 min — clear auto-status if no new deal activity
 
+function newId() {
+  try {
+    if (typeof crypto !== "undefined" && crypto && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+  } catch {}
+  // Fallback for non-secure contexts (plain http on LAN IPs) and older browsers
+  const t = Date.now().toString(36);
+  const r = Math.random().toString(36).slice(2);
+  const r2 = Math.random().toString(36).slice(2);
+  return `${t}-${r}-${r2}`;
+}
+
 /** Daily Focus quote — rotating daily inspiration banner */
 const DAILY_FOCUS_KEY = "oo_daily_focus_author";
 const DAILY_FOCUS_RANDOM_KEY = "oo_daily_focus_random";
@@ -383,6 +396,7 @@ const state = {
   presenceModalOpen: false,
   presenceSelectedUserId: null,
   hasPresenceTile: false,   // persisted via tileLayout or a small flag; controls whether the tile is in the top panel
+
   bookmarkedDeals: [],      // [{ oppId, title, addedAt }]
   activeBookmarkTab: null,  // oppId of the expanded preview
   eventLog: [],             // persistent event log (loaded from localStorage)
@@ -745,7 +759,7 @@ function calendarTileId(cal) {
 }
 
 function isAutoRefreshTileId(tileId) {
-  return PANEL_TILE_IDS.has(tileId) || (typeof tileId === "string" && tileId.startsWith("calendar-"));
+  return PANEL_TILE_IDS.has(tileId) || (typeof tileId === "string" && (tileId.startsWith("calendar-") || tileId.startsWith("group-")));
 }
 
 function getCalendarByTileId(tileId) {
@@ -891,7 +905,7 @@ async function loadTileCrmData(tileId, { quiet = false, force = false } = {}) {
     return;
   }
   if (tileId === "tile-tasks") {
-    await loadTasks();
+    await loadTasks({ force });
     return;
   }
   if (tileId.startsWith("calendar-")) {
@@ -901,11 +915,11 @@ async function loadTileCrmData(tileId, { quiet = false, force = false } = {}) {
   }
   if (tileId.startsWith("group-")) {
     const group = groupForTileId(tileId);
-    if (group) await refreshGroup(group, { force: true });
+    if (group) await refreshGroup(group, { force });
   }
 }
 
-async function loadExpandedDashboardTiles({ quiet = false } = {}) {
+async function loadExpandedDashboardTiles({ quiet = false, force = false } = {}) {
   const allIds = dashboardTileIdsForLoad();
   const crmJobs = [];
   const collapsibleIds = [];
@@ -931,7 +945,7 @@ async function loadExpandedDashboardTiles({ quiet = false } = {}) {
   const calendarPromises = [];
   for (const tileId of crmJobs) {
     (isCrmOnlyTileId(tileId) ? crmPromises : calendarPromises).push(
-      loadTileCrmData(tileId, { quiet }).catch(() => {})
+      loadTileCrmData(tileId, { quiet, force }).catch(() => {})
     );
   }
   if (calendarPromises.length) {
@@ -1685,7 +1699,7 @@ function bindGroupTileChrome(section, group, tileId) {
   saveTplBtn.addEventListener("click", () => {
     const name = prompt("Template name", group.name || "My filters");
     if (!name?.trim()) return;
-    const tpl = { id: crypto.randomUUID(), name: name.trim(), config: groupConfigSnapshot(group) };
+    const tpl = { id: newId(), name: name.trim(), config: groupConfigSnapshot(group) };
     state.groupTemplates.push(tpl);
     saveGroupTemplatesToStorage();
     renderBoardGroups();
@@ -1915,8 +1929,17 @@ function parseApiError(body, status) {
   }
   if (body?.message) return String(body.message);
   if (body?.error?.message) return String(body.error.message);
-  if (body?.error) return typeof body.error === "string" ? body.error : JSON.stringify(body.error);
+  if (body?.error) {
+    const e = typeof body.error === "string" ? body.error : JSON.stringify(body.error);
+    const st2 = Number(body.status || status) || 0;
+    if (/unreachable|CRM unreachable/i.test(e) || st2 === 502 || st2 === 503 || st2 === 504) {
+      return `Failed to reach CRM${st2 ? ` (HTTP ${st2})` : ""}. Check your connection or try again.`;
+    }
+    return e;
+  }
   if (body?.detail) return typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+  const st = Number(status) || 0;
+  if (st === 502 || st === 503 || st === 504) return `Failed to reach CRM (HTTP ${st}). Check your connection or try again.`;
   return `HTTP ${status}`;
 }
 
@@ -1924,11 +1947,18 @@ async function api(path, options = {}) {
   const headers = { Accept: "application/json", ...options.headers };
   if (state.portalUrl) headers["X-OnlyOffice-Portal"] = state.portalUrl;
 
-  const res = await fetch(`/api/proxy${path}`, {
-    ...options,
-    headers,
-    credentials: "same-origin",
-  });
+  let res;
+  try {
+    res = await fetch(`/api/proxy${path}`, {
+      ...options,
+      headers,
+      credentials: "same-origin",
+    });
+  } catch (e) {
+    const err = new Error("Failed to reach CRM. Check your connection or try again.");
+    err.status = 0;
+    throw err;
+  }
   const text = await res.text();
   let body;
   try {
@@ -1939,7 +1969,9 @@ async function api(path, options = {}) {
       const clean = isHtml
         ? text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200)
         : text.slice(0, 300);
-      throw new Error(clean || res.statusText || `HTTP ${res.status}`);
+      const err = new Error(clean || res.statusText || `HTTP ${res.status}`);
+      err.status = res.status;
+      throw err;
     } else {
       // Some endpoints (e.g. form-urlencoded history with attachments) may return non-JSON on success.
       // Do not throw; return a minimal object so caller can proceed.
@@ -1949,6 +1981,7 @@ async function api(path, options = {}) {
   if (!res.ok) {
     const msg = parseApiError(body, res.status);
     const err = new Error(msg);
+    err.status = res.status;
     if (options.showCrashBanner !== false) {
       const lower = msg.toLowerCase();
       if (res.status >= 500 || /502|503|504|500|5\d{2}|bad gateway|unavailable|proxy|gateway/.test(lower)) {
@@ -2105,7 +2138,7 @@ async function processMutationQueue() {
           if (item.opType === 'tag' && item.oppId != null) {
             state.oppTagCache?.invalidate(item.oppId);
           }
-          setTimeout(() => { refreshAll().catch(() => {}); }, 50);
+          setTimeout(() => { refreshAll({ force: true }).catch(() => {}); }, 50);
         }
       } catch (err) {
         // Only drop queued actions on clear *permanent client errors* (bad data that will never succeed
@@ -2404,7 +2437,7 @@ async function withCrmQueueOnTransient(mutateFn, descriptor) {
 
 function newGroup(overrides = {}) {
   return {
-    id: crypto.randomUUID(),
+    id: newId(),
     name: "New group",
     dealStatus: "open",
     tagTitles: [],
@@ -2489,7 +2522,7 @@ function stripCalendarRuntimeFields(cal) {
 function newCalendarTile(overrides = {}) {
   const now = new Date();
   return {
-    id: crypto.randomUUID(),
+    id: newId(),
     name: "Calendar",
     feedUrl: "",
     timezone: "",
@@ -3374,7 +3407,7 @@ const NOTES_ACCENT_OPTIONS = [
 
 function newNotesTile(overrides = {}) {
   const base = {
-    id: crypto.randomUUID(),
+    id: newId(),
     name: "Notes",
     content: "",
     viewMode: "edit",
@@ -3391,12 +3424,12 @@ function newNotesTile(overrides = {}) {
 
 function newLocalKanbanTile(overrides = {}) {
   const base = {
-    id: crypto.randomUUID(),
+    id: newId(),
     name: "My Kanban",
     columns: [
-      { id: crypto.randomUUID(), title: "To Do", cards: [] },
-      { id: crypto.randomUUID(), title: "In Progress", cards: [] },
-      { id: crypto.randomUUID(), title: "Done", cards: [] },
+      { id: newId(), title: "To Do", cards: [] },
+      { id: newId(), title: "In Progress", cards: [] },
+      { id: newId(), title: "Done", cards: [] },
     ],
     archived: false,
     updatedAt: new Date().toISOString(),
@@ -4890,9 +4923,9 @@ function bindLocalKanbanTileChrome(section, kanban, tileId) {
         if (submitted) return;
         submitted = true;
         const val = input.value.trim();
-        if (val) {
-          if (!kanban.columns) kanban.columns = [];
-          kanban.columns.push({ id: crypto.randomUUID(), title: val, cards: [] });
+          if (val) {
+            if (!kanban.columns) kanban.columns = [];
+            kanban.columns.push({ id: newId(), title: val, cards: [] });
           kanban.updatedAt = new Date().toISOString();
           saveLocalKanbanTilesToStorage();
           const board = section.querySelector('.board');
@@ -4936,9 +4969,9 @@ function bindLocalKanbanTileChrome(section, kanban, tileId) {
         const val = input.value.trim();
         if (val) {
           const targetCol = (kanban.columns || [])[0];
-          if (targetCol) {
-            if (!targetCol.cards) targetCol.cards = [];
-            targetCol.cards.push({ id: crypto.randomUUID(), title: val, description: '', notes: [] });
+            if (targetCol) {
+              if (!targetCol.cards) targetCol.cards = [];
+              targetCol.cards.push({ id: newId(), title: val, description: '', notes: [] });
             kanban.updatedAt = new Date().toISOString();
             saveLocalKanbanTilesToStorage();
             const board = section.querySelector('.board');
@@ -5215,7 +5248,7 @@ function addLocalKanbanCard(kanban, colId, section) {
   const col = (kanban.columns || []).find(c => c.id === colId);
   if (!col) return;
   if (!col.cards) col.cards = [];
-  const card = { id: crypto.randomUUID(), title: title.trim(), description: '', notes: [] };
+  const card = { id: newId(), title: title.trim(), description: '', notes: [] };
   col.cards.push(card);
   kanban.updatedAt = new Date().toISOString();
   saveLocalKanbanTilesToStorage();
@@ -5227,7 +5260,7 @@ function addLocalKanbanColumn(kanban, section) {
   const title = prompt('New custom status / column name:');
   if (!title || !title.trim()) return;
   if (!kanban.columns) kanban.columns = [];
-  kanban.columns.push({ id: crypto.randomUUID(), title: title.trim(), cards: [] });
+  kanban.columns.push({ id: newId(), title: title.trim(), cards: [] });
   kanban.updatedAt = new Date().toISOString();
   saveLocalKanbanTilesToStorage();
   refreshLocalKanbanColumns(section, kanban);
@@ -5564,7 +5597,7 @@ function oppMatchesSelectedTags(opp, selectedTags, catalog = buildTagCatalog()) 
   return selectedTags.some((sel) => oppHasTag(opp, sel, catalog));
 }
 
-async function enrichOpportunitiesTags(items) {
+async function enrichOpportunitiesTags(items, force = false) {
   const needTags = items.filter((o) => getOppTagsFromRecord(o).length === 0);
   if (!needTags.length) return items;
   // Check cache first
@@ -5585,7 +5618,8 @@ async function enrichOpportunitiesTags(items) {
   // Batch-fetch uncached tags via server-side parallel endpoint (much faster than N individual round-trips)
   const ids = uncached.map(o => o.id ?? o.ID).filter(id => id != null);
   try {
-    const resp = await api(`/api/batch-opportunity-tags?ids=${ids.join(",")}`);
+    const path = `/api/batch-opportunity-tags?ids=${ids.join(",")}`;
+    const resp = await api(path);
     const tagsByOpp = (resp && resp.tags) || {};
     for (const opp of uncached) {
       const id = String(opp.id ?? opp.ID);
@@ -5602,7 +5636,8 @@ async function enrichOpportunitiesTags(items) {
         const id = opp.id ?? opp.ID;
         if (id == null) return;
         try {
-          const tags = unwrapEntityTags(await api(`/api/2.0/crm/opportunity/tag/${id}`));
+          const tagPath = `/api/2.0/crm/opportunity/tag/${id}`;
+          const tags = unwrapEntityTags(await api(tagPath));
           if (tags.length) {
             opp.tags = tags;
             state.oppTagCache?.set(id, tags);
@@ -5616,18 +5651,18 @@ async function enrichOpportunitiesTags(items) {
   return items;
 }
 
-async function fetchOpportunitiesForGroup(group) {
+async function fetchOpportunitiesForGroup(group, { force = false } = {}) {
   const baseQs = buildFilterQuery(group);
   const catalog = buildTagCatalog();
   // Filter result cache (30s TTL): keyed only by server-side params (groupId + baseQs).
   // TagTitles and showOnlyRed are client-side filters that don't affect the API response.
   const cacheKey = `${group.id}::${baseQs}`;
   const cached = state.filterResultCache?.get(cacheKey);
-  if (cached) {
+  if (!force && cached) {
     // Cache hit: raw opps from cache, re-apply tag enrichment (from tag cache) + client-side filters
     let items = cached;
     if (group.tagTitles?.length || group.groupBy === "tag") {
-      items = await enrichOpportunitiesTags(items);
+      items = await enrichOpportunitiesTags(items, force);
     }
     if (group.tagTitles?.length) {
       items = items.filter((o) => oppMatchesSelectedTags(o, group.tagTitles, catalog));
@@ -5637,14 +5672,18 @@ async function fetchOpportunitiesForGroup(group) {
     }
     return items;
   }
-  const data = await api(`/api/2.0/crm/opportunity/filter?${baseQs}`);
+  if (force) {
+    state.filterResultCache?.delete(cacheKey);
+  }
+  const url = `/api/2.0/crm/opportunity/filter?${baseQs}`;
+  const data = await api(url);
   const rawItems = unwrap(data);
   // Cache the raw API response before any client-side filtering (so tag/filter changes don't miss the cache)
   state.filterResultCache?.set(cacheKey, rawItems);
   let items = rawItems;
-
+ 
   if (group.tagTitles?.length || group.groupBy === "tag") {
-    items = await enrichOpportunitiesTags(items);
+    items = await enrichOpportunitiesTags(items, force);
   }
 
   if (group.tagTitles?.length) {
@@ -5717,13 +5756,8 @@ function serializeCrmTimestamp(dateInputValue) {
   return d.toISOString();
 }
 
-function bustCache(path) {
-  const sep = path.includes("?") ? "&" : "?";
-  return `${path}${sep}_t=${Date.now()}`;
-}
-
-async function fetchOpportunityForUpdate(oppId, force = false) {
-  const data = await api(force ? bustCache(`/api/2.0/crm/opportunity/${oppId}`) : `/api/2.0/crm/opportunity/${oppId}`);
+async function fetchOpportunityForUpdate(oppId) {
+  const data = await api(`/api/2.0/crm/opportunity/${oppId}`);
   return data?.response ?? data?.result ?? data;
 }
 
@@ -7167,6 +7201,7 @@ function renderBoardGroups() {
     dash.appendChild(section);
     bindGroupTileChrome(section, group, tileId);
     group._el = section;
+    ensureTileAutoRefreshButton(section, tileId);
     if (tileBodyCollapsed(tileId)) {
       const board = $(".board", section);
       if (group.opportunities?.length && board) {
@@ -7650,7 +7685,7 @@ function tryAddRelationshipNotifyEvent(items, seen, ev, periodFrom) {
   items.push(parsed);
 }
 
-async function fetchFeedHistoryBatch(periodFrom, pagination) {
+async function fetchFeedHistoryBatch(periodFrom, pagination, force = false) {
   const items = [];
   if (!pagination || pagination.historyExhausted) return items;
 
@@ -7660,9 +7695,10 @@ async function fetchFeedHistoryBatch(periodFrom, pagination) {
     entityType: "opportunity",
   });
 
+  const path = `/api/2.0/crm/history/filter?${params}`;
   let rows = [];
   try {
-    rows = unwrapHistoryEvents(await api(`/api/2.0/crm/history/filter?${params}`));
+    rows = unwrapHistoryEvents(await api(path));
   } catch {
     pagination.historyExhausted = true;
     return items;
@@ -7674,7 +7710,8 @@ async function fetchFeedHistoryBatch(periodFrom, pagination) {
         startIndex: "0",
         count: String(FEED_HISTORY_PAGE_SIZE),
       });
-      rows = unwrapHistoryEvents(await api(`/api/2.0/crm/history/filter?${fallback}`));
+      const fbPath = `/api/2.0/crm/history/filter?${fallback}`;
+      rows = unwrapHistoryEvents(await api(fbPath));
     } catch {
       pagination.historyExhausted = true;
       return items;
@@ -7690,7 +7727,7 @@ async function fetchFeedHistoryBatch(periodFrom, pagination) {
   return items;
 }
 
-async function loadCrmRelationshipNotifyEventsBulk(periodFrom, pagination) {
+async function loadCrmRelationshipNotifyEventsBulk(periodFrom, pagination, force = false) {
   const items = [];
   let maxRows = 0;
 
@@ -7699,8 +7736,9 @@ async function loadCrmRelationshipNotifyEventsBulk(periodFrom, pagination) {
     count: String(FEED_MAX_EVENTS),
     entityType: "opportunity",
   });
+  const primaryPath = `/api/2.0/crm/history/filter?${primary}`;
   try {
-    const rows = unwrapHistoryEvents(await api(`/api/2.0/crm/history/filter?${primary}`));
+    const rows = unwrapHistoryEvents(await api(primaryPath));
     maxRows = rows.length;
     for (const ev of rows) {
       tryAddRelationshipNotifyEvent(items, pagination.historySeen, ev, periodFrom);
@@ -7712,7 +7750,8 @@ async function loadCrmRelationshipNotifyEventsBulk(periodFrom, pagination) {
   if (!maxRows) {
     try {
       const fallback = new URLSearchParams({ startIndex: "0", count: String(FEED_MAX_EVENTS) });
-      const rows = unwrapHistoryEvents(await api(`/api/2.0/crm/history/filter?${fallback}`));
+      const fallbackPath = `/api/2.0/crm/history/filter?${fallback}`;
+      const rows = unwrapHistoryEvents(await api(fallbackPath));
       maxRows = rows.length;
       for (const ev of rows) {
         tryAddRelationshipNotifyEvent(items, pagination.historySeen, ev, periodFrom);
@@ -8307,12 +8346,30 @@ async function loadNotificationFeed({ force = false } = {}) {
   state.feedPagination = pagination;
 
   try {
-    const historyItems = await loadCrmRelationshipNotifyEventsBulk(periodFrom, pagination);
+    const historyItems = await loadCrmRelationshipNotifyEventsBulk(periodFrom, pagination, force);
     pagination.rawItems.push(...historyItems);
 
     if (!tileBodyCollapsed("tile-feed")) commitFeedRawItems(pagination.rawItems);
-  } catch {
-    if (!tileBodyCollapsed("tile-feed")) commitFeedRawItems(pagination.rawItems);
+  } catch (err) {
+    if (!tileBodyCollapsed("tile-feed")) {
+      const list = $("#notification-feed");
+      if (list) {
+        let msg = (err && err.message) || "";
+        const st = err && err.status ? Number(err.status) : 0;
+        if (!msg || /failed to fetch|typeerror|networkerror|load failed/i.test(msg)) {
+          msg = `Failed to reach CRM${st ? ` (HTTP ${st})` : ""}. Check your connection or try again.`;
+        } else if (st && !/HTTP \d/.test(msg)) {
+          msg += ` (HTTP ${st})`;
+        }
+        list.innerHTML = `<li class="feed-error">${escapeHtml(msg)} <span class="board-error-retry" role="button" tabindex="0">⟳ retry</span></li>`;
+        const r = list.querySelector(".board-error-retry");
+        if (r) {
+          const fn = () => loadNotificationFeed({ force: true }).catch(() => {});
+          r.addEventListener("click", fn);
+          r.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fn(); } });
+        }
+      }
+    }
   } finally {
     state.feedLoading = false;
     updateFeedLoadingUi();
@@ -8573,6 +8630,7 @@ function ensureTileAutoRefreshButton(tileEl, tileId) {
   if (tileId === "tile-feed") label = "Refresh notifications";
   else if (tileId === "tile-tasks") label = "Refresh tasks";
   else if (tileId.startsWith("calendar-")) label = "Refresh calendar";
+  else if (tileId.startsWith("group-")) label = "Refresh deals";
 
   const btn = document.createElement("button");
   btn.type = "button";
@@ -8767,13 +8825,13 @@ function populateQuickNoteNotifySelect() {
   populateNotifyUserSelect($("#quick-note-notify"));
 }
 
-async function loadDealEditTags(opp, force = false) {
+async function loadDealEditTags(opp) {
   let tags = getOppTagsFromRecord(opp);
   const id = opp.id ?? opp.ID;
   if (!tags.length && id != null) {
     try {
       const path = `/api/2.0/crm/opportunity/tag/${id}`;
-      tags = unwrapEntityTags(await api(force ? bustCache(path) : path));
+      tags = unwrapEntityTags(await api(path));
       opp.tags = tags;
     } catch {
       /* no tags */
@@ -8792,6 +8850,10 @@ async function openDealEditModal(opp, group) {
 
   setDealEditError("");
   form.reset();
+
+  // Reset native date input
+  const deCreated = $("#deal-edit-note-created");
+  if (deCreated) deCreated.value = "";
 
   if (!state.stages.length) await loadStages();
   if (!state.allTags.length) await loadAllTags();
@@ -8990,7 +9052,7 @@ async function uploadAttachmentForNote(file) {
   };
 }
 
-async function createOpportunityHistoryEvent(oppId, { content, categoryId, notifyUserList, fileIds = [], attachmentNames = [], failedAttachmentNames = [] }) {
+async function createOpportunityHistoryEvent(oppId, { content, categoryId, notifyUserList, fileIds = [], attachmentNames = [], failedAttachmentNames = [], created = null }) {
   const html = noteContentToHtml(content);
   if (!html) throw new Error("Note text is required");
 
@@ -9007,6 +9069,8 @@ async function createOpportunityHistoryEvent(oppId, { content, categoryId, notif
 
   const shortPreview = (content || "").replace(/<[^>]+>/g, " ").trim().slice(0, 80) || "(note)";
 
+  const createdIso = created ? new Date(`${created}T12:00:00`).toISOString() : null;
+
   if (validFileIds && validFileIds.length > 0) {
     // Use exact native form-urlencoded shape for attachments (from capture)
     // Use .json suffix for the history endpoint when sending attachments (matches native capture)
@@ -9016,7 +9080,7 @@ async function createOpportunityHistoryEvent(oppId, { content, categoryId, notif
     params.set("categoryId", String(categoryId || 0));
     params.set("entityId", String(oppId));
     params.set("entityType", "opportunity");
-    params.set("created", new Date().toISOString());
+    params.set("created", createdIso || new Date().toISOString());
     if (validNotifyUserList?.length) {
       validNotifyUserList.forEach((uid) => params.append("notifyUserList", uid));
     }
@@ -9040,6 +9104,7 @@ async function createOpportunityHistoryEvent(oppId, { content, categoryId, notif
       categoryId,
     };
     if (validNotifyUserList?.length) body.notifyUserList = validNotifyUserList;
+    if (createdIso) body.created = createdIso;
 
     descriptorBody = JSON.stringify(body);
     descriptorHeaders = { "Content-Type": "application/json" };
@@ -9149,6 +9214,8 @@ function attachNoteAttachmentsListeners() {
     });
   }
 }
+
+// Native <input type="date"> is used directly for backdating (no custom icon/label wrapper)
 
 function plainTextToNoteHtml(text) {
   const trimmed = String(text || "").trim();
@@ -9302,6 +9369,7 @@ async function submitDealEditForm(e) {
           }
         }
 
+        const createdDate = $("#deal-edit-note-created")?.value || "";
         const noteResult = await createOpportunityHistoryEvent(oppId, {
           content: noteBody,
           categoryId,
@@ -9309,6 +9377,7 @@ async function submitDealEditForm(e) {
           fileIds: successfulIds,
           attachmentNames: successfulNames,
           failedAttachmentNames: failedNames,
+          created: createdDate || null,
         });
         if (noteResult && noteResult.queued) {
           showToast("Note queued for retry (CRM is temporarily down). Check the header indicator.");
@@ -9371,7 +9440,7 @@ async function submitDealEditForm(e) {
       const needBoard = Boolean(group);
       const promises = [];
       if (needPreview) {
-        promises.push(openOpportunityPreviewModal(previewId, ctx.oppTitle || "", group || ctx.group, false, true).catch(() => {}));
+        promises.push(openOpportunityPreviewModal(previewId, ctx.oppTitle || "", group || ctx.group, true).catch(() => {}));
       }
       if (needBoard) {
         promises.push((async () => {
@@ -9567,6 +9636,10 @@ async function openQuickNoteModal() {
   const noteBodyEl = $("#quick-note-note-body");
   if (noteBodyEl) noteBodyEl.innerHTML = "";
 
+  // Reset backdate date input (native)
+  const qnCreated = $("#quick-note-note-created");
+  if (qnCreated) qnCreated.value = "";
+
   await loadHistoryCategories();
   populateQuickNoteCategorySelect();
   if (!state.allTags.length) await loadAllTags();
@@ -9680,6 +9753,7 @@ async function submitQuickNoteForm(e) {
         }
       }
 
+      const createdDate = $("#quick-note-note-created")?.value || "";
       const noteResult = await createOpportunityHistoryEvent(oppId, {
         content: noteBody,
         categoryId,
@@ -9687,6 +9761,7 @@ async function submitQuickNoteForm(e) {
         fileIds: successfulIds,
         attachmentNames: successfulNames,
         failedAttachmentNames: failedNames,
+        created: createdDate || null,
       });
       if (noteResult && noteResult.queued) {
         showToast("Note queued for retry (CRM is temporarily down). Check the header indicator.");
@@ -9716,7 +9791,7 @@ async function submitQuickNoteForm(e) {
       showRefreshingStatus();
       const promises = [];
       if (isSidePreviewCase) {
-        promises.push(openOpportunityPreviewModal(ctx.oppId, ctx.oppTitle || "", ctx.group || null, false, true).catch(() => {}));
+        promises.push(openOpportunityPreviewModal(ctx.oppId, ctx.oppTitle || "", ctx.group || null, true).catch(() => {}));
       }
       if (needsBoardUpdate && !isSidePreviewCase) {
         promises.push((async () => {
@@ -9869,7 +9944,6 @@ function resetNewOpportunityDraft() {
   state.newOpportunityDraft = {
     contactId: null,
     contactLabel: "",
-    tags: [],
   };
 }
 
@@ -10032,46 +10106,7 @@ function populateCreateOppAccessSelect() {
   }
 }
 
-function populateCreateOppTagAddSelect() {
-  const sel = $("#create-opp-tag-add");
-  if (!sel || !state.newOpportunityDraft) return;
-  const current = new Set(state.newOpportunityDraft.tags.map((t) => normalizeTagTitle(t)).filter(Boolean));
-  sel.innerHTML = '<option value="">Add tag…</option>';
-  for (const tag of state.allTags) {
-    const title = normalizeTagTitle(tag.title ?? tag);
-    if (!title || current.has(title)) continue;
-    const opt = document.createElement("option");
-    opt.value = title;
-    opt.textContent = title;
-    sel.appendChild(opt);
-  }
-}
 
-function renderCreateOppTagChips() {
-  const wrap = $("#create-opp-tags");
-  const draft = state.newOpportunityDraft;
-  if (!wrap || !draft) return;
-  wrap.innerHTML = "";
-  const catalog = buildTagCatalog();
-  for (const title of draft.tags) {
-    const chip = document.createElement("span");
-    chip.className = "deal-edit-tag";
-    chip.appendChild(document.createTextNode(normalizeTagTitle(title)));
-    const rm = document.createElement("button");
-    rm.type = "button";
-    rm.className = "deal-edit-tag-remove";
-    rm.setAttribute("aria-label", `Remove tag ${title}`);
-    rm.textContent = "×";
-    rm.addEventListener("click", () => {
-      draft.tags = draft.tags.filter((t) => !tagsEqual(t, title, catalog));
-      renderCreateOppTagChips();
-      populateCreateOppTagAddSelect();
-    });
-    chip.appendChild(rm);
-    wrap.appendChild(chip);
-  }
-  populateCreateOppTagAddSelect();
-}
 
 function updateCreateOppContactSelectedUi() {
   const draft = state.newOpportunityDraft;
@@ -10256,14 +10291,14 @@ function mergeCustomFieldValues(existing, incoming) {
   return [...byId.values()];
 }
 
-async function fetchOpportunityCustomFieldValues(oppId, force = false) {
+async function fetchOpportunityCustomFieldValues(oppId) {
   const paths = [
     `/api/2.0/crm/opportunity/${oppId}/customfield`,
     `/api/2.0/crm/opportunity/${oppId}/customfields`,
   ];
   for (const path of paths) {
     try {
-      const list = unwrap(await api(force ? bustCache(path) : path));
+      const list = unwrap(await api(path));
       if (list.length) return list;
     } catch {
       /* try next */
@@ -10608,16 +10643,6 @@ function bindCreateOppContactPicker() {
   });
 }
 
-async function applyCreateOpportunityTags(oppId, tags) {
-  for (const title of tags) {
-    try {
-      await addOpportunityTag(oppId, title);
-    } catch (err) {
-      showToast(`Opportunity created; tag failed: ${title}`, true);
-    }
-  }
-}
-
 async function submitCreateOpportunityForm(e) {
   e.preventDefault();
   setCreateOpportunityError("");
@@ -10630,11 +10655,6 @@ async function submitCreateOpportunityForm(e) {
   // Show progress immediately on button press (bottom right, with bar).
   setConnectionState('connected');
   showCRMSyncStatus('Connecting...');
-
-  // Cap popup visible time at 2.5s max. Safe to close sooner because data is saved locally first (optimistic + queue).
-  const closeTimer = setTimeout(() => {
-    closeCreateOpportunityModal();
-  }, 2500);
 
   try {
     const customFields = collectCreateOppCustomFieldValues();
@@ -10651,9 +10671,8 @@ async function submitCreateOpportunityForm(e) {
 
     const data = await createCrmOpportunity(body);
     if (data && data.queued) {
-      clearTimeout(closeTimer);
       closeCreateOpportunityModal();
-      await refreshAll().catch(() => {});
+      await refreshAll({ force: true }).catch(() => {});
       return;
     }
     const created = unwrapCreatedEntity(data);
@@ -10670,10 +10689,7 @@ async function submitCreateOpportunityForm(e) {
       }
     }
 
-    const tags = state.newOpportunityDraft?.tags || [];
-    if (tags.length) await applyCreateOpportunityTags(oppId, tags);
-
-    clearTimeout(closeTimer);
+    const titleHint = ($("#create-opp-title")?.value || "").trim() || "Opportunity";
     closeCreateOpportunityModal();
     hideCRMSyncStatus();
     onCRMSuccess();
@@ -10681,13 +10697,14 @@ async function submitCreateOpportunityForm(e) {
     setTimeout(() => {
       hideCRMSyncStatus();
     }, 1500);
-    await refreshAll();
+
+    // Auto-open preview so user can immediately add tags/files via normal edit flow.
+    openOpportunityPreviewModal(oppId, titleHint, null, true).catch(() => {});
+    await refreshAll({ force: true });
   } catch (err) {
-    clearTimeout(closeTimer);
     setCreateOpportunityError(err.message || "Could not create opportunity");
     hideCRMSyncStatus();
   } finally {
-    clearTimeout(closeTimer);
     if (submitBtn) submitBtn.disabled = false;
     if (submittingNote && submittingNote.parentNode) submittingNote.parentNode.removeChild(submittingNote);
   }
@@ -10703,7 +10720,6 @@ async function openCreateOpportunityModal() {
   resetNewOpportunityDraft();
 
   if (!state.stages.length) await loadStages();
-  if (!state.allTags.length) await loadAllTags();
   if (!state.portalUsers.length) await loadPortalUsers();
   if (CREATE_OPP_USER_FIELDS_ENABLED) await loadOpportunityCustomFieldDefs(true);
 
@@ -10711,7 +10727,6 @@ async function openCreateOpportunityModal() {
   populateCreateOppResponsibleSelect();
   populateCreateOppAccessSelect();
   renderCreateOppCustomFields();
-  renderCreateOppTagChips();
   updateCreateOppContactSelectedUi();
   syncCreateOppPrivateFields();
 
@@ -14323,17 +14338,6 @@ function bindCreateOpportunityModal() {
 
   $("#create-opp-private")?.addEventListener("change", syncCreateOppPrivateFields);
 
-  $("#create-opp-tag-add")?.addEventListener("change", (ev) => {
-    const title = ev.target.value;
-    const draft = state.newOpportunityDraft;
-    if (!title || !draft) return;
-    if (!draft.tags.some((t) => tagsEqual(t, title))) {
-      draft.tags.push(title);
-      renderCreateOppTagChips();
-    }
-    ev.target.value = "";
-  });
-
   bindCreateOppContactPicker();
 }
 
@@ -14582,6 +14586,7 @@ const HISTORY_ICON_NOTE = `<svg xmlns="http://www.w3.org/2000/svg" width="14" he
 const HISTORY_ICON_MEETING = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>`;
 const HISTORY_ICON_DEFAULT = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`;
 const HISTORY_ICON_CHAT = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
+const HISTORY_ICON_PIN = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 4.5l-4 4l-4 1.5l-1.5 1.5l7 7l1.5 -1.5l1.5 -4l4 -4" /><path d="M9 15l-4.5 4.5" /><path d="M14.5 4l5.5 5.5" /></svg>`;
 
 function historyCategoryIconHtml(ev) {
   const cat = historyEventCategoryLabel(ev).toLowerCase();
@@ -14591,6 +14596,7 @@ function historyCategoryIconHtml(ev) {
   if (/\b(meeting|appointment)\b/.test(cat)) return HISTORY_ICON_MEETING;
   if (/\b(note|comment|event)\b/.test(cat)) return HISTORY_ICON_NOTE;
   if (/\b(customer update)\b/.test(cat)) return HISTORY_ICON_CHAT;
+  if (/\bquick.?context\b/.test(cat)) return HISTORY_ICON_PIN;
   return HISTORY_ICON_DEFAULT;
 }
 
@@ -15034,7 +15040,7 @@ function isDeletableHistoryCategory(ev) {
   const cat = historyEventCategoryLabel(ev).toLowerCase();
   // Allow deleting note-like events, customer updates, and text/sms messages.
   // Mail events are handled separately (Show linked email / unlink).
-  return /\b(note|comment|activity|meeting|call|task|customer update|text message|text|sms)\b/.test(cat);
+  return /\b(note|comment|activity|meeting|call|task|customer update|text message|text|sms|quick.?context)\b/.test(cat);
 }
 
 function historyContentLooksLikeEmailDump(raw) {
@@ -15621,6 +15627,10 @@ function renderHistoryEventItem(ev) {
   if (itemCat.includes("customer update")) {
     li.className += " opp-preview-history-item--customer-update";
   }
+  if (/\bquick.?context\b/.test(itemCat)) {
+    li.className += " opp-preview-history-item--quick-context";
+    li.dataset.quickContext = "1";
+  }
 
   const mailPayload = parseHistoryMailPayload(ev);
   const mailIds = extractMailMessageIds(ev);
@@ -15908,7 +15918,7 @@ function buildOpportunityPreviewUserFields(opp, customFieldValues) {
   return rows;
 }
 
-async function fetchAllOpportunityHistory(oppId, force = false, maxPages) {
+async function fetchAllOpportunityHistory(oppId, maxPages) {
   const all = [];
   let startIndex = 0;
   let pages = 0;
@@ -15922,7 +15932,7 @@ async function fetchAllOpportunityHistory(oppId, force = false, maxPages) {
       entityId: String(oppId),
     });
     const path = `/api/2.0/crm/history/filter?${params}`;
-    const data = await api(force ? bustCache(path) : path);
+    const data = await api(path);
     const page = unwrapHistoryEvents(data);
     if (!page.length) break;
     all.push(...page);
@@ -15938,7 +15948,7 @@ async function fetchAllOpportunityHistory(oppId, force = false, maxPages) {
   return all.slice(0, OPP_PREVIEW_HISTORY_MAX);
 }
 
-async function fetchOpportunityPreviewData(oppId, force = false, quick = false) {
+async function fetchOpportunityPreviewData(oppId, quick = false) {
   const id = Number(oppId);
   if (!Number.isFinite(id) || id <= 0) throw new Error("Invalid opportunity id");
 
@@ -15949,24 +15959,24 @@ async function fetchOpportunityPreviewData(oppId, force = false, quick = false) 
     loadHistoryCategories(),
   ]);
 
-  const opp = await fetchOpportunityForUpdate(id, force);
+  const opp = await fetchOpportunityForUpdate(id);
   const [customFieldValues, history, tags, documents] = await Promise.all([
-    fetchOpportunityCustomFieldValues(id, force),
-    fetchAllOpportunityHistory(id, force, quick ? 2 : undefined),
-    loadDealEditTags(opp, force),
-    fetchOpportunityDocuments(id, force),
+    fetchOpportunityCustomFieldValues(id),
+    fetchAllOpportunityHistory(id, quick ? 2 : undefined),
+    loadDealEditTags(opp),
+    fetchOpportunityDocuments(id),
   ]);
 
   return { opp, customFieldValues, history, tags, documents, oppId: id };
 }
 
-async function fetchOpportunityDocuments(oppId, force = false) {
+async function fetchOpportunityDocuments(oppId) {
   const id = Number(oppId);
   if (!Number.isFinite(id) || id <= 0) return [];
   try {
     // CRM opportunity attached files endpoint (proxy will forward)
     const path = `/api/2.0/crm/opportunity/${id}/files`;
-    const data = await api(force ? bustCache(path) : path);
+    const data = await api(path);
     return unwrap(data);
   } catch {
     return [];
@@ -16359,7 +16369,7 @@ function updatePreviewModalBookmarkButton(oppId) {
   btn.innerHTML = bookmarkRibbonSvg(bookmarked);
 }
 
-async function openOpportunityPreviewModal(oppId, titleHint = "", group = null, force = false, quick = false) {
+async function openOpportunityPreviewModal(oppId, titleHint = "", group = null, quick = false) {
   const modal = $("#opp-preview-modal");
   const body = $("#opp-preview-body");
   const titleEl = $("#opp-preview-title");
@@ -16375,7 +16385,7 @@ async function openOpportunityPreviewModal(oppId, titleHint = "", group = null, 
   updatePreviewModalBookmarkButton(id);
 
   try {
-    const data = await fetchOpportunityPreviewData(id, force, quick);
+    const data = await fetchOpportunityPreviewData(id, quick);
     const resolvedGroup = group || findGroupForOpportunity(id);
     setOpportunityPreviewContext(id, data.opp, resolvedGroup);
     titleEl.textContent = data.opp.title || data.opp.Title || titleHint || `Opportunity #${id}`;
@@ -16399,9 +16409,8 @@ function bindOpportunityPreviewModal() {
     const ctx = oppPreviewContext;
     if (ctx && ctx.oppId != null) {
       const titleHint = ctx.opp ? (ctx.opp.title || ctx.opp.Title || "") : "";
-      // force=true bypasses the 30-second server-side proxy cache so the preview
-      // always reflects the latest CRM data (tags, history, custom fields).
-      openOpportunityPreviewModal(ctx.oppId, titleHint, ctx.group || null, true).catch(() => {});
+      // Manual refresh re-fetches from the server (subject to the proxy TTL cache).
+      openOpportunityPreviewModal(ctx.oppId, titleHint, ctx.group || null).catch(() => {});
     }
   });
   $("#opp-preview-edit")?.addEventListener("click", (e) => {
@@ -18131,8 +18140,33 @@ function renderOpportunityPreviewContent(container, data) {
     }
     const ul = document.createElement("ul");
     ul.className = "opp-preview-history";
+    let hasQC = false;
     for (const ev of history) {
-      ul.appendChild(renderHistoryEventItem(ev));
+      const item = renderHistoryEventItem(ev);
+      ul.appendChild(item);
+      if (item.dataset.quickContext === "1" || item.classList.contains("opp-preview-history-item--quick-context")) {
+        hasQC = true;
+      }
+    }
+    if (hasQC) {
+      const jump = document.createElement("button");
+      jump.type = "button";
+      jump.className = "opp-preview-jump-history";
+      jump.textContent = "Quick Context ↓";
+      jump.addEventListener("click", () => {
+        const firstQC = ul.querySelector('li.opp-preview-history-item--quick-context, li[data-quick-context="1"]');
+        if (firstQC) {
+          firstQC.scrollIntoView({ block: "center", behavior: "smooth" });
+        } else {
+          section.scrollIntoView({ block: "start", behavior: "smooth" });
+        }
+      });
+      // Insert jump before the list (under the section title)
+      if (ul.parentNode) {
+        ul.parentNode.insertBefore(jump, ul);
+      } else {
+        section.appendChild(jump);
+      }
     }
     section.appendChild(ul);
   });
@@ -18445,7 +18479,7 @@ function bindNewTaskModal() {
   bindNewTaskOpportunityPicker();
 }
 
-async function loadTasks() {
+async function loadTasks({ force = false } = {}) {
   if (tileBodyCollapsed("tile-tasks")) {
     showTileCollapsedHint("tile-tasks", "Minimized — expand to load tasks");
     return;
@@ -18455,8 +18489,31 @@ async function loadTasks() {
   const filterUser = $("#tasks-user-filter")?.value;
   if (filterUser) params.set("responsibleid", filterUser);
 
-  const data = await api(`/api/2.0/crm/task/filter?${params}`);
-  state.tasks = unwrap(data).filter((t) => !t.isClosed);
+  const path = `/api/2.0/crm/task/filter?${params}`;
+  try {
+    const data = await api(path);
+    state.tasks = unwrap(data).filter((t) => !t.isClosed);
+  } catch (err) {
+    const root = $("#tasks-by-user");
+    if (root) {
+      let msg = (err && err.message) || "";
+      const st = err && err.status ? Number(err.status) : 0;
+      if (!msg || /failed to fetch|typeerror|networkerror|load failed/i.test(msg)) {
+        msg = `Failed to reach CRM${st ? ` (HTTP ${st})` : ""}. Check your connection or try again.`;
+      } else if (st && !/HTTP \d/.test(msg)) {
+        msg += ` (HTTP ${st})`;
+      }
+      root.innerHTML = `<div class="feed-error" style="padding:8px;">${escapeHtml(msg)} <span class="board-error-retry" role="button" tabindex="0">⟳ retry</span></div>`;
+      const r = root.querySelector(".board-error-retry");
+      if (r) {
+        const fn = () => loadTasks({ force: true }).catch(() => {});
+        r.addEventListener("click", fn);
+        r.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fn(); } });
+      }
+    }
+    populateTasksUserFilter();
+    return;
+  }
   populateTasksUserFilter();
   renderTasksByUser();
 }
@@ -19204,7 +19261,7 @@ async function refreshGroup(group, { force = false } = {}) {
     }, 200);
   }
   try {
-    let items = await fetchOpportunitiesForGroup(group);
+    let items = await fetchOpportunitiesForGroup(group, { force });
     clearTimeout(loadingTimer);
     if (group.dealStatus !== "all" && !group.stageType) {
       items = applyClientDealStatus(items, group.dealStatus);
@@ -19225,14 +19282,28 @@ async function refreshGroup(group, { force = false } = {}) {
     clearTimeout(loadingTimer);
     const el = groupDomEl(group);
     if (el) {
-      $(".board", el).innerHTML = `<p class="board-error">${escapeHtml(err.message)}</p>`;
+      let msg = (err && err.message) || "";
+      const st = err && err.status ? Number(err.status) : 0;
+      if (!msg || /failed to fetch|typeerror|networkerror|load failed/i.test(msg)) {
+        const code = st ? ` (HTTP ${st})` : "";
+        msg = `Failed to reach CRM${code}. Check your connection or try again.`;
+      } else if (st && !/HTTP \d/.test(msg)) {
+        msg += ` (HTTP ${st})`;
+      }
+      $(".board", el).innerHTML = `<p class="board-error">${escapeHtml(msg)} <span class="board-error-retry" role="button" tabindex="0">⟳ retry</span></p>`;
+      const retryEl = $(".board-error-retry", el);
+      if (retryEl) {
+        const doRetry = () => refreshGroup(group, { force: true }).catch(() => {});
+        retryEl.addEventListener("click", doRetry);
+        retryEl.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); doRetry(); } });
+      }
     }
   }
 }
 
 let _crmRefreshing = false;
 
-async function refreshAll() {
+async function refreshAll({ force = false } = {}) {
   _crmRefreshing = true;
   const refreshBtn = $("#refresh-btn");
   if (refreshBtn) refreshBtn.classList.add("refresh-btn-loading");
@@ -19295,7 +19366,7 @@ async function refreshAll() {
       if (refreshBtn) refreshBtn.classList.remove("refresh-btn-loading");
       hideCRMSyncStatus();
     };
-    loadExpandedDashboardTiles({ quiet: true }).then(done, done);
+    loadExpandedDashboardTiles({ quiet: true, force }).then(done, done);
     if (hadNonTransientError) {
       $("#status-text").textContent = "Error";
     }
@@ -19483,7 +19554,7 @@ async function init() {
   bindCalendarEventModal();
   bindMailInboxButton();
 
-  $("#refresh-btn").addEventListener("click", refreshAll);
+  $("#refresh-btn").addEventListener("click", () => refreshAll({ force: true }));
   $("#logout-btn").addEventListener("click", async () => {
     await fetch("/api/logout", { method: "POST", credentials: "same-origin" });
     // Clean presence cache on explicit logout (the "until next login" contract)

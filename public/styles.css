@@ -851,6 +851,15 @@ body {
   color: var(--danger);
 }
 
+.board-error-retry {
+  margin-left: 6px;
+  cursor: pointer;
+  text-decoration: underline;
+  font-size: 0.9em;
+  opacity: 0.9;
+}
+.board-error-retry:hover { opacity: 1; }
+
 /* Tile-level loading indicator */
 .tile-loading {
   text-align: center;
@@ -2633,6 +2642,19 @@ body {
 /* Single light-green highlighter button swatch (subtle so it doesn't look like the bright applied highlight) */
 .note-format-btn[data-cmd="hiliteColor"] { background: #c8e6c9; color: #222; border-color: #81c784; }
 .note-format-btn[data-cmd="hiliteColor"]:hover { filter: brightness(0.95); }
+
+/* Native date input for backdating notes - show the browser's default pulldown UI */
+.note-backdate-input {
+  font-size: 0.78rem;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text);
+  width: auto;
+  max-width: 138px;
+  min-width: 108px;
+}
 
 .note-editor {
   display: block;
@@ -4711,6 +4733,30 @@ body {
 .opp-preview-history-item--customer-update {
   border-left: 3px solid #f97316;
   padding-left: calc(0.75rem - 3px);
+}
+
+.opp-preview-history-item--quick-context {
+  background: rgba(37, 99, 235, 0.08);
+  border-left: 3px solid #2563eb;
+  padding-left: calc(0.75rem - 3px);
+}
+.opp-preview-history-item--quick-context .opp-preview-history-type-icon svg {
+  filter: drop-shadow(0 1px 1px rgba(37,99,235,0.35));
+}
+
+.opp-preview-jump-history {
+  font-size: 0.72rem;
+  padding: 0.15rem 0.4rem;
+  margin: 0 0 0.4rem 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.opp-preview-jump-history:hover {
+  border-color: var(--accent);
+  color: var(--text);
 }
 
 .opp-preview-history-meta-row {
