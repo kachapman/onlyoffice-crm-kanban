@@ -897,7 +897,8 @@ function updateDashboardStatusText() {
   if (status) status.textContent = text;
 }
 
-async function loadTileCrmData(tileId, { quiet = false, force = false } = {}) {
+async function loadTileCrmData(tileId, opts = {}) {
+  const { quiet = false, force = false } = opts;
   if (!tileId || (!force && !shouldFetchTileCrmData(tileId))) return;
 
   if (tileId === "tile-feed") {
@@ -915,7 +916,7 @@ async function loadTileCrmData(tileId, { quiet = false, force = false } = {}) {
   }
   if (tileId.startsWith("group-")) {
     const group = groupForTileId(tileId);
-    if (group) await refreshGroup(group, { force });
+    if (group) await refreshGroup(group, opts);
   }
 }
 
@@ -5651,7 +5652,8 @@ async function enrichOpportunitiesTags(items, force = false) {
   return items;
 }
 
-async function fetchOpportunitiesForGroup(group, { force = false } = {}) {
+async function fetchOpportunitiesForGroup(group, opts = {}) {
+  const { force = false, _manualGroupTileRefresh = false } = opts;
   const baseQs = buildFilterQuery(group);
   const catalog = buildTagCatalog();
   // Filter result cache (30s TTL): keyed only by server-side params (groupId + baseQs).
@@ -5676,7 +5678,8 @@ async function fetchOpportunitiesForGroup(group, { force = false } = {}) {
     state.filterResultCache?.delete(cacheKey);
   }
   const url = `/api/2.0/crm/opportunity/filter?${baseQs}`;
-  const data = await api(url);
+  const useBypass = force && _manualGroupTileRefresh;
+  const data = await api(url, useBypass ? { cache: "reload", headers: { "X-Force-Refresh": "1" } } : {});
   const rawItems = unwrap(data);
   // Cache the raw API response before any client-side filtering (so tag/filter changes don't miss the cache)
   state.filterResultCache?.set(cacheKey, rawItems);
@@ -8519,6 +8522,7 @@ function bindFeedHiddenModal() {
 }
 
 const TILE_REFRESH_ICON_HTML = `<svg class="tile-refresh-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M21 21v-5h-5"/></svg>`;
+const GROUP_NUKE_ICON_HTML = `<svg class="tile-refresh-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M13.5 14.6l3 5.19a9 9 0 0 0 4.5 -7.79h-6a3 3 0 0 1 -1.5 2.6" /><path d="M13.5 9.4l3 -5.19a9 9 0 0 0 -9 0l3 5.19a3 3 0 0 1 3 0" /><path d="M10.5 14.6l-3 5.19a9 9 0 0 1 -4.5 -7.79h6a3 3 0 0 0 1.5 2.6" /></svg>`;
 
 let lastDashboardActivityAt = Date.now();
 let panelTileAutoRefreshTimer = null;
@@ -8626,18 +8630,21 @@ function ensureTileAutoRefreshButton(tileEl, tileId) {
   const toolbar = tileEl.querySelector(":scope > .tile-toolbar, :scope > .group-tile-bar");
   if (!toolbar || toolbar.querySelector(".btn-tile-refresh")) return;
 
+  const isGroup = tileId.startsWith("group-");
   let label = "Refresh tile";
   if (tileId === "tile-feed") label = "Refresh notifications";
   else if (tileId === "tile-tasks") label = "Refresh tasks";
   else if (tileId.startsWith("calendar-")) label = "Refresh calendar";
-  else if (tileId.startsWith("group-")) label = "Refresh deals";
+  else if (isGroup) label = "Nuke Cache";
+
+  const iconHtml = isGroup ? GROUP_NUKE_ICON_HTML : TILE_REFRESH_ICON_HTML;
 
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "tile-btn tile-btn-icon btn-tile-refresh";
   btn.title = label;
   btn.setAttribute("aria-label", label);
-  btn.innerHTML = TILE_REFRESH_ICON_HTML;
+  btn.innerHTML = iconHtml;
   btn.addEventListener("click", async (e) => {
     e.stopPropagation();
     if (btn.disabled) return;
@@ -8645,7 +8652,9 @@ function ensureTileAutoRefreshButton(tileEl, tileId) {
     btn.disabled = true;
     btn.classList.add("is-refreshing");
     try {
-      await loadTileCrmData(tileId, { force: true });
+      const loadOpts = { force: true };
+      if (isGroup) loadOpts._manualGroupTileRefresh = true;
+      await loadTileCrmData(tileId, loadOpts);
     } catch (err) {
       showToast(err.message, true);
     } finally {
@@ -14585,7 +14594,7 @@ const HISTORY_ICON_SMS = `<svg xmlns="http://www.w3.org/2000/svg" width="14" hei
 const HISTORY_ICON_NOTE = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8Z"/><path d="M15 3v4a2 2 0 0 0 2 2h4"/></svg>`;
 const HISTORY_ICON_MEETING = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>`;
 const HISTORY_ICON_DEFAULT = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`;
-const HISTORY_ICON_CHAT = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
+const HISTORY_ICON_CHAT = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" /><path d="M11.102 17.957c-3.204 -.307 -5.904 -2.294 -8.102 -5.957c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6a19.5 19.5 0 0 1 -.663 1.032" /><path d="M15 19l2 2l4 -4" /></svg>`;
 const HISTORY_ICON_PIN = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 4.5l-4 4l-4 1.5l-1.5 1.5l7 7l1.5 -1.5l1.5 -4l4 -4" /><path d="M9 15l-4.5 4.5" /><path d="M14.5 4l5.5 5.5" /></svg>`;
 
 function historyCategoryIconHtml(ev) {
@@ -19236,7 +19245,8 @@ async function enrichOpportunitiesCustomFields(items) {
   return items;
 }
 
-async function refreshGroup(group, { force = false } = {}) {
+async function refreshGroup(group, opts = {}) {
+  const { force = false, _manualGroupTileRefresh = false } = opts;
   const tileId = `group-${group.id}`;
   if (!force && tileBodyCollapsed(tileId)) {
     showTileCollapsedHint(tileId, "Minimized — expand to load deals");
@@ -19261,7 +19271,7 @@ async function refreshGroup(group, { force = false } = {}) {
     }, 200);
   }
   try {
-    let items = await fetchOpportunitiesForGroup(group, { force });
+    let items = await fetchOpportunitiesForGroup(group, { force, _manualGroupTileRefresh });
     clearTimeout(loadingTimer);
     if (group.dealStatus !== "all" && !group.stageType) {
       items = applyClientDealStatus(items, group.dealStatus);

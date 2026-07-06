@@ -1832,7 +1832,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
         # Server-side response cache (GET only, specific endpoints)
         ttl = _proxy_cache_ttl(api_path)
-        if ttl is not None:
+        force_refresh = bool(self.headers.get("X-Force-Refresh"))
+        if ttl is not None and not force_refresh:
             portal = _portal_base(self)
             token = _session_token(self) or ""
             ck = _cache_key("GET", api_path, query, portal, token)
@@ -1850,7 +1851,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         status, body, ctype = _proxy_request(self, "GET", api_path, query)
 
         # Cache successful GET responses
-        if ttl is not None and 200 <= status < 400:
+        if ttl is not None and 200 <= status < 400 and not force_refresh:
             portal = _portal_base(self)
             token = _session_token(self) or ""
             ck = _cache_key("GET", api_path, query, portal, token)
@@ -1862,6 +1863,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", ctype or "application/json")
         self.send_header("Content-Length", str(len(body)))
+        if force_refresh:
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("X-Proxy-Cache", "BYPASS-FORCE")
         self.end_headers()
         self.wfile.write(body)
 

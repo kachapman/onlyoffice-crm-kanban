@@ -2,6 +2,22 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [2.0.10] — 2026-07-06
+
+### Hotfix — Group tile "Nuke Cache" (universal)
+
+- Per-group tile refresh button ("Refresh deals") is now **universal cache-buster** for all users/browsers. Clicking it forces a live CRM `/filter` call:
+  - Browser: `fetch(..., { cache: "reload" })`
+  - Dashboard proxy: skips `_proxy_cache` lookup + store via `X-Force-Refresh` header
+  - Response includes `Cache-Control: no-cache, no-store, must-revalidate` + `X-Proxy-Cache: BYPASS-FORCE`
+- Button label changed to **"Nuke Cache"** (title/aria-label too). Icon is muted Tabler radioactive (trefoil) symbol. Only the group tile refresh button is affected (no impact on header refresh, feed/tasks/calendar tiles, post-edit refreshes, search, etc.).
+- Customer Update history notes now use Tabler `eye-check` icon (instead of speech bubble).
+- README.md: permanent toaster header added at the very top: "THIS APP WAS CREATED BY A TOASTER. LOOK ON IT YE MIGHTY AND DESPAIR".
+- Version: 2.0.10
+
+### Files changed
+- `public/app.js`, `server.py`, `VERSION`, `CHANGELOG.md`, `README.md`
+
 ## [2.0.9] — 2026-07-05
 
 ### Fixed

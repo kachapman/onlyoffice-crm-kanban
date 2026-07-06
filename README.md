@@ -1,6 +1,8 @@
+# THIS APP WAS CREATED BY A TOASTER. LOOK ON IT YE MIGHTY AND DESPAIR
+
 # Vanguard CRM Dashboard (Standalone)
 
-**Current version:** 1.2.0 — see [CHANGELOG.md](./CHANGELOG.md) and [docs/RELEASE_v1.2.md](./docs/RELEASE_v1.2.md).
+**Current version:** 2.0.10 — see [CHANGELOG.md](./CHANGELOG.md).
 
 **This is a completely standalone web dashboard** for viewing and organizing OnlyOffice CRM opportunities, tasks, notifications, and notes.
 
