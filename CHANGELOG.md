@@ -11,6 +11,9 @@ All notable changes to the CRM Kanban dashboard are documented here.
 ### Files changed
 - `public/index.html`, `public/app.js`, `public/styles.css`, `CHANGELOG.md`, `VERSION`, `AGENTS.md`, `docs/RELEASE_v2.0.9.md`
 
+### Removed / Scrapped
+- **WebKit / Apple-friendly cache-busting attempt (July 4).** Full attempt to add `detectAppleWebKit()`, `state.isAppleWebKit`, `bustCache()` helper, and guarded calls on short-TTL paths (filter/history/tag/customfield) plus premature `Cache-Control`/`Pragma`/`Vary`/`Expires` headers before `send_response` in `server.py:_handle_api_get` on cache miss. This produced `net::ERR_INVALID_HTTP_RESPONSE` (400) on direct http LAN testing (127.0.0.1 + local IPs) for history/filter/batch-tags/individual tag calls after login succeeded. User reported multiple times that "local dev used to work great until the edits"; initial diagnosis wrongly focused on auth/reachability. Entire feature scrapped; all `detectAppleWebKit`/`isAppleWebKit`/`bustCache`/`isDynamicShortTtl` + header-before-response blocks removed. Pre-existing server TTL cache (30s filter, 600s tags/stages), `_proxy_cache` invalidations, `newId()` UUID fallbacks, 502/5xx resilience, friendly tile retry links, LAN IP printing, batch-opportunity-tags, and all prior proxy/auth/upload logic preserved. Documented as expensive disaster and waste of tokens with ignored user feedback.
+
 ## [2.0.8] — 2026-07-03
 
 ### Infrastructure / Upload fix (post-sherwood-toolbox)

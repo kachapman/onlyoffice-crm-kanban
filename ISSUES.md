@@ -1,5 +1,37 @@
 # Known issues
 
+## ISSUE-006 — WebKit / Apple cache-busting attempt (July 4) — expensive disaster, ignored user feedback
+
+**Status:** ❌ Fully scrapped and removed 2026-07-05
+
+### What was attempted
+- Added `detectAppleWebKit()`, `state.isAppleWebKit`, `bustCache()` helper, and conditional `bustCache()` calls on short-TTL proxy paths (filter/history/tag/customfield).
+- In `server.py:_handle_api_get`, on cache miss for dynamic paths, emitted `Cache-Control`, `Pragma`, `Vary`, `Expires` headers via `send_header` **before** `send_response`, plus `isDynamicShortTtl` logic.
+- Goal: make dashboard more "Apple friendly" by preventing WebKit from caching CRM responses.
+
+### Breakage
+- Produced `net::ERR_INVALID_HTTP_RESPONSE` (HTTP 400) on direct http LAN testing (`http://127.0.0.1:8765` and local LAN IPs).
+- Affected: opportunity filter, history/filter, batch-opportunity-tags, individual tag calls.
+- Login and some proxy calls succeeded; core data loads (groups, history, tags) failed after login.
+- Prod was masked by host nginx; local dev (plain http, no nginx) was the canary.
+
+### Ignored user feedback
+- User repeatedly stated "local dev used to work great until the edits" and that the breakage started exactly after the WebKit changes.
+- Initial agent focus was on auth, reachability, or 502s instead of acting on the reported timeline.
+- User had to argue the point multiple times; agent kept trying additional changes while claiming the WebKit edits were not the issue.
+
+### Outcome
+- Entire WebKit feature scrapped.
+- All `detectAppleWebKit`, `state.isAppleWebKit`, `bustCache`, `isDynamicShortTtl`, and premature header emission blocks removed.
+- Pre-existing server TTL cache (`_proxy_cache`, 30s/600s), cache invalidations on mutations, `newId()` (crypto.randomUUID fallback), 502/5xx JSON resilience, friendly tile errors + retry links, LAN printing, batch tags, and all prior proxy/auth/upload logic preserved.
+- Documented here and in CHANGELOG as an expensive disaster and waste of tokens.
+
+### Why it happened
+- Attempt to solve a perceived platform caching problem without first reproducing the exact reported symptoms on the actual dev path (plain http, no nginx).
+- Failure to stop and revert when user timeline evidence was provided.
+
+---
+
 ## ISSUE-005 — Agent repeatedly forgets completed work (2026-07 session)
 
 **Status:** Ongoing — documented 2026-07-05
