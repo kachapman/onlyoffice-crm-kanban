@@ -2,6 +2,15 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [2.0.9] — 2026-07-05
+
+### Fixed
+- **Backdate controls in deal-edit and quick-note.** Plain native `<input type="date" id="*-note-created" class="note-backdate-input">` placed directly after the note editor (no wrapper, icon, or label). Width tuned (max 138px) so full mm/dd/yyyy is visible. Submission already passed `created` to history events.
+- **Quick Context items.** Tabler thumbtack (pin) icon + faint blue background (`rgba(37,99,235,0.08)`) matching High Priority tag style.
+
+### Files changed
+- `public/index.html`, `public/app.js`, `public/styles.css`, `CHANGELOG.md`, `VERSION`, `AGENTS.md`, `docs/RELEASE_v2.0.9.md`
+
 ## [2.0.8] — 2026-07-03
 
 ### Infrastructure / Upload fix (post-sherwood-toolbox)

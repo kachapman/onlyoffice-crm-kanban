@@ -1,5 +1,33 @@
 # Known issues
 
+## ISSUE-005 — Agent repeatedly forgets completed work (2026-07 session)
+
+**Status:** Ongoing — documented 2026-07-05
+
+### Symptoms
+- Backdate HTML inputs (`<input type="date" id="*-note-created">`) were implemented, tested locally with working backdated POSTs, and visible in a live session.
+- Only the supporting JS (reset/read/submit) and CSS (width/hue) were committed and pushed.
+- HTML change was never present in the tree; feature appeared broken on fresh loads despite working in cached browser.
+- "WebKit catastrophe" / Safari date-input wrapper issues were discussed at length but never written to any committed file.
+- Agent would claim "done" and "pushed" when the actual markup was missing.
+
+### Root cause (observed)
+- Session state and chat context are not persisted into the source tree or docs.
+- Agent trusts prior conversation as truth instead of re-reading committed files + `git show`.
+- No mandatory step to run `git status --short && git diff --stat`, confirm exact lines changed, and update CHANGELOG + AGENTS last-session summary before ending work.
+
+### Mitigation (enforced going forward)
+- After every feature/fix: run `git status --short && git diff --stat`.
+- Explicitly confirm the changed lines are in the working tree and committed.
+- Write a one-line summary under "Last session summary" in AGENTS.md.
+- Add a CHANGELOG entry (and RELEASE note for tagged versions).
+- If the user has to argue "where is the HTML?", the agent has failed the rule.
+
+### Related
+- Similar pattern seen with the WebKit date-input wrapper removal rationale and the "backdate button" being only partially shipped.
+
+---
+
 ## ISSUE-004 — Stale Deals Tile: attempted, debugged, and scrapped
 
 **Status:** ❌ Abandoned 2026-06-12 — removed in v1.8.0
