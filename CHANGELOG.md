@@ -6,7 +6,7 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 ### Bug fixes
 
-- **`/tag` now returns all defined tags.** Fixed _handle_bot_tags: switched from per-deal batch requests (which the bot CRM user lacked permission for) to the CRM-wide tag definitions endpoint (`GET /api/2.0/crm/opportunity/tag`). The `/tag` command now returns tag buttons filtered to open deals as before, but the tag list comes from the global definition set.
+- **`/tag` now returns all defined tags.** Fixed _handle_bot_tags: the CRM-wide tag definitions endpoint (`GET /api/2.0/crm/opportunity/tag`) does not exist or returns empty under the bot's credentials. Rewrote to fetch open deals, batch-fetch tags per opportunity (same pattern as the dashboard search modal), and deduplicate by name. Now reliably returns all tags in use on open deals.
 - **Usage Log now loads.** Fixed routing bug: `GET /api/bot/usage` was defined in `_handle_api_post_put` (unreachable for GET requests). Moved to `_handle_api_get` at the correct routing position.
 
 ### Improvements

@@ -1344,24 +1344,60 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not portal:
             _json_response(self, 400, {"error": "Portal not configured"})
             return
-        # Fetch all defined tags from the CRM-wide definitions endpoint
-        code, data = self._bot_crm_proxy(portal, "GET", "/api/2.0/crm/opportunity/tag")
+        # Fetch open deals (all stages) to extract tags from
+        filter_params = urlencode({
+            "startIndex": "0", "count": "250",
+            "filterValue": "", "sortBy": "date_created", "sortOrder": "descending",
+        })
+        code, data = self._bot_crm_proxy(portal, "GET", "/api/2.0/crm/opportunity/filter", filter_params)
         if code >= 400:
             _json_response(self, code, data)
             return
-        raw = data.get("response") if isinstance(data, dict) else (data if isinstance(data, list) else [])
-        if not isinstance(raw, list):
-            raw = []
-        tags = []
-        seen: set[int] = set()
-        for t in raw:
-            if not isinstance(t, dict):
+        opps = data.get("response") if isinstance(data, dict) else (data if isinstance(data, list) else [])
+        if not isinstance(opps, list):
+            opps = []
+        # Collect IDs of open deals (stageType=0 or null)
+        ids = []
+        for opp in opps:
+            if not isinstance(opp, dict):
                 continue
-            tid = t.get("id") or t.get("ID")
-            title = str(t.get("title") or t.get("name") or "").strip()
-            if tid and title and int(tid) not in seen:
-                seen.add(int(tid))
-                tags.append({"name": title, "id": int(tid)})
+            _stage = opp.get("stage") or opp.get("Stage") or {}
+            _st = _stage.get("stageType") if isinstance(_stage, dict) else None
+            if _st not in (0, "0", "Open", None, ""):
+                continue
+            oid = opp.get("id") or opp.get("ID")
+            if oid:
+                ids.append(int(oid))
+        # Batch-fetch tags per deal and deduplicate by name
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        seen_names: set[str] = set()
+        tags: list[dict] = []
+        def _fetch(oid: int) -> list[str]:
+            c, d = self._bot_crm_proxy(portal, "GET", f"/api/2.0/crm/opportunity/tag/{oid}", timeout=10)
+            if c >= 400:
+                return []
+            raw = d.get("response") if isinstance(d, dict) else (d if isinstance(d, list) else [])
+            if not isinstance(raw, list):
+                return []
+            result = []
+            for t in raw:
+                if isinstance(t, dict):
+                    name = str(t.get("title") or t.get("name") or "").strip()
+                elif isinstance(t, str):
+                    name = t.strip()
+                else:
+                    continue
+                if name:
+                    result.append(name)
+            return result
+        with ThreadPoolExecutor(max_workers=12) as pool:
+            futures = {pool.submit(_fetch, oid): oid for oid in ids}
+            for fut in as_completed(futures):
+                for name in fut.result():
+                    key = name.lower()
+                    if key not in seen_names:
+                        seen_names.add(key)
+                        tags.append({"name": name})
         _json_response(self, 200, {"tags": tags})
 
     def _handle_bot_note(self) -> None:
