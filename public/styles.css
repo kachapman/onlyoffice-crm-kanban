@@ -7304,6 +7304,116 @@ body {
   vertical-align: middle;
 }
 
+.bot-section-title svg {
+  vertical-align: middle;
+  margin-right: 0.3rem;
+}
+
+.bot-broadcast-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.bot-broadcast-select {
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.bot-broadcast-textarea {
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.bot-broadcast-hint {
+  font-weight: 400;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.bot-broadcast-status {
+  font-size: 0.85rem;
+  color: var(--muted);
+  align-self: center;
+}
+
+.bot-usage-panel {
+  margin-top: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  position: relative;
+}
+
+.bot-usage-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.bot-usage-close {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+}
+
+.bot-usage-content {
+  max-height: 30vh;
+  overflow-y: auto;
+  font-size: 0.82rem;
+}
+
+.bot-usage-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.bot-usage-table th,
+.bot-usage-table td {
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.bot-usage-table th {
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.bot-usage-table td {
+  font-size: 0.82rem;
+}
+
+.bot-usage-empty {
+  padding: 1rem;
+  text-align: center;
+  color: var(--muted);
+  font-style: italic;
+  font-size: 0.85rem;
+}
+
 .checkbox-label {
   display: flex;
   align-items: center;

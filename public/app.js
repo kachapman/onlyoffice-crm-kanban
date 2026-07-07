@@ -17710,6 +17710,7 @@ async function openBotCustomersModal() {
   if (search) search.value = "";
   updateBotCustomersContactSelectedUi();
 
+  populateBotBroadcastDropdown();
   modal.classList.remove("hidden");
 }
 
@@ -18080,6 +18081,113 @@ function bindBotCustomersModal() {
       updateBotCustomersEmployeeSection();
     });
   }
+
+  initBotBroadcastSection();
+  initBotUsageLog();
+}
+
+function populateBotBroadcastDropdown() {
+  const select = $("#bot-broadcast-recipient");
+  if (!select) return;
+  select.innerHTML = '<option value="">— Select a user —</option>';
+  for (const m of _botCustomersMappings) {
+    if (!m.chatId) continue;
+    const label = (m.nickname || m.contactName || `User #${m.contactId}`) + ` (${m.contactName || "Employee"})`;
+    const opt = document.createElement("option");
+    opt.value = m.chatId;
+    opt.textContent = label;
+    select.appendChild(opt);
+  }
+}
+
+function initBotBroadcastSection() {
+  const select = $("#bot-broadcast-recipient");
+  const textarea = $("#bot-broadcast-text");
+  const sendBtn = $("#bot-broadcast-send-btn");
+  const status = $("#bot-broadcast-status");
+  if (!select || !textarea || !sendBtn) return;
+
+  function updateSendBtn() {
+    sendBtn.disabled = !select.value || !textarea.value.trim();
+  }
+
+  select.addEventListener("change", updateSendBtn);
+  textarea.addEventListener("input", updateSendBtn);
+
+  sendBtn.addEventListener("click", async () => {
+    const chatId = select.value;
+    const text = textarea.value.trim();
+    if (!chatId || !text) return;
+    sendBtn.disabled = true;
+    status.textContent = "Sending…";
+    try {
+      const resp = await fetch("/api/bot/send-message", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({chatId: Number(chatId), text}),
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        status.textContent = "✅ Sent!";
+        textarea.value = "";
+        select.value = "";
+        sendBtn.disabled = true;
+      } else {
+        status.textContent = "❌ " + (data.error || "Failed");
+        sendBtn.disabled = false;
+      }
+    } catch (e) {
+      status.textContent = "❌ Network error";
+      sendBtn.disabled = false;
+    }
+    setTimeout(() => { status.textContent = ""; }, 5000);
+  });
+}
+
+function initBotUsageLog() {
+  const logBtn = $("#bot-usage-log-btn");
+  const panel = $("#bot-usage-panel");
+  const closeBtn = $("#bot-usage-close-btn");
+  const content = $("#bot-usage-content");
+  if (!logBtn || !panel || !closeBtn || !content) return;
+
+  logBtn.addEventListener("click", async () => {
+    if (!panel.classList.contains("hidden")) {
+      panel.classList.add("hidden");
+      return;
+    }
+    panel.classList.remove("hidden");
+    content.innerHTML = '<p class="bot-usage-empty">Loading…</p>';
+    try {
+      const resp = await fetch("/api/bot/usage", { credentials: "same-origin" });
+      const data = await resp.json();
+      const usage = data.usage || [];
+      if (!usage.length) {
+        content.innerHTML = '<p class="bot-usage-empty">No usage data yet.</p>';
+        return;
+      }
+      let html = '<table class="bot-usage-table"><thead><tr><th>User</th><th>Chat ID</th><th>Requests</th><th>Endpoints</th><th>Last Request</th></tr></thead><tbody>';
+      for (const u of usage) {
+        const uu = u.usage || {};
+        const name = escapeHtml(u.nickname || u.contactName || `User #${u.contactId || u.chatId}`);
+        const chatId = u.chatId || "—";
+        const total = uu.requests || 0;
+        const eps = uu.endpoints || {};
+        const epStr = Object.entries(eps).map(([k, v]) => `${k}: ${v}`).join(", ") || "—";
+        const last = uu.lastRequest ? new Date(uu.lastRequest).toLocaleString() : "—";
+        html += `<tr><td>${name}</td><td>${chatId}</td><td>${total}</td><td>${escapeHtml(epStr)}</td><td>${escapeHtml(last)}</td></tr>`;
+      }
+      html += "</tbody></table>";
+      content.innerHTML = html;
+    } catch (e) {
+      content.innerHTML = '<p class="bot-usage-empty">Failed to load usage data.</p>';
+    }
+  });
+
+  closeBtn.addEventListener("click", () => {
+    panel.classList.add("hidden");
+  });
 }
 
 /* ================================================================================

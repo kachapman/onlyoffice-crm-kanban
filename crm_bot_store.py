@@ -293,6 +293,29 @@ def set_nickname(portal: str, contact_id: int | None, nickname: str) -> bool:
     return False
 
 
+# ── Usage tracking ──
+
+def _usage_path(portal: str) -> Path:
+    return _portal_dir(portal) / "usage.json"
+
+
+def track_request(portal: str, chat_id: int, endpoint: str) -> None:
+    path = _usage_path(portal)
+    data = _load_file(path)
+    key = str(chat_id)
+    now = datetime.now(timezone.utc).isoformat()
+    if key not in data:
+        data[key] = {"requests": 0, "endpoints": {}, "firstRequest": now}
+    data[key]["requests"] += 1
+    data[key]["endpoints"][endpoint] = data[key]["endpoints"].get(endpoint, 0) + 1
+    data[key]["lastRequest"] = now
+    _save_file(path, data)
+
+
+def get_usage_stats(portal: str) -> dict[str, Any]:
+    return _load_file(_usage_path(portal))
+
+
 def _parse_iso(value: str) -> datetime | None:
     raw = str(value or "").strip()
     if not raw:

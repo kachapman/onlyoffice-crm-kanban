@@ -36,8 +36,9 @@ from user_profile_store import load_user_profile, save_user_profile
 from event_log_store import append_event_log, load_event_log, list_users_with_logs
 from crm_bot_store import (add_mapping, cancel_code, cancel_code_by_value,
                            generate_code, get_mapping_by_chat, get_pending_codes,
-                           list_mappings, remove_mapping, remove_mapping_by_chat,
-                           set_nickname, set_verify_chat_id, verify_code)
+                           get_usage_stats, list_mappings, remove_mapping,
+                           remove_mapping_by_chat, set_nickname, set_verify_chat_id,
+                           track_request, verify_code)
 from presence_store import (
     append_dm,
     clear_conversation,
@@ -1098,6 +1099,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not portal:
             _json_response(self, 400, {"error": "Portal not configured"})
             return
+        track_request(portal, int(raw_chat), "me")
         mapping = get_mapping_by_chat(portal, int(raw_chat))
         if not mapping:
             _json_response(self, 404, {"error": "Not found"})
@@ -1114,6 +1116,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not portal:
                 _json_response(self, 400, {"error": "Portal not configured"})
                 return
+            raw_chat_deals = (qs.get("chatId") or [""])[0]
+            if raw_chat_deals:
+                track_request(portal, int(raw_chat_deals), "deals")
             is_employee = (qs.get("employee") or [""])[0].lower() == "true"
             raw_contact = (qs.get("contactId") or [""])[0]
             if not is_employee and not raw_contact:
@@ -1164,6 +1169,30 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     opp for opp in open_opps
                     if search in str(opp.get("title") or opp.get("Title") or "").lower()
                 ]
+
+            # Tag filter (batch-fetch tags for matched deals, then filter)
+            tag_filter = (qs.get("tag") or [""])[0].strip().lower()
+            if tag_filter:
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                tag_matched: list[int] = []
+                tag_ids = [(opp.get("id") or opp.get("ID")) for opp in matched_opps if opp.get("id") or opp.get("ID")]
+                if tag_ids:
+                    def _fetch_tag_names(oid: int) -> tuple[int, list[str]]:
+                        c, d = self._bot_crm_proxy(portal, "GET", f"/api/2.0/crm/opportunity/tag/{oid}", timeout=10)
+                        if c >= 400:
+                            return oid, []
+                        tags = d.get("response") if isinstance(d, dict) else (d if isinstance(d, list) else [])
+                        if not isinstance(tags, list):
+                            return oid, []
+                        names = [str(t.get("name") or t.get("title") or "").lower() for t in tags if isinstance(t, dict)]
+                        return oid, names
+                    with ThreadPoolExecutor(max_workers=12) as pool:
+                        futures = {pool.submit(_fetch_tag_names, oid): oid for oid in tag_ids}
+                        for fut in as_completed(futures):
+                            oid, names = fut.result()
+                            if tag_filter in names:
+                                tag_matched.append(oid)
+                matched_opps = [opp for opp in matched_opps if (opp.get("id") or opp.get("ID")) in tag_matched]
 
             # Fetch history only for matched deals
             deals = []
@@ -1305,6 +1334,65 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     result.append({"id": int(cid), "title": title})
         _json_response(self, 200, result)
 
+    def _handle_bot_tags(self) -> None:
+        if not self._bot_verify_request():
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        portal = _portal_base(self)
+        if not portal:
+            _json_response(self, 400, {"error": "Portal not configured"})
+            return
+        # Fetch all open opportunities
+        filter_params = urlencode({
+            "startIndex": "0", "count": "500", "filterValue": "",
+            "sortBy": "date_created", "sortOrder": "descending",
+        })
+        code, data = self._bot_crm_proxy(portal, "GET", "/api/2.0/crm/opportunity/filter", filter_params)
+        if code >= 400:
+            _json_response(self, code, data)
+            return
+        opportunities = data.get("response") if isinstance(data, dict) else []
+        open_opps = []
+        for opp in (opportunities or []):
+            if not isinstance(opp, dict):
+                continue
+            _stage = opp.get("stage") or opp.get("Stage") or {}
+            _st = _stage.get("stageType") if isinstance(_stage, dict) else None
+            if _st not in (0, "0", "Open", None, ""):
+                continue
+            oid = opp.get("id") or opp.get("ID")
+            if oid:
+                open_opps.append(int(oid))
+        # Batch-fetch tags for all open deals
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        seen: dict[str, int] = {}
+        def _fetch(oid: int) -> list[dict]:
+            c, d = self._bot_crm_proxy(portal, "GET", f"/api/2.0/crm/opportunity/tag/{oid}", timeout=10)
+            if c >= 400:
+                return []
+            tags = d.get("response") if isinstance(d, dict) else (d if isinstance(d, list) else [])
+            if not isinstance(tags, list):
+                return []
+            result = []
+            for t in tags:
+                if not isinstance(t, dict):
+                    continue
+                name = str(t.get("name") or t.get("title") or "").strip()
+                tid = t.get("id") or t.get("ID")
+                if name and tid:
+                    result.append({"name": name, "id": int(tid)})
+            return result
+        all_tags: list[dict] = []
+        with ThreadPoolExecutor(max_workers=12) as pool:
+            futures = {pool.submit(_fetch, oid): oid for oid in open_opps}
+            for fut in as_completed(futures):
+                for tag in fut.result():
+                    key = f"{tag['name']}:{tag['id']}"
+                    if key not in seen:
+                        seen[key] = len(all_tags)
+                        all_tags.append(tag)
+        _json_response(self, 200, {"tags": all_tags})
+
     def _handle_bot_note(self) -> None:
         if not self._bot_verify_request():
             _json_response(self, 403, {"error": "Forbidden"})
@@ -1325,6 +1413,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not portal:
             _json_response(self, 400, {"error": "Portal not configured"})
             return
+        track_request(portal, int(chat_id), "note")
         # Verify the chat mapping exists and is an employee
         mapping = get_mapping_by_chat(portal, int(chat_id))
         if not mapping:
@@ -1350,6 +1439,75 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, code, data)
             return
         _json_response(self, 200, {"ok": True})
+
+    def _handle_bot_usage(self) -> None:
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, token, _user_id = auth
+        if not self._is_admin(portal, token):
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        raw_stats = get_usage_stats(portal)
+        mappings = list_mappings(portal)
+        enriched: list[dict] = []
+        for m in mappings:
+            chat_id = str(m.get("chatId", ""))
+            s = raw_stats.get(chat_id, {})
+            enriched.append({**m, "usage": s})
+        _json_response(self, 200, {"usage": enriched})
+
+    def _handle_bot_send_message(self) -> None:
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, token, _user_id = auth
+        if not self._is_admin(portal, token):
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        chat_id = payload.get("chatId")
+        text = str(payload.get("text") or "").strip()
+        if not chat_id or not text:
+            _json_response(self, 400, {"error": "chatId and text are required"})
+            return
+        # Verify the mapping exists
+        mapping = get_mapping_by_chat(portal, int(chat_id))
+        if not mapping:
+            _json_response(self, 404, {"error": "User not found"})
+            return
+        # Send via Telegram Bot API
+        bot_token = self._bot_token()
+        if not bot_token:
+            _json_response(self, 503, {"error": "Bot token not configured"})
+            return
+        try:
+            tg_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+            tg_body = json.dumps({
+                "chat_id": int(chat_id),
+                "text": text,
+                "parse_mode": "HTML",
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                tg_url,
+                data=tg_body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+                if result.get("ok"):
+                    _json_response(self, 200, {"ok": True})
+                else:
+                    desc = result.get("description", "Unknown error")
+                    _json_response(self, 502, {"error": f"Telegram API error: {desc}"})
+        except Exception as exc:
+            self.log_message("Telegram sendMessage failed: %s", exc)
+            _json_response(self, 502, {"error": f"Telegram API call failed: {exc}"})
 
     def _handle_health_check(self) -> None:
         auth = _require_auth(self)
@@ -1900,6 +2058,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/bot/categories":
             self._handle_bot_categories()
             return
+        if api_path == "/api/bot/tags":
+            self._handle_bot_tags()
+            return
 
         route = self._api_route()
         if not route:
@@ -2004,6 +2165,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
         if api_path == "/api/bot/note" and method == "POST":
             self._handle_bot_note()
+            return
+        if api_path == "/api/bot/usage" and method == "GET":
+            self._handle_bot_usage()
+            return
+        if api_path == "/api/bot/send-message" and method == "POST":
+            self._handle_bot_send_message()
             return
 
         route = self._api_route()

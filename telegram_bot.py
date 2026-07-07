@@ -133,7 +133,7 @@ async def get_mapping(chat_id: int) -> dict | None:
     return await _get("/api/bot/me", {"chatId": chat_id})
 
 
-async def get_deals(contact_id: int | None, chat_id: int | None = None, search: str | None = None, employee: bool = False) -> list[dict] | None:
+async def get_deals(contact_id: int | None, chat_id: int | None = None, search: str | None = None, employee: bool = False, tag: str | None = None) -> list[dict] | None:
     params: dict = {}
     if contact_id is not None:
         params["contactId"] = contact_id
@@ -143,6 +143,8 @@ async def get_deals(contact_id: int | None, chat_id: int | None = None, search: 
         params["search"] = search
     if employee:
         params["employee"] = "true"
+    if tag:
+        params["tag"] = tag
     result = await _get("/api/bot/deals", params)
     if result is None:
         return None  # API error (unreachable / timeout)
@@ -155,6 +157,13 @@ async def get_categories() -> list[dict] | None:
     result = await _get("/api/bot/categories")
     if isinstance(result, list):
         return result
+    return None
+
+
+async def get_tags() -> list[dict] | None:
+    result = await _get("/api/bot/tags")
+    if isinstance(result, dict) and "tags" in result:
+        return result["tags"]
     return None
 
 
@@ -549,20 +558,20 @@ def _format_event_body(category: str, content: str, max_len: int = 500) -> str:
 HELP_TEXT_CUSTOMER = (
     "Send a project name (or part of it) to look it up.\n"
     "If several match, tap a button — or reply with the number — to see full details.\n"
-    "Need a new invite code? Contact your agent."
+    "Need a new invite code? Contact Vanguard Adjusting."
 )
 HELP_TEXT_EMPLOYEE = (
     "Send a project name (or part of it) to search across all projects.\n"
     "If several match, tap a button — or reply with the number — to see full details.\n"
     "From the detail screen you can also add notes (choose a category and type your text).\n"
     "Commands:\n"
-    "  /help    — this message\n"
-    "  /cancel  — abort the current action\n"
-    "  /projects — list all open projects\n"
-    "  /start   — restart the bot"
+    "  /tag    — list projects by tag\n"
+    "  /help   — this message\n"
+    "  /cancel — abort the current action\n"
+    "  /start  — restart the bot"
 )
 HELP_TEXT_UNLINKED = (
-    "To use this bot you need an invite code from your agent.\n"
+    "To use this bot you need an invite code from Vanguard Adjusting.\n"
     "Send the code here to link your account, then you can search projects."
 )
 
@@ -694,12 +703,12 @@ def main() -> None:
         return InlineKeyboardMarkup([row])
 
     _PREFERRED_CATEGORY_PATTERNS: list[tuple[re.Pattern, str]] = [
-        (re.compile(r"quick.?context", re.I), "📌 Quick Context"),
-        (re.compile(r"note|event|comment", re.I), "📝 Note"),
-        (re.compile(r"text", re.I), "📄 Text"),
-        (re.compile(r"phone|call|voicemail", re.I), "📞 Call"),
-        (re.compile(r"mail|email", re.I), "📧 Email"),
-        (re.compile(r"customer.?update", re.I), "📌 Customer Update"),
+        (re.compile(r"quick.?context", re.I), "Quick Context"),
+        (re.compile(r"note|event|comment", re.I), "Note"),
+        (re.compile(r"text", re.I), "Text"),
+        (re.compile(r"phone|call|voicemail", re.I), "Call"),
+        (re.compile(r"mail|email", re.I), "Email"),
+        (re.compile(r"customer.?update", re.I), "Customer Update"),
     ]
 
     def _build_categories_keyboard(categories: list[dict]) -> InlineKeyboardMarkup:
@@ -760,8 +769,8 @@ def main() -> None:
                     update,
                     f"{greeting} Send a project name to search across all projects.\n\n"
                     "Commands:\n"
-                    "  /help    — show available commands\n"
-                    "  /projects — list all open projects\n"
+                    "  /tag    — list projects by tag\n"
+                    "  /help   — show available commands\n"
                     "  /cancel  — abort the current action",
                     reply_markup=_build_deal_detail_keyboard(0, is_employee=True),
                 )
@@ -770,12 +779,12 @@ def main() -> None:
                 await _reply_html(
                     update,
                     f"{greeting} Send a project name to look up your project.\n\n"
-                    "Need a new invite code? Contact your agent.",
+                    "Need a new invite code? Contact Vanguard Adjusting.",
                 )
         else:
             await _reply_html(
                 update,
-                "Welcome! To get started, you need an invite code from your agent.\n\n"
+                "Welcome! To get started, you need an invite code from Vanguard Adjusting.\n\n"
                 "Send the invite code here to link your account, then you can search projects.",
             )
 
@@ -796,29 +805,33 @@ def main() -> None:
         else:
             await _reply_html(update, "Nothing to cancel.")
 
-    async def projects(update: Update, _ctx) -> None:
-        """List all open projects (employee only)."""
+    async def tag_command(update: Update, _ctx) -> None:
+        """List all tags (employee only)."""
         chat_id = update.effective_chat.id
         mapping = await get_mapping(chat_id)
-        if not mapping:
-            await _reply_html(update, "You need to link your account first. Send your invite code to get started.")
-            return
-        if not mapping.get("employee"):
+        if not mapping or not mapping.get("employee"):
             await _reply_html(update, "This command is only available to employees.")
             return
-        deals = await get_deals(None, chat_id, employee=True)
-        if deals is None:
+        tags = await get_tags()
+        if tags is None:
             await _reply_html(update, "I'm having trouble reaching the server. Please try again in a couple of minutes.")
             return
-        if not deals:
-            await _reply_html(update, "No open projects found.")
+        if not tags:
+            await _reply_html(update, "No tags found.")
             return
-        _last_deals[chat_id] = deals
-        _last_search[chat_id] = ""
-        _last_employee[chat_id] = True
-        msg = format_search_result(deals, "all projects", is_employee=True)
-        kb = _build_search_results_keyboard(deals)
-        await _reply_html(update, msg, reply_markup=kb)
+        keyboard: list[list[InlineKeyboardButton]] = []
+        for tag in tags:
+            name = tag.get("name") or tag.get("title") or ""
+            if not name:
+                continue
+            if len(name) > 40:
+                name = name[:37] + "..."
+            keyboard.append([InlineKeyboardButton(name, callback_data=f"tag:{name}")])
+        await _reply_html(
+            update,
+            "Select a tag to see matching projects:",
+            reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None,
+        )
 
     async def handle_callback(update: Update, _ctx) -> None:
         query = update.callback_query
@@ -851,6 +864,23 @@ def main() -> None:
             msg = format_deal_detail(deals, idx, is_employee=emp)
             keyboard = _build_deal_detail_keyboard(deal_id, emp)
             await query.edit_message_text(msg, parse_mode="HTML", reply_markup=keyboard)
+            return
+
+        if data.startswith("tag:"):
+            tag_name = data[4:]
+            if not tag_name:
+                await query.edit_message_text("Invalid tag.")
+                return
+            deals = await get_deals(None, chat_id, tag=tag_name, employee=True)
+            if deals is None:
+                await query.edit_message_text("I'm having trouble reaching the server. Please try again.")
+                return
+            _last_deals[chat_id] = deals
+            _last_search[chat_id] = f"tag:{tag_name}"
+            _last_employee[chat_id] = True
+            msg = format_search_result(deals, f"tag: {tag_name}", is_employee=True)
+            kb = _build_search_results_keyboard(deals)
+            await query.edit_message_text(msg, parse_mode="HTML", reply_markup=kb)
             return
 
         if data.startswith("act:note:"):
@@ -999,7 +1029,7 @@ def main() -> None:
                     await _reply_html(
                         update,
                         "That code wasn't recognized or has expired. "
-                        "Please check with your agent for a new invite code.",
+                        "Please check with Vanguard Adjusting for a new invite code.",
                     )
         except Exception:
             logger.exception("Unhandled error in handle_message for chat %d", chat_id)
@@ -1011,7 +1041,7 @@ def main() -> None:
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("projects", projects))
+    app.add_handler(CommandHandler("tag", tag_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
