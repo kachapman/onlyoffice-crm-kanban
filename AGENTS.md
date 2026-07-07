@@ -1,7 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
 **Current version:** 2.0.9 (released 2026-07-05; see CHANGELOG.md)  
-**Last session summary (for next resume):** 2.0.9 hotfix — native bare `<input type="date" id="*-note-created">` added to deal-edit/quick-note (after note-editor, before attachments); backdate submission writes `created`. Quick Context now uses Tabler thumbtack icon + faint blue hue. See docs/RELEASE_v2.0.9.md. Prior: 2.0.8 host nginx. 2.0.7 email/presence fixes. 2.0.0 Telegram bot.
+**Last session summary (for next resume):** Inline keyboards for deal search + detail + employee note creation (category picker). server.py: _bot_crm_proxy now supports POST body; GET /api/bot/categories, POST /api/bot/note endpoints. telegram_bot.py: _build_search_results_keyboard, _build_deal_detail_keyboard, _build_categories_keyboard; CallbackQueryHandler for sel:/act:home/act:note:/cat: callbacks; _pending_note state machine (awaiting_text → awaiting_category → submit). Number-reply fallback preserved. /cancel command. See server.py:892, telegram_bot.py:668. Prior: 2.0.9 hotfix.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 

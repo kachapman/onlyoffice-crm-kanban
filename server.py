@@ -889,7 +889,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             pass
         return None
 
-    def _bot_crm_proxy(self, portal: str, method: str, api_path: str, query: str = "", timeout: int = 30) -> tuple[int, Any]:
+    def _bot_crm_proxy(self, portal: str, method: str, api_path: str, query: str = "", body: bytes | None = None, timeout: int = 30) -> tuple[int, Any]:
         """Make a CRM API call using bot credentials."""
         token = self._bot_crm_token(portal)
         if not token:
@@ -897,9 +897,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         url = f"{portal}{api_path}"
         if query:
             url = f"{url}?{query}"
+        headers = {"Accept": "application/json", "Authorization": token}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
         req = urllib.request.Request(
             url,
-            headers={"Accept": "application/json", "Authorization": token},
+            data=body,
+            headers=headers,
             method=method,
         )
         try:
@@ -1276,6 +1280,76 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         except Exception as exc:
             self.log_message("Fatal in _handle_bot_deals: %s", exc)
             _json_response(self, 502, {"error": "Internal error"})
+
+    def _handle_bot_categories(self) -> None:
+        if not self._bot_verify_request():
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        portal = _portal_base(self)
+        if not portal:
+            _json_response(self, 400, {"error": "Portal not configured"})
+            return
+        code, data = self._bot_crm_proxy(portal, "GET", "/api/2.0/crm/history/category")
+        if code >= 400:
+            _json_response(self, code, data)
+            return
+        categories = data.get("response") if isinstance(data, dict) else []
+        if not isinstance(categories, list):
+            categories = []
+        result = []
+        for cat in categories:
+            if isinstance(cat, dict):
+                cid = cat.get("id") or cat.get("ID")
+                title = cat.get("title") or cat.get("Title") or ""
+                if cid and title:
+                    result.append({"id": int(cid), "title": title})
+        _json_response(self, 200, result)
+
+    def _handle_bot_note(self) -> None:
+        if not self._bot_verify_request():
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        chat_id = payload.get("chatId")
+        deal_id = payload.get("dealId")
+        content = str(payload.get("content") or "").strip()
+        category_id = payload.get("categoryId")
+        if not chat_id or not deal_id or not content:
+            _json_response(self, 400, {"error": "chatId, dealId, and content are required"})
+            return
+        portal = _portal_base(self)
+        if not portal:
+            _json_response(self, 400, {"error": "Portal not configured"})
+            return
+        # Verify the chat mapping exists and is an employee
+        mapping = get_mapping_by_chat(portal, int(chat_id))
+        if not mapping:
+            _json_response(self, 403, {"error": "Chat not mapped"})
+            return
+        if not mapping.get("employee"):
+            _json_response(self, 403, {"error": "Only employees can add notes"})
+            return
+        # Build the CRM history POST body
+        post_body = {
+            "entityType": "opportunity",
+            "entityId": int(deal_id),
+            "contactId": 0,
+            "content": content,
+        }
+        if category_id is not None:
+            try:
+                post_body["categoryId"] = int(category_id)
+            except (TypeError, ValueError):
+                pass
+        code, data = self._bot_crm_proxy(portal, "POST", "/api/2.0/crm/history", body=json.dumps(post_body).encode("utf-8"))
+        if code >= 400:
+            _json_response(self, code, data)
+            return
+        _json_response(self, 200, {"ok": True})
 
     def _handle_health_check(self) -> None:
         auth = _require_auth(self)
@@ -1823,6 +1897,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/bot/deals":
             self._handle_bot_deals()
             return
+        if api_path == "/api/bot/categories":
+            self._handle_bot_categories()
+            return
 
         route = self._api_route()
         if not route:
@@ -1923,6 +2000,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 self._handle_bot_customers_set_nickname()
                 return
             self.send_error(404)
+            return
+
+        if api_path == "/api/bot/note" and method == "POST":
+            self._handle_bot_note()
             return
 
         route = self._api_route()

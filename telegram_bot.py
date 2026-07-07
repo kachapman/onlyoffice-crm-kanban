@@ -54,6 +54,7 @@ PORTAL = os.environ.get("ONLYOFFICE_PORTAL_URL", "")
 _last_search: dict[int, str] = {}
 _last_deals: dict[int, list[dict]] = {}
 _last_employee: dict[int, bool] = {}
+_pending_note: dict[int, dict] = {}
 
 # ── Helpers ──
 
@@ -152,6 +153,13 @@ async def get_deals(contact_id: int | None, chat_id: int | None = None, search: 
     if "deals" in result:
         return result["deals"]
     return []
+
+
+async def get_categories() -> list[dict] | None:
+    result = await _get("/api/bot/categories")
+    if isinstance(result, list):
+        return result
+    return None
 
 
 async def verify_code(code: str, chat_id: int) -> dict | None:
@@ -647,24 +655,57 @@ def main() -> None:
         sys.exit(1)
 
     try:
-        from telegram import Update
-        from telegram.ext import Application, CommandHandler, MessageHandler, filters
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+        from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
     except ImportError:
         logger.error("python-telegram-bot not installed: pip install python-telegram-bot")
         sys.exit(1)
 
     app = Application.builder().token(TOKEN).build()
 
-    async def _reply_html(update: Update, text: str) -> None:
+    # ── Inline Keyboard Builders ──
+
+    def _build_search_results_keyboard(deals: list[dict]) -> InlineKeyboardMarkup | None:
+        keyboard: list[list[InlineKeyboardButton]] = []
+        for d in deals:
+            deal_id = d.get("id") or d.get("ID")
+            if not deal_id:
+                continue
+            title = str(d.get("title") or d.get("Title") or f"Deal #{deal_id}")
+            if len(title) > 40:
+                title = title[:37] + "..."
+            keyboard.append([InlineKeyboardButton(title, callback_data=f"sel:{deal_id}")])
+        return InlineKeyboardMarkup(keyboard) if keyboard else None
+
+    def _build_deal_detail_keyboard(deal_id: int, is_employee: bool) -> InlineKeyboardMarkup:
+        row: list[InlineKeyboardButton] = [InlineKeyboardButton("🔍 New Search", callback_data="act:home")]
+        if is_employee:
+            row.append(InlineKeyboardButton("📝 Add Note", callback_data=f"act:note:{deal_id}"))
+        return InlineKeyboardMarkup([row])
+
+    def _build_categories_keyboard(categories: list[dict]) -> InlineKeyboardMarkup:
+        keyboard: list[list[InlineKeyboardButton]] = []
+        row: list[InlineKeyboardButton] = []
+        for cat in categories[:6]:
+            row.append(InlineKeyboardButton(cat["title"], callback_data=f"cat:{cat['id']}"))
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+        keyboard.append([InlineKeyboardButton("✅ Default", callback_data="cat:default")])
+        return InlineKeyboardMarkup(keyboard)
+
+    async def _reply_html(update: Update, text: str, reply_markup: InlineKeyboardMarkup | None = None) -> None:
         """Send a message in HTML mode, falling back to plain text if Telegram rejects it."""
         try:
-            await update.message.reply_text(text, parse_mode="HTML")
+            await update.message.reply_text(text, parse_mode="HTML", reply_markup=reply_markup)
         except Exception as exc:
             logger.warning("HTML reply failed for chat %s: %s", update.effective_chat.id, exc)
             sample = text[:500].replace("\n", "\\n")
             logger.warning("Offending message sample: %s", sample)
             try:
-                await update.message.reply_text(_strip_html_tags(text), parse_mode=None)
+                await update.message.reply_text(_strip_html_tags(text), parse_mode=None, reply_markup=reply_markup)
             except Exception as exc2:
                 logger.exception("Plain-text fallback also failed for chat %s", update.effective_chat.id)
 
@@ -678,6 +719,81 @@ def main() -> None:
     async def help_command(update: Update, _ctx) -> None:
         await _reply_html(update, HELP_TEXT)
 
+    async def cancel(update: Update, _ctx) -> None:
+        chat_id = update.effective_chat.id
+        if chat_id in _pending_note:
+            del _pending_note[chat_id]
+            await _reply_html(update, "Cancelled.")
+        else:
+            await _reply_html(update, "Nothing to cancel.")
+
+    async def handle_callback(update: Update, _ctx) -> None:
+        query = update.callback_query
+        await query.answer()
+        chat_id = update.effective_chat.id
+        data = query.data
+
+        if data == "act:home":
+            await query.edit_message_text("Send a project name to search.")
+            return
+
+        if data.startswith("sel:"):
+            try:
+                deal_id = int(data[4:])
+            except (ValueError, IndexError):
+                await query.edit_message_text("Invalid selection.")
+                return
+            deals = _last_deals.get(chat_id, [])
+            deal = None
+            idx = -1
+            for i, d in enumerate(deals):
+                if (d.get("id") or d.get("ID")) == deal_id:
+                    deal = d
+                    idx = i
+                    break
+            if not deals or deal is None:
+                await query.edit_message_text("This search has expired. Send a new project name.")
+                return
+            emp = _last_employee.get(chat_id, False)
+            msg = format_deal_detail(deals, idx, is_employee=emp)
+            keyboard = _build_deal_detail_keyboard(deal_id, emp)
+            await query.edit_message_text(msg, parse_mode="HTML", reply_markup=keyboard)
+            return
+
+        if data.startswith("act:note:"):
+            try:
+                deal_id = int(data[9:])
+            except (ValueError, IndexError):
+                await query.edit_message_text("Invalid selection.")
+                return
+            _pending_note[chat_id] = {"dealId": deal_id, "step": "awaiting_text"}
+            await query.edit_message_text(
+                "Send the note text you want to add for this project.\n"
+                "You can cancel by sending /cancel."
+            )
+            return
+
+        if data.startswith("cat:"):
+            pending = _pending_note.get(chat_id)
+            if not pending or pending.get("step") != "awaiting_category":
+                await query.edit_message_text("Nothing pending. Send a project name to search.")
+                return
+            category_id = None if data == "cat:default" else int(data[4:])
+            deal_id = pending["dealId"]
+            text = pending["text"]
+            result = await _post("/api/bot/note", {
+                "chatId": chat_id,
+                "dealId": deal_id,
+                "content": text,
+                "categoryId": category_id,
+            })
+            del _pending_note[chat_id]
+            if result and result.get("ok"):
+                await query.edit_message_text("✅ Note added!")
+            else:
+                await query.edit_message_text("❌ Failed to add note. Please try again.")
+            return
+
     async def handle_message(update: Update, _ctx) -> None:
         try:
             if not update.message or not update.message.text:
@@ -687,6 +803,32 @@ def main() -> None:
             lower = text.lower()
 
             logger.info("Message from chat %d: %s", chat_id, text[:50])
+
+            # ── Pending note flow ──
+            pending = _pending_note.get(chat_id)
+            if pending:
+                if pending.get("step") == "awaiting_text":
+                    escaped = _esc(text)
+                    pending["text"] = f"<p>{escaped}</p>"
+                    pending["step"] = "awaiting_category"
+                    categories = await get_categories()
+                    if categories:
+                        keyboard = _build_categories_keyboard(categories)
+                        await _reply_html(update, "What type of note is this?", reply_markup=keyboard)
+                    else:
+                        del _pending_note[chat_id]
+                        result = await _post("/api/bot/note", {
+                            "chatId": chat_id,
+                            "dealId": pending["dealId"],
+                            "content": f"<p>{escaped}</p>",
+                        })
+                        if result and result.get("ok"):
+                            await _reply_html(update, "✅ Note added!")
+                        else:
+                            await _reply_html(update, "❌ Failed to add note. Please try again.")
+                    return
+                # Unknown step — clear and continue normally
+                del _pending_note[chat_id]
 
             # Check if already mapped
             mapping = await get_mapping(chat_id)
@@ -715,7 +857,9 @@ def main() -> None:
                     idx = int(text) - 1
                     if 0 <= idx < len(deals):
                         msg = format_deal_detail(deals, idx, is_employee=emp)
-                        await _reply_html(update, msg)
+                        deal_id = deals[idx].get("id") or deals[idx].get("ID")
+                        kb = _build_deal_detail_keyboard(deal_id, emp) if deal_id else None
+                        await _reply_html(update, msg, reply_markup=kb)
                     else:
                         search = _last_search.get(chat_id, "")
                         msg = format_search_result(deals, search, is_employee=emp)
@@ -731,7 +875,12 @@ def main() -> None:
                 _last_deals[chat_id] = deals
                 _last_search[chat_id] = search
                 msg = format_search_result(deals, search, is_employee=is_employee)
-                await _reply_html(update, msg)
+                if len(deals) == 1 and deals[0]:
+                    deal_id = deals[0].get("id") or deals[0].get("ID")
+                    kb = _build_deal_detail_keyboard(deal_id, is_employee) if deal_id else None
+                else:
+                    kb = _build_search_results_keyboard(deals)
+                await _reply_html(update, msg, reply_markup=kb)
                 return
             else:
                 # Not linked yet — treat message as invite code
@@ -766,12 +915,14 @@ def main() -> None:
             except Exception:
                 pass
 
+    app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("Bot polling...")
-    app.run_polling(allowed_updates=["messages"])
+    app.run_polling(allowed_updates=["messages", "callback_query"])
 
 
 if __name__ == "__main__":
