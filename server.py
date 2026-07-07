@@ -1186,7 +1186,16 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         tags = d.get("response") if isinstance(d, dict) else (d if isinstance(d, list) else [])
                         if not isinstance(tags, list):
                             return oid, []
-                        names = [str(t.get("name") or t.get("title") or "").lower() for t in tags if isinstance(t, dict)]
+                        names = []
+                        for t in tags:
+                            if isinstance(t, dict):
+                                n = str(t.get("title") or t.get("name") or "").strip().lower()
+                            elif isinstance(t, str):
+                                n = t.strip().lower()
+                            else:
+                                continue
+                            if n:
+                                names.append(n)
                         return oid, names
                     with ThreadPoolExecutor(max_workers=12) as pool:
                         futures = {pool.submit(_fetch_tag_names, oid): oid for oid in tag_ids}
