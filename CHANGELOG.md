@@ -2,11 +2,11 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
-## [Unreleased]
+## [2.2.0] — 2026-07-07
 
 ### Bug fixes
 
-- **`/tag` now returns all defined tags.** Fixed _handle_bot_tags: the CRM-wide tag definitions endpoint (`GET /api/2.0/crm/opportunity/tag`) does not exist or returns empty under the bot's credentials. Rewrote to fetch open deals, batch-fetch tags per opportunity (same pattern as the dashboard search modal), and deduplicate by name. Now reliably returns all tags in use on open deals.
+- **`/tag` now correctly lists and filters by tag.** Rewrote `_handle_bot_tags` to extract tags from open deals (the CRM-wide tag definitions endpoint doesn't exist). Fixed tag filter in `_handle_bot_deals`: the per-opportunity tag endpoint returns plain strings, not dicts — now handles both formats. Tag selection now correctly finds matching deals.
 - **Usage Log now loads.** Fixed routing bug: `GET /api/bot/usage` was defined in `_handle_api_post_put` (unreachable for GET requests). Moved to `_handle_api_get` at the correct routing position.
 
 ### Improvements
@@ -16,7 +16,7 @@ All notable changes to the CRM Kanban dashboard are documented here.
 - **Bold / Italics toolbar in broadcast UI.** Replaced raw HTML hint text with a toolbar of B / I buttons that wrap selected text or insert empty tag pairs at cursor position.
 
 ### Files changed
-- `server.py`, `public/app.js`, `public/index.html`, `public/styles.css`, `CHANGELOG.md`, `AGENTS.md`
+- `server.py`, `public/app.js`, `public/index.html`, `public/styles.css`, `VERSION`, `README.md`, `CHANGELOG.md`, `AGENTS.md`
 
 ## [2.1.0] — 2026-07-07
 
