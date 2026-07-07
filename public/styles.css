@@ -7326,6 +7326,32 @@ body {
   font-size: 0.85rem;
 }
 
+.bot-broadcast-toolbar {
+  display: flex;
+  gap: 0.3rem;
+  margin-bottom: 0.3rem;
+}
+
+.bot-format-btn {
+  width: 2rem;
+  height: 1.8rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bot-format-btn:hover {
+  background: var(--surface-2);
+}
+
 .bot-broadcast-textarea {
   width: 100%;
   padding: 0.5rem 0.65rem;
@@ -7337,12 +7363,6 @@ body {
   font-size: 0.85rem;
   resize: vertical;
   box-sizing: border-box;
-}
-
-.bot-broadcast-hint {
-  font-weight: 400;
-  font-size: 0.78rem;
-  color: var(--muted);
 }
 
 .bot-broadcast-status {

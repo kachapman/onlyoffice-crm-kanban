@@ -942,7 +942,11 @@
             </select>
           </div>
           <div class="field">
-            <label for="bot-broadcast-text">Message <span class="bot-broadcast-hint">(Telegram HTML: &lt;b&gt;, &lt;i&gt;, &lt;a href="..."&gt;, &lt;code&gt;, &lt;pre&gt;)</span></label>
+            <label for="bot-broadcast-text">Message</label>
+            <div class="bot-broadcast-toolbar">
+              <button type="button" class="bot-format-btn" data-tag="b" title="Bold"><b>B</b></button>
+              <button type="button" class="bot-format-btn" data-tag="i" title="Italic"><i>I</i></button>
+            </div>
             <textarea id="bot-broadcast-text" class="bot-broadcast-textarea" rows="4" placeholder="Type your message here…"></textarea>
           </div>
           <div class="bot-add-actions">

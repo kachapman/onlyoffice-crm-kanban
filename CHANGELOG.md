@@ -2,6 +2,22 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [Unreleased]
+
+### Bug fixes
+
+- **`/tag` now returns all defined tags.** Fixed _handle_bot_tags: switched from per-deal batch requests (which the bot CRM user lacked permission for) to the CRM-wide tag definitions endpoint (`GET /api/2.0/crm/opportunity/tag`). The `/tag` command now returns tag buttons filtered to open deals as before, but the tag list comes from the global definition set.
+- **Usage Log now loads.** Fixed routing bug: `GET /api/bot/usage` was defined in `_handle_api_post_put` (unreachable for GET requests). Moved to `_handle_api_get` at the correct routing position.
+
+### Improvements
+
+- **Broadcast message format.** Server-side now prepends `<b>-System Message-</b>\n\n` and appends `\n\n<i>Please do not reply to this message.</i>` to all broadcast messages.
+- **HTML sanitization for broadcast.** Added `_TelegramHTMLSanitizer` (same logic as `telegram_bot.py`) to strip non-Telegram-safe HTML tags from broadcast input before sending. Only `<b>`, `<strong>`, `<i>`, `<em>`, `<u>`, `<ins>`, `<s>`, `<strike>`, `<del>`, `<a href="...">`, `<code>`, `<pre>` are allowed.
+- **Bold / Italics toolbar in broadcast UI.** Replaced raw HTML hint text with a toolbar of B / I buttons that wrap selected text or insert empty tag pairs at cursor position.
+
+### Files changed
+- `server.py`, `public/app.js`, `public/index.html`, `public/styles.css`, `CHANGELOG.md`, `AGENTS.md`
+
 ## [2.1.0] — 2026-07-07
 
 ### Telegram bot — inline keyboards, employee note creation, role-aware onboarding

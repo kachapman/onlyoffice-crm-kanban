@@ -8,6 +8,8 @@ The board is then served by Workspace at /Products/OpportunityBoard/Default.aspx
 from __future__ import annotations
 
 import gzip
+import html
+from html.parser import HTMLParser
 import io
 import json
 import os
@@ -1342,56 +1344,25 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not portal:
             _json_response(self, 400, {"error": "Portal not configured"})
             return
-        # Fetch all open opportunities
-        filter_params = urlencode({
-            "startIndex": "0", "count": "500", "filterValue": "",
-            "sortBy": "date_created", "sortOrder": "descending",
-        })
-        code, data = self._bot_crm_proxy(portal, "GET", "/api/2.0/crm/opportunity/filter", filter_params)
+        # Fetch all defined tags from the CRM-wide definitions endpoint
+        code, data = self._bot_crm_proxy(portal, "GET", "/api/2.0/crm/opportunity/tag")
         if code >= 400:
             _json_response(self, code, data)
             return
-        opportunities = data.get("response") if isinstance(data, dict) else []
-        open_opps = []
-        for opp in (opportunities or []):
-            if not isinstance(opp, dict):
+        raw = data.get("response") if isinstance(data, dict) else (data if isinstance(data, list) else [])
+        if not isinstance(raw, list):
+            raw = []
+        tags = []
+        seen: set[int] = set()
+        for t in raw:
+            if not isinstance(t, dict):
                 continue
-            _stage = opp.get("stage") or opp.get("Stage") or {}
-            _st = _stage.get("stageType") if isinstance(_stage, dict) else None
-            if _st not in (0, "0", "Open", None, ""):
-                continue
-            oid = opp.get("id") or opp.get("ID")
-            if oid:
-                open_opps.append(int(oid))
-        # Batch-fetch tags for all open deals
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        seen: dict[str, int] = {}
-        def _fetch(oid: int) -> list[dict]:
-            c, d = self._bot_crm_proxy(portal, "GET", f"/api/2.0/crm/opportunity/tag/{oid}", timeout=10)
-            if c >= 400:
-                return []
-            tags = d.get("response") if isinstance(d, dict) else (d if isinstance(d, list) else [])
-            if not isinstance(tags, list):
-                return []
-            result = []
-            for t in tags:
-                if not isinstance(t, dict):
-                    continue
-                name = str(t.get("name") or t.get("title") or "").strip()
-                tid = t.get("id") or t.get("ID")
-                if name and tid:
-                    result.append({"name": name, "id": int(tid)})
-            return result
-        all_tags: list[dict] = []
-        with ThreadPoolExecutor(max_workers=12) as pool:
-            futures = {pool.submit(_fetch, oid): oid for oid in open_opps}
-            for fut in as_completed(futures):
-                for tag in fut.result():
-                    key = f"{tag['name']}:{tag['id']}"
-                    if key not in seen:
-                        seen[key] = len(all_tags)
-                        all_tags.append(tag)
-        _json_response(self, 200, {"tags": all_tags})
+            tid = t.get("id") or t.get("ID")
+            title = str(t.get("title") or t.get("name") or "").strip()
+            if tid and title and int(tid) not in seen:
+                seen.add(int(tid))
+                tags.append({"name": title, "id": int(tid)})
+        _json_response(self, 200, {"tags": tags})
 
     def _handle_bot_note(self) -> None:
         if not self._bot_verify_request():
@@ -1457,6 +1428,120 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             enriched.append({**m, "usage": s})
         _json_response(self, 200, {"usage": enriched})
 
+    # --------------- Telegram HTML sanitizer (shared) ---------------
+
+    class _TelegramHTMLSanitizer(HTMLParser):
+        """Strip unsupported tags (keep their text) and preserve allowed Telegram tags."""
+
+        ALLOWED_TAGS = frozenset({
+            'b', 'strong', 'i', 'em', 'u', 'ins',
+            's', 'strike', 'del',
+            'a', 'code', 'pre',
+        })
+
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=False)
+            self.result: list[str] = []
+            self.open_tags: list[str] = []
+
+        def _escape_text(self, text: str) -> str:
+            return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+        def _build_attrs(self, attrs: list[tuple[str, str | None]]) -> str:
+            parts: list[str] = []
+            for key, value in attrs:
+                if value is None:
+                    continue
+                if key.lower() == 'href':
+                    continue
+                escaped = (value
+                           .replace('&', '&amp;')
+                           .replace('"', '&quot;')
+                           .replace("'", '&#39;')
+                           .replace('<', '&lt;')
+                           .replace('>', '&gt;'))
+                parts.append(f' {key.lower()}="{escaped}"')
+            return ''.join(parts)
+
+        def _rebuild_a_tag(self, attrs: list[tuple[str, str | None]]) -> str | None:
+            href = None
+            for key, value in attrs:
+                if key.lower() == 'href' and value:
+                    href = value
+                    break
+            if not href:
+                return None
+            href = (href
+                    .replace('&', '&amp;')
+                    .replace('"', '&quot;')
+                    .replace("'", '&#39;')
+                    .replace('<', '&lt;')
+                    .replace('>', '&gt;'))
+            return f'<a href="{href}">'
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            tag_lower = tag.lower()
+            if tag_lower == 'br':
+                self.result.append('\n')
+                return
+            if tag_lower not in self.ALLOWED_TAGS:
+                return
+            if tag_lower == 'a':
+                rebuilt = self._rebuild_a_tag(attrs)
+                if rebuilt:
+                    self.result.append(rebuilt)
+                    self.open_tags.append('a')
+                return
+            attrs_str = self._build_attrs(attrs)
+            self.result.append(f'<{tag_lower}{attrs_str}>')
+            self.open_tags.append(tag_lower)
+
+        def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            tag_lower = tag.lower()
+            if tag_lower == 'br':
+                self.result.append('\n')
+                return
+            if tag_lower not in self.ALLOWED_TAGS:
+                return
+            if tag_lower == 'a':
+                return
+            attrs_str = self._build_attrs(attrs)
+            self.result.append(f'<{tag_lower}{attrs_str}/>')
+
+        def handle_endtag(self, tag: str) -> None:
+            tag_lower = tag.lower()
+            if tag_lower not in self.ALLOWED_TAGS:
+                return
+            if self.open_tags and self.open_tags[-1] == tag_lower:
+                self.open_tags.pop()
+                self.result.append(f'</{tag_lower}>')
+
+        def handle_data(self, data: str) -> None:
+            self.result.append(self._escape_text(data))
+
+        def handle_entityref(self, name: str) -> None:
+            ch = html.unescape(f'&{name};')
+            self.result.append(self._escape_text(ch))
+
+        def handle_charref(self, name: str) -> None:
+            ch = html.unescape(f'&#{name};')
+            self.result.append(self._escape_text(ch))
+
+        def close(self) -> str:  # type: ignore[override]
+            super().close()
+            for tag in reversed(self.open_tags):
+                self.result.append(f'</{tag}>')
+            return ''.join(self.result)
+
+    @classmethod
+    def _sanitize_telegram_html(cls, text: str) -> str:
+        """Strip non-Telegram HTML tags, keep allowed ones, escape stray <>&."""
+        if not text:
+            return ""
+        parser = cls._TelegramHTMLSanitizer()
+        parser.feed(text)
+        return parser.close()
+
     def _handle_bot_send_message(self) -> None:
         auth = _require_auth(self)
         if not auth:
@@ -1471,10 +1556,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": "Invalid JSON body"})
             return
         chat_id = payload.get("chatId")
-        text = str(payload.get("text") or "").strip()
-        if not chat_id or not text:
+        raw_text = str(payload.get("text") or "").strip()
+        if not chat_id or not raw_text:
             _json_response(self, 400, {"error": "chatId and text are required"})
             return
+        # Sanitize: only allow Telegram-safe HTML tags
+        safe_text = self._sanitize_telegram_html(raw_text)
+        # Wrap with system prefix and no-reply footer
+        text = f"<b>-System Message-</b>\n\n{safe_text}\n\n<i>Please do not reply to this message.</i>"
         # Verify the mapping exists
         mapping = get_mapping_by_chat(portal, int(chat_id))
         if not mapping:
@@ -2061,6 +2150,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/bot/tags":
             self._handle_bot_tags()
             return
+        if api_path == "/api/bot/usage":
+            self._handle_bot_usage()
+            return
 
         route = self._api_route()
         if not route:
@@ -2165,9 +2257,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
         if api_path == "/api/bot/note" and method == "POST":
             self._handle_bot_note()
-            return
-        if api_path == "/api/bot/usage" and method == "GET":
-            self._handle_bot_usage()
             return
         if api_path == "/api/bot/send-message" and method == "POST":
             self._handle_bot_send_message()

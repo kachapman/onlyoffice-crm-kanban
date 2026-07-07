@@ -18114,6 +18114,31 @@ function initBotBroadcastSection() {
   select.addEventListener("change", updateSendBtn);
   textarea.addEventListener("input", updateSendBtn);
 
+  // Format buttons: wrap selected text or insert empty tags at cursor
+  document.querySelectorAll(".bot-format-btn").forEach(function(btn) {
+    btn.addEventListener("click", function() {
+      var tag = btn.getAttribute("data-tag");
+      var start = textarea.selectionStart;
+      var end = textarea.selectionEnd;
+      var sel = textarea.value.slice(start, end);
+      if (sel) {
+        textarea.value = textarea.value.slice(0, start) +
+          "<" + tag + ">" + sel + "</" + tag + ">" +
+          textarea.value.slice(end);
+        textarea.selectionStart = start;
+        textarea.selectionEnd = start + sel.length + 3 + tag.length * 2 + 1;
+      } else {
+        textarea.value = textarea.value.slice(0, start) +
+          "<" + tag + "></" + tag + ">" +
+          textarea.value.slice(end);
+        textarea.selectionStart = start + 2 + tag.length;
+        textarea.selectionEnd = start + 2 + tag.length;
+      }
+      textarea.focus();
+      updateSendBtn();
+    });
+  });
+
   sendBtn.addEventListener("click", async () => {
     const chatId = select.value;
     const text = textarea.value.trim();

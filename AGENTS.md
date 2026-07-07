@@ -1,7 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
 **Current version:** 2.1.0 (released 2026-07-07; see CHANGELOG.md)  
-**Last session summary (for next resume):** Inline keyboards for deal search + detail + employee note creation (curated category picker — Quick Context first, no Default button, excludes Appointment). "Add Note" now sends new reply message instead of replacing deal detail (reference stays visible). Role-aware /start + /help + /projects (employee only). Fixed allowed_updates bug: Telegram API uses singular "message" not plural "messages". Prod venv at /tmp/botenv deleted by tmpfiles — moved to /opt/vanguard/botenv. See server.py:892, telegram_bot.py:668, telegram_bot.py:925. Prior: 2.0.9 hotfix.
+**Last session summary (for next resume):** Fixed /tag (uses CRM-wide tag definitions endpoint GET /api/2.0/crm/opportunity/tag), fixed usage log route (moved GET /api/bot/usage from _handle_api_post_put to _handle_api_get), broadcast message now has system prefix + no-reply footer + HTML sanitization (_TelegramHTMLSanitizer), bold/italics toolbar buttons replace raw HTML hint. See CHANGELOG.md "Unreleased". Prior: v2.1.0 shipped — inline keyboards, employee notes, role-aware start/help/projects.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 
