@@ -1,17 +1,13 @@
-"""Telegram bot for customer project status queries.
+"""Telegram bot for customer project status queries — with inline keyboards.
 
 Usage:
   TELEGRAM_BOT_TOKEN=xxx DASHBOARD_URL=http://127.0.0.1:8765 python3 telegram_bot.py
+  Or installed as systemd service (see docs/crm-telegram-bot.service).
 
-The bot polls Telegram for messages, verifies invite codes, and returns
-curated project info from the CRM (via the dashboard proxy).
-
-Customer flow (once linked):
-  - Send a project name (or part of it) to search open projects.
-  - 1 match  → full detail is shown immediately.
-  - N matches → numbered list; reply with a number for full detail.
-  - 0 matches → "No projects found matching '...'".
-  - Send /help for instructions.
+Flow (once linked):
+  Customers: send a project name → tap result → see deal detail with latest update.
+  Employees:  send a project name → tap result → see full history + add notes.
+  Both:       old-style number-reply fallback still works during transition.
 """
 
 from __future__ import annotations
@@ -550,10 +546,24 @@ def _format_event_body(category: str, content: str, max_len: int = 500) -> str:
     return _sanitize_html(content)
 
 
-HELP_TEXT = (
+HELP_TEXT_CUSTOMER = (
     "Send a project name (or part of it) to look it up.\n"
-    "If several match, I'll send a numbered list — reply with a number to see full details.\n"
+    "If several match, tap a button — or reply with the number — to see full details.\n"
     "Need a new invite code? Contact your agent."
+)
+HELP_TEXT_EMPLOYEE = (
+    "Send a project name (or part of it) to search across all projects.\n"
+    "If several match, tap a button — or reply with the number — to see full details.\n"
+    "From the detail screen you can also add notes (choose a category and type your text).\n"
+    "Commands:\n"
+    "  /help    — this message\n"
+    "  /cancel  — abort the current action\n"
+    "  /projects — list all open projects\n"
+    "  /start   — restart the bot"
+)
+HELP_TEXT_UNLINKED = (
+    "To use this bot you need an invite code from your agent.\n"
+    "Send the code here to link your account, then you can search projects."
 )
 
 
@@ -683,17 +693,46 @@ def main() -> None:
             row.append(InlineKeyboardButton("📝 Add Note", callback_data=f"act:note:{deal_id}"))
         return InlineKeyboardMarkup([row])
 
+    _PREFERRED_CATEGORY_PATTERNS: list[tuple[re.Pattern, str]] = [
+        (re.compile(r"quick.?context", re.I), "📌 Quick Context"),
+        (re.compile(r"note|event|comment", re.I), "📝 Note"),
+        (re.compile(r"text", re.I), "📄 Text"),
+        (re.compile(r"phone|call|voicemail", re.I), "📞 Call"),
+        (re.compile(r"mail|email", re.I), "📧 Email"),
+        (re.compile(r"customer.?update", re.I), "📌 Customer Update"),
+    ]
+
     def _build_categories_keyboard(categories: list[dict]) -> InlineKeyboardMarkup:
+        placed: set[int] = set()
+        ordered: list[tuple[str, int]] = []
+        for pattern, label in _PREFERRED_CATEGORY_PATTERNS:
+            for cat in categories:
+                cid = cat["id"]
+                if cid in placed:
+                    continue
+                if pattern.search(cat["title"]):
+                    ordered.append((label, cid))
+                    placed.add(cid)
+                    break
+        # Fill remaining slots with unmatched categories
+        for cat in categories:
+            cid = cat["id"]
+            if cid in placed:
+                continue
+            ordered.append((cat["title"], cid))
+            placed.add(cid)
+            if len(ordered) >= 6:
+                break
+        # Build 2-column keyboard
         keyboard: list[list[InlineKeyboardButton]] = []
         row: list[InlineKeyboardButton] = []
-        for cat in categories[:6]:
-            row.append(InlineKeyboardButton(cat["title"], callback_data=f"cat:{cat['id']}"))
+        for label, cid in ordered[:6]:
+            row.append(InlineKeyboardButton(label, callback_data=f"cat:{cid}"))
             if len(row) == 2:
                 keyboard.append(row)
                 row = []
         if row:
             keyboard.append(row)
-        keyboard.append([InlineKeyboardButton("✅ Default", callback_data="cat:default")])
         return InlineKeyboardMarkup(keyboard)
 
     async def _reply_html(update: Update, text: str, reply_markup: InlineKeyboardMarkup | None = None) -> None:
@@ -710,14 +749,44 @@ def main() -> None:
                 logger.exception("Plain-text fallback also failed for chat %s", update.effective_chat.id)
 
     async def start(update: Update, _ctx) -> None:
-        await _reply_html(
-            update,
-            "Welcome! Send me your invite code to get started. "
-            "Once linked, send a project name to find it.",
-        )
+        chat_id = update.effective_chat.id
+        mapping = await get_mapping(chat_id)
+        if mapping:
+            is_employee = mapping.get("employee", False)
+            name = _esc(mapping.get("contactName") or mapping.get("nickname") or "")
+            if is_employee:
+                greeting = f"Welcome back, <b>{name}</b>!" if name else "Welcome back!"
+                await _reply_html(
+                    update,
+                    f"{greeting} Send a project name to search across all projects.\n\n"
+                    "Commands:\n"
+                    "  /help    — show available commands\n"
+                    "  /projects — list all open projects\n"
+                    "  /cancel  — abort the current action",
+                    reply_markup=_build_deal_detail_keyboard(0, is_employee=True),
+                )
+            else:
+                greeting = f"Welcome back, <b>{name}</b>!" if name else "Welcome back!"
+                await _reply_html(
+                    update,
+                    f"{greeting} Send a project name to look up your project.\n\n"
+                    "Need a new invite code? Contact your agent.",
+                )
+        else:
+            await _reply_html(
+                update,
+                "Welcome! To get started, you need an invite code from your agent.\n\n"
+                "Send the invite code here to link your account, then you can search projects.",
+            )
 
     async def help_command(update: Update, _ctx) -> None:
-        await _reply_html(update, HELP_TEXT)
+        chat_id = update.effective_chat.id
+        mapping = await get_mapping(chat_id)
+        if mapping:
+            is_employee = mapping.get("employee", False)
+            await _reply_html(update, HELP_TEXT_EMPLOYEE if is_employee else HELP_TEXT_CUSTOMER)
+        else:
+            await _reply_html(update, HELP_TEXT_UNLINKED)
 
     async def cancel(update: Update, _ctx) -> None:
         chat_id = update.effective_chat.id
@@ -726,6 +795,30 @@ def main() -> None:
             await _reply_html(update, "Cancelled.")
         else:
             await _reply_html(update, "Nothing to cancel.")
+
+    async def projects(update: Update, _ctx) -> None:
+        """List all open projects (employee only)."""
+        chat_id = update.effective_chat.id
+        mapping = await get_mapping(chat_id)
+        if not mapping:
+            await _reply_html(update, "You need to link your account first. Send your invite code to get started.")
+            return
+        if not mapping.get("employee"):
+            await _reply_html(update, "This command is only available to employees.")
+            return
+        deals = await get_deals(None, chat_id, employee=True)
+        if deals is None:
+            await _reply_html(update, "I'm having trouble reaching the server. Please try again in a couple of minutes.")
+            return
+        if not deals:
+            await _reply_html(update, "No open projects found.")
+            return
+        _last_deals[chat_id] = deals
+        _last_search[chat_id] = ""
+        _last_employee[chat_id] = True
+        msg = format_search_result(deals, "all projects", is_employee=True)
+        kb = _build_search_results_keyboard(deals)
+        await _reply_html(update, msg, reply_markup=kb)
 
     async def handle_callback(update: Update, _ctx) -> None:
         query = update.callback_query
@@ -767,7 +860,7 @@ def main() -> None:
                 await query.edit_message_text("Invalid selection.")
                 return
             _pending_note[chat_id] = {"dealId": deal_id, "step": "awaiting_text"}
-            await query.edit_message_text(
+            await query.message.reply_text(
                 "Send the note text you want to add for this project.\n"
                 "You can cancel by sending /cancel."
             )
@@ -778,7 +871,7 @@ def main() -> None:
             if not pending or pending.get("step") != "awaiting_category":
                 await query.edit_message_text("Nothing pending. Send a project name to search.")
                 return
-            category_id = None if data == "cat:default" else int(data[4:])
+            category_id = int(data[4:])
             deal_id = pending["dealId"]
             text = pending["text"]
             result = await _post("/api/bot/note", {
@@ -844,7 +937,7 @@ def main() -> None:
 
                 # Help request
                 if lower in ("/help", "help", "?"):
-                    await _reply_html(update, HELP_TEXT)
+                    await _reply_html(update, HELP_TEXT_EMPLOYEE if is_employee else HELP_TEXT_CUSTOMER)
                     return
 
                 # Number reply: read from cached results (no re-fetch)
@@ -918,6 +1011,7 @@ def main() -> None:
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("projects", projects))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 

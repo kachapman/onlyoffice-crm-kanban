@@ -2,6 +2,21 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [2.1.0] — 2026-07-07
+
+### Telegram bot — inline keyboards, employee note creation, role-aware onboarding
+
+- **Inline keyboard navigation.** Project search results now render as tappable buttons instead of numbered lists (old number-reply fallback preserved). Deal detail screen has "New Search" and "Add Note" (employee) buttons.
+- **Employee note creation.** From any deal detail, employee can tap "Add Note" → type text → choose curated category from inline keyboard (Quick Context, Note, Text, Call, Email, Customer Update). Note is posted via dashboard proxy (`POST /api/bot/note`). Category picker uses regex matching with priority ordering; no "Default" button.
+- **Role-aware `/start`.** Linked employees see commands + welcome; linked customers see search prompt; unlinked users see invite code prompt.
+- **Role-aware `/help`.** Three variants: customer (basic search), employee (commands + notes), unlinked (invite code instructions).
+- **`/projects` command (employee only).** Lists all open projects with inline keyboard.
+- **`act:note:` uses `reply_text`.** "Add Note" prompt sends a new reply message instead of editing the deal detail, keeping the deal info visible for reference.
+- **Fixed `allowed_updates` bug.** Used plural `"messages"` (silently ignored by Telegram — adding any valid type activated the filter and dropped messages). Fixed to `Update.MESSAGE` / `Update.CALLBACK_QUERY` constants.
+
+### Files changed
+- `telegram_bot.py`, `server.py`, `AGENTS.md`, `CHANGELOG.md`, `VERSION`
+
 ## [2.0.10] — 2026-07-06
 
 ### Hotfix — Group tile "Nuke Cache" (universal)
