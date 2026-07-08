@@ -1,7 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
-**Current version:** 2.2.0 (released 2026-07-07; see CHANGELOG.md)  
-**Last session summary (for next resume):** Fixed /tag (CRM-wide tag def endpoint didn't exist; rewrote to extract tags from open deals — same pattern as dashboard search modal), fixed usage log route (moved GET /api/bot/usage from _handle_api_post_put to _handle_api_get), broadcast message now has system prefix + no-reply footer + HTML sanitization (_TelegramHTMLSanitizer), bold/italics toolbar buttons replace raw HTML hint. See CHANGELOG.md "Unreleased". Prior: v2.1.0 shipped — inline keyboards, employee notes, role-aware start/help/projects.
+**Current version:** 2.2.1 (released 2026-07-08; see CHANGELOG.md)  
+**Last session summary (for next resume):** Fixed server-side tag cache invalidation — mutation path `/opportunity/{id}/tag` didn't match `/crm/opportunity/tag` substring check, so server proxy cache was never invalidated on tag add/remove (preview + tiles served stale data for up to 10min). Added `re.search(r"/crm/opportunity/\d+/tag", p)` in `server.py`. Client-side: `enrichOpportunitiesTags` now skips tag cache when `force=true`; edit flows pass `force=true`; fallback individual tag requests send `X-Force-Refresh`; `refreshGroup` clears tag cache on Nuke Cache. Nuke Cache icon reverted to trefoil, tooltip reads "Nuke Cache (refresh tile)". See CHANGELOG.md "Unreleased". Prior: v2.2.0 shipped — /tag fix, usage log route, broadcast formatting/sanitization, bold/italics toolbar.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 

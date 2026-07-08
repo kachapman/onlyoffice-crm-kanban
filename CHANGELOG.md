@@ -2,6 +2,25 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [2.2.1] — 2026-07-08
+
+### Bug fixes
+
+- **Server-side tag cache now properly invalidated on per-opp tag mutations.** The cache invalidation condition in `_handle_api_post_put` checked `"/crm/opportunity/tag" in p`, which matches GET paths like `/opportunity/tag/123` but **not** mutation paths like `/opportunity/123/tag`. Added `re.search(r"/crm/opportunity/\d+/tag", p)` so POST/DELETE tag operations correctly invalidate the 10-minute proxy cache. Previously, after adding/removing tags, the preview modal and tile enrichment could serve stale cached tag data for up to 10 minutes.
+
+- **Client-side tag cache bypass on edit and nuke refresh.** Three fixes ensure fresh tags are always fetched after mutations:
+  - `enrichOpportunitiesTags` now respects `force=true`: skips the client-side tag cache and always fetches from the server batch endpoint.
+  - `submitDealEditForm` and `submitQuickNoteForm` pass `force=true` to `enrichOpportunitiesTags` after saving tag changes.
+  - Individual tag fallback requests (when batch endpoint fails) now send `X-Force-Refresh: 1` header when `force=true`, bypassing the server proxy cache.
+  - `refreshGroup` clears the entire tag cache on manual Nuke Cache (`_manualGroupTileRefresh`), so all opportunities in the group get fresh tags.
+
+### Improvements
+
+- **Nuke Cache icon and label.** Reverted to original Tabler radioactive (trefoil) icon. Tooltip/aria-label updated to `"Nuke Cache (refresh tile)"`.
+
+### Files changed
+- `public/app.js`, `server.py`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`
+
 ## [2.2.0] — 2026-07-07
 
 ### Bug fixes
