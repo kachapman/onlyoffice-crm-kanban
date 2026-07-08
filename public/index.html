@@ -393,32 +393,36 @@
     <div class="modal-card mail-inbox-card">
       <div class="mail-inbox-header">
         <h2 id="mail-inbox-title" class="modal-title">CRM Mail Quick View</h2>
-        <div class="mail-header-actions">
-          <!-- Close moved to bottom right per request -->
-        </div>
+        <div class="mail-header-actions"></div>
       </div>
 
-      <div class="mail-toolbar">
-        <input type="search" id="mail-search-input" class="mail-search" placeholder="Search subject or from..." autocomplete="off" />
-        <button type="button" id="mail-select-all" class="btn btn-secondary btn-small">Select all</button>
-        <button type="button" id="mail-mark-read" class="btn btn-secondary btn-small" disabled>Mark read</button>
-        <button type="button" id="mail-mark-unread" class="btn btn-secondary btn-small" disabled>Mark unread</button>
-        <button type="button" id="mail-delete" class="btn btn-secondary btn-small" disabled title="Delete selected conversations">Delete</button>
-        <button type="button" id="mail-clear-selection" class="btn btn-ghost btn-small" disabled>Clear selection</button>
-        <button type="button" id="mail-mark-all-read" class="btn btn-secondary btn-small">Mark all loaded as read</button>
-        <button type="button" id="mail-refresh" class="btn btn-secondary btn-small">Refresh</button>
-        <span id="mail-today-count" class="mail-today-count"></span>
+      <div class="mail-inbox-tabs">
+        <button type="button" class="mail-inbox-tab active" data-mailtab="inbox">Inbox</button>
+        <button type="button" class="mail-inbox-tab" data-mailtab="scanner-admin">Scanner Admin</button>
       </div>
 
-      <div class="mail-main-area">
-        <div id="mail-list-container" class="mail-list-container">
-          <!-- rows populated by JS -->
-          <div id="mail-list" class="mail-list"></div>
+      <!-- Inbox tab -->
+      <div id="mail-tab-inbox" class="mail-tab-pane">
+        <div class="mail-toolbar">
+          <input type="search" id="mail-search-input" class="mail-search" placeholder="Search subject or from..." autocomplete="off" />
+          <button type="button" id="mail-select-all" class="btn btn-secondary btn-small">Select all</button>
+          <button type="button" id="mail-mark-read" class="btn btn-secondary btn-small" disabled>Mark read</button>
+          <button type="button" id="mail-mark-unread" class="btn btn-secondary btn-small" disabled>Mark unread</button>
+          <button type="button" id="mail-delete" class="btn btn-secondary btn-small" disabled title="Delete selected conversations">Delete</button>
+          <button type="button" id="mail-clear-selection" class="btn btn-ghost btn-small" disabled>Clear selection</button>
+          <button type="button" id="mail-mark-all-read" class="btn btn-secondary btn-small">Mark all loaded as read</button>
+          <button type="button" id="mail-refresh" class="btn btn-secondary btn-small">Refresh</button>
+          <span id="mail-today-count" class="mail-today-count"></span>
         </div>
+
+        <div class="mail-main-area">
+          <div id="mail-list-container" class="mail-list-container">
+            <div id="mail-list" class="mail-list"></div>
+          </div>
 
           <button type="button" id="mail-sidebar-toggle" class="mail-sidebar-toggle" title="Toggle link panel" aria-label="Toggle link panel">▶</button>
           <div class="mail-right-sidebar" style="width:210px; min-width:210px; max-width:230px;">
-           <div class="mail-sidebar-content">
+            <div class="mail-sidebar-content">
               <h4 style="margin:0 0 0.5rem 0; font-size:0.85rem; color:var(--text);">Quick Link to Deal</h4>
               <input type="text" id="mail-deal-search" class="mail-deal-search" placeholder="Search deals to link..." autocomplete="off" />
               <div id="mail-deal-results" class="mail-deal-results"></div>
@@ -433,7 +437,28 @@
               </ul>
             </div>
           </div>
+        </div>
       </div>
+
+      <!-- Scanner Admin tab -->
+      <div id="mail-tab-scanner-admin" class="mail-tab-pane" style="display:none;">
+        <div class="mail-toolbar">
+          <span style="font-size:0.85rem;color:var(--accent);font-weight:600;">Auto Mail Scanner</span>
+          <span style="margin-left:auto;font-size:0.75rem;color:var(--muted);">
+            <span id="scanner-admin-toggle">Status</span>
+            <span id="scanner-admin-log-btn" class="clickable" style="cursor:pointer;margin-left:0.5rem;text-decoration:underline;">Log</span>
+            <span id="scanner-admin-rules-btn" class="clickable" style="cursor:pointer;margin-left:0.5rem;text-decoration:underline;">Assignee Rules</span>
+            <span id="scanner-admin-contractors-btn" class="clickable" style="cursor:pointer;margin-left:0.5rem;text-decoration:underline;">Contractors</span>
+          </span>
+        </div>
+        <div class="mail-scanner-admin-body">
+          <div id="scanner-admin-status" class="scanner-section"></div>
+          <div id="scanner-admin-log" class="scanner-section" style="display:none;"></div>
+          <div id="scanner-admin-rules" class="scanner-section" style="display:none;"></div>
+          <div id="scanner-admin-contractors" class="scanner-section" style="display:none;"></div>
+        </div>
+      </div>
+
       <div class="mail-footer-actions" style="display:flex; justify-content:flex-end; padding: 0.25rem 0.5rem 0.5rem;">
         <button type="button" class="btn btn-secondary" data-mail-inbox-dismiss style="padding:0.5rem 1.5rem; font-size:0.9rem;">Close</button>
       </div>

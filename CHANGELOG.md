@@ -10,8 +10,11 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 - **Tasks tile category filter.** New pill-button row (All, Estimate, Follow-Up, etc.) below the user filter in the tasks tile. Clicking a tab filters `state.tasks` by `categoryId`. Tabs are rebuilt from `state.taskCategories` on each render. CSS styles for `.tasks-cat-filter` and `.tasks-cat-btn` with active/hover states.
 
+- **Scanner admin inside CRM Mail Quick View.** Existing mail modal now has "Inbox" / "Scanner Admin" tabs. Admin tab includes Status (config display), Log viewer (with refresh/limit), editable Assignee Rules (checkboxes per classification type, saved to `contractors.json` via PUT), and Contractors list (read-only). New server endpoint `GET /api/scanner/log?limit=N`.
+- **Configurable assignee rules.** Scanner no longer has hardcoded user UUIDs for task/notify assignments. All 12 classification rules read from `assignee_rules` in `contractors.json`, resolving friendly names (ken/rebeca/claudiu) to UUIDs from env vars. Editable via Scanner Admin tab in the mail modal.
+
 ### Files changed
-- `mail_scanner.py` (new), `server.py`, `public/app.js`, `public/styles.css`, `.env`, `CHANGELOG.md`, `AGENTS.md`, `docs/MAIL_SCANNER_PLAN.md`
+- `mail_scanner.py` (new), `server.py`, `public/app.js`, `public/styles.css`, `public/index.html`, `.env`, `config.example.env`, `CHANGELOG.md`, `AGENTS.md`, `docs/MAIL_SCANNER_PLAN.md`
 
 ## [2.2.1] — 2026-07-08
 

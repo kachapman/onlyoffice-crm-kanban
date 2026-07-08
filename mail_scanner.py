@@ -71,6 +71,20 @@ DEFAULT_CONTRACTORS = {
     ],
     "review_assignees": ["rebeca", "claudiu"],
     "new_deal_assignees": ["rebeca", "claudiu"],
+    "assignee_rules": {
+        "jobnimbus_task": ["ken"],
+        "jobnimbus_new_job": ["ken"],
+        "supplement_new_project": ["rebeca", "claudiu"],
+        "supplement_request": ["ken", "claudiu"],
+        "new_potential": ["rebeca", "claudiu"],
+        "reconciliation": ["ken", "claudiu"],
+        "adjuster_action": ["ken", "claudiu"],
+        "carrier_email": ["ken", "claudiu"],
+        "carrier_email_notify": ["ken", "claudiu"],
+        "supplement_discussion_request": ["ken", "claudiu"],
+        "acculynx_other": ["rebeca", "claudiu"],
+        "uncertain": ["rebeca", "claudiu"],
+    },
 }
 
 # Canonical tag titles fetched from CRM on startup
@@ -100,6 +114,18 @@ FIELD_ADDRESS = 4
 TASK_CAT_ESTIMATE = 34
 TASK_CAT_FOLLOW_UP = 35
 SSL_VERIFY = True
+
+# Phrases that indicate a carrier has revised their estimate (reconciliation trigger)
+ESTIMATE_REVISION_PHRASES = [
+    "attached estimate",
+    "approved estimate",
+    "updated estimate",
+    "estimate for review",
+    "estimate as requested",
+    "approved supplement",
+    "revised the estimate",
+    "revised estimate",
+]
 
 _cached_tags: list[dict[str, Any]] = []
 _contractors_config: dict[str, Any] = {}
@@ -446,6 +472,42 @@ def _create_task_for_assignees(title: str, description: str, assignees: list[str
         _create_task(title, description, uid, category_id, opp_id)
 
 
+_USER_NAME_MAP: dict[str, str] = {}
+
+def _ensure_user_name_map() -> dict[str, str]:
+    if not _USER_NAME_MAP:
+        m = {}
+        if USER_KEN:
+            m["ken"] = USER_KEN
+        if USER_REBECA:
+            m["rebeca"] = USER_REBECA
+        if USER_CLAUDIU:
+            m["claudiu"] = USER_CLAUDIU
+        _USER_NAME_MAP.update(m)
+    return _USER_NAME_MAP
+
+
+def _resolve_assignees(rule_name: str) -> list[str]:
+    cfg = get_contractors()
+    rules = cfg.get("assignee_rules", {})
+    names = rules.get(rule_name, [])
+    mapping = _ensure_user_name_map()
+    uuids = []
+    for name in names:
+        name_lower = name.strip().lower()
+        uid = mapping.get(name_lower)
+        if uid:
+            uuids.append(uid)
+    return uuids
+
+
+def _notify_users_for(rule_name: str) -> list[str] | None:
+    if not SCANNER_NOTIFY_USERS:
+        return None
+    uuids = _resolve_assignees(rule_name)
+    return uuids if uuids else None
+
+
 def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0) -> dict[str, Any] | None:
     subject = (msg.get("subject") or "").strip()
     from_email = (msg.get("from") or msg.get("sender") or "").strip().lower()
@@ -466,6 +528,8 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0) -
     body_lower = body_text.lower()
     contractors_cfg = get_contractors()
     carriers = contractors_cfg.get("insurance_carriers", DEFAULT_CONTRACTORS["insurance_carriers"])
+    carrier_pattern = r"\b(" + "|".join(re.escape(c) for c in carriers) + r")\b"
+    has_carrier = re.search(carrier_pattern, subject + "\n" + body_text, re.IGNORECASE)
 
     # --- Classifier rules (ordered, first-match-wins) ---
 
@@ -477,12 +541,14 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0) -
         description = desc_match.group(1).strip() if desc_match else body_text[:500]
         log_entry["classification"] = "jobnimbus_task"
         if SCANNER_CREATE_TASKS:
-            _create_task(
-                f"JobNimbus Task: {task_name}",
-                description,
-                USER_KEN, TASK_CAT_ESTIMATE,
-            )
-            log_entry["actions_taken"].append("created_task")
+            assignees = _resolve_assignees("jobnimbus_task")
+            if assignees:
+                _create_task(
+                    f"JobNimbus Task: {task_name}",
+                    description,
+                    assignees[0], TASK_CAT_ESTIMATE,
+                )
+                log_entry["actions_taken"].append("created_task")
         _append_log_entry(log_entry)
         return log_entry
 
@@ -496,12 +562,14 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0) -
         desc = f"Assigned by {assigner}. New job: {job_name}. Address: {address}".strip()
         log_entry["classification"] = "jobnimbus_new_job"
         if SCANNER_CREATE_TASKS:
-            _create_task(
-                f"Review new job: {job_name}" + (f" — {address}" if address else ""),
-                desc,
-                USER_KEN, TASK_CAT_ESTIMATE,
-            )
-            log_entry["actions_taken"].append("created_task")
+            assignees = _resolve_assignees("jobnimbus_new_job")
+            if assignees:
+                _create_task(
+                    f"Review new job: {job_name}" + (f" — {address}" if address else ""),
+                    desc,
+                    assignees[0], TASK_CAT_ESTIMATE,
+                )
+                log_entry["actions_taken"].append("created_task")
         _append_log_entry(log_entry)
         return log_entry
 
@@ -539,7 +607,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0) -
                     _create_task_for_assignees(
                         f"Supplement request — {claimant}",
                         body_text[:500],
-                        [USER_KEN, USER_CLAUDIU], TASK_CAT_ESTIMATE, opp_id,
+                        _resolve_assignees("supplement_request"), TASK_CAT_ESTIMATE, opp_id,
                     )
                     log_entry["actions_taken"].append("created_task")
         else:
@@ -558,7 +626,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0) -
                         _create_task_for_assignees(
                             f"Review new project: {claimant}",
                             f"New supplement project from email. Job: {job_id}" if job_id else "New supplement project from email.",
-                            [USER_REBECA, USER_CLAUDIU], TASK_CAT_FOLLOW_UP, opp_id,
+                            _resolve_assignees("supplement_new_project"), TASK_CAT_FOLLOW_UP, opp_id,
                         )
                     log_entry["actions_taken"].extend(["created_deal", "added_tag", "linked_email"])
             else:
@@ -566,7 +634,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0) -
                     _create_task_for_assignees(
                         f"Review new project: {claimant}",
                         f"New supplement project from email. Job: {job_id}" if job_id else "New supplement project from email.",
-                        [USER_REBECA, USER_CLAUDIU], TASK_CAT_FOLLOW_UP,
+                        _resolve_assignees("supplement_new_project"), TASK_CAT_FOLLOW_UP,
                     )
                     log_entry["actions_taken"].append("created_task")
         _append_log_entry(log_entry)
@@ -593,14 +661,19 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0) -
                 _create_task_for_assignees(
                     f"New potential: {claimant}",
                     f"New job notification from Acculynx. Review and create deal if needed.\n\n{body_text[:500]}",
-                    [USER_REBECA, USER_CLAUDIU], TASK_CAT_FOLLOW_UP,
+                    _resolve_assignees("new_potential"), TASK_CAT_FOLLOW_UP,
                 )
                 log_entry["actions_taken"].append("created_task")
         _append_log_entry(log_entry)
         return log_entry
 
-    # 06. Needs Reconciliation
-    if "needs reconciliation" in subject_lower:
+    # 06. Reconciliation / Carrier Estimate Revision
+    has_reconcile = re.search(r"\breconcil", subject_lower + "\n" + body_lower)
+    is_carrier_estimate = (
+        has_carrier
+        and any(phrase in body_lower for phrase in ESTIMATE_REVISION_PHRASES)
+    )
+    if has_reconcile or is_carrier_estimate:
         claim_code = _extract_claim_code(subject)
         claimant = _extract_claimant_from_body(body_text)
         log_entry["classification"] = "reconciliation_task"
@@ -611,7 +684,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0) -
         if existing:
             opp_id = int(existing.get("id") or existing.get("ID", 0))
             if SCANNER_POST_NOTES:
-                _post_note(opp_id, f"Needs reconciliation: {body_text[:1000]}", notify_users=[USER_KEN, USER_CLAUDIU])
+                _post_note(opp_id, f"Needs reconciliation: {body_text[:1000]}", notify_users=_notify_users_for("reconciliation"))
                 log_entry["actions_taken"].append("posted_note")
             _add_tag(opp_id, TAG_NEEDS_RECONCILIATION)
             log_entry["actions_taken"].append("added_tag")
@@ -619,7 +692,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0) -
                 _create_task_for_assignees(
                     f"Reconcile estimate — {claim_code}",
                     f"Reconciliation needed for claim {claim_code}. {body_text[:500]}",
-                    [USER_KEN, USER_CLAUDIU], TASK_CAT_ESTIMATE, opp_id,
+                    _resolve_assignees("reconciliation"), TASK_CAT_ESTIMATE, opp_id,
                 )
                 log_entry["actions_taken"].append("created_task")
         _append_log_entry(log_entry)
@@ -640,7 +713,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0) -
             if m:
                 action_text = f"Adjuster {m.group(1)}: {m.group(2).strip()}"
             if SCANNER_POST_NOTES:
-                _post_note(opp_id, f"Adjuster action: {action_text}\n\n{body_text[:2000]}", notify_users=[USER_KEN, USER_CLAUDIU])
+                _post_note(opp_id, f"Adjuster action: {action_text}\n\n{body_text[:2000]}", notify_users=_notify_users_for("adjuster_action"))
                 log_entry["actions_taken"].append("posted_note")
             _add_tag(opp_id, TAG_NEEDS_REBUTTAL)
             _add_tag(opp_id, TAG_PAUSE_CALLING)
@@ -649,15 +722,13 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0) -
                 _create_task_for_assignees(
                     f"Adjuster response needed — {claim_code}",
                     action_text,
-                    [USER_KEN, USER_CLAUDIU], TASK_CAT_ESTIMATE, opp_id,
+                    _resolve_assignees("adjuster_action"), TASK_CAT_ESTIMATE, opp_id,
                 )
                 log_entry["actions_taken"].append("created_task")
         _append_log_entry(log_entry)
         return log_entry
 
     # 08. Carrier/Insurance Company Email
-    carrier_pattern = r"\b(" + "|".join(re.escape(c) for c in carriers) + r")\b"
-    has_carrier = re.search(carrier_pattern, subject + "\n" + body_text, re.IGNORECASE)
     if has_carrier:
         claim_code = _extract_claim_code(subject)
         log_entry["classification"] = "carrier_adjuster_email"
@@ -669,7 +740,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0) -
             opp_id = int(existing.get("id") or existing.get("ID", 0))
             if SCANNER_POST_NOTES:
                 note_text = f"Email from {has_carrier.group(1)}.\n\nSubject: {subject}\n\n{body_text[:3000]}"
-                _post_note(opp_id, note_text, notify_users=[USER_KEN, USER_CLAUDIU])
+                _post_note(opp_id, note_text, notify_users=_notify_users_for("carrier_email_notify"))
                 log_entry["actions_taken"].append("posted_note")
             _add_tag(opp_id, TAG_NEEDS_REBUTTAL)
             _add_tag(opp_id, TAG_PAUSE_CALLING)
@@ -679,7 +750,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0) -
                 _create_task_for_assignees(
                     f"Review carrier request — {claim_code}",
                     f"Carrier ({has_carrier.group(1)}) request in email.\n\nSubject: {subject}\n\n{body_text[:1000]}",
-                    [USER_KEN, USER_CLAUDIU], TASK_CAT_ESTIMATE, opp_id,
+                    _resolve_assignees("carrier_email"), TASK_CAT_ESTIMATE, opp_id,
                 )
                 log_entry["actions_taken"].append("created_task")
         _append_log_entry(log_entry)
@@ -708,7 +779,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0) -
                     _create_task_for_assignees(
                         f"Supplement request — {claim_code}",
                         body_text[:500],
-                        [USER_KEN, USER_CLAUDIU], TASK_CAT_ESTIMATE, opp_id,
+                        _resolve_assignees("supplement_discussion_request"), TASK_CAT_ESTIMATE, opp_id,
                     )
                     log_entry["actions_taken"].append("created_task")
             _append_log_entry(log_entry)
@@ -742,7 +813,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0) -
             _create_task_for_assignees(
                 f"Review email: {subject[:100]}",
                 f"Unclassified Acculynx email.\n\nFrom: {from_email}\nSubject: {subject}\n\n{body_text[:500]}",
-                [USER_REBECA, USER_CLAUDIU], TASK_CAT_FOLLOW_UP,
+                _resolve_assignees("acculynx_other"), TASK_CAT_FOLLOW_UP,
             )
             log_entry["actions_taken"].append("created_task")
         _append_log_entry(log_entry)
@@ -754,7 +825,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0) -
         _create_task_for_assignees(
             f"Review email: {subject[:100]}",
             f"Unclassified email.\n\nFrom: {from_email}\nSubject: {subject}\n\n{body_text[:500]}",
-            [USER_REBECA, USER_CLAUDIU], TASK_CAT_FOLLOW_UP,
+            _resolve_assignees("uncertain"), TASK_CAT_FOLLOW_UP,
         )
         log_entry["actions_taken"].append("created_task")
     _append_log_entry(log_entry)
@@ -829,6 +900,7 @@ def start_scanner(config: dict[str, Any] | None = None) -> threading.Thread:
 
 
 def get_scanner_status() -> dict[str, Any]:
+    processed = _load_processed_ids()
     return {
         "enabled": SCANNER_ENABLED,
         "poll_interval_s": SCANNER_POLL_INTERVAL,
@@ -840,4 +912,23 @@ def get_scanner_status() -> dict[str, Any]:
         "create_tasks": SCANNER_CREATE_TASKS,
         "post_notes": SCANNER_POST_NOTES,
         "notify_users": SCANNER_NOTIFY_USERS,
+        "total_processed": len(processed),
     }
+
+
+def get_scanner_log(limit: int = 200) -> list[dict[str, Any]]:
+    if not LOG_FILE.exists():
+        return []
+    try:
+        entries: list[dict[str, Any]] = []
+        with open(LOG_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+        return entries[-limit:]
+    except OSError:
+        return []

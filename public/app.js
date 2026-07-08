@@ -1879,8 +1879,8 @@ function renderTasksTile() {
           User
           <select id="tasks-user-filter"></select>
         </label>
+        <div class="tasks-cat-filter"></div>
       </div>
-      <div class="tasks-cat-filter"></div>
       <div id="tasks-by-user" class="tasks-by-user"></div>
     `;
     $("#dashboard-panel-row")?.appendChild(tile);
@@ -1890,34 +1890,6 @@ function renderTasksTile() {
   ensurePanelToolbarCount(tile, tileId);
   ensureTileAutoRefreshButton(tile, tileId);
   ensureTasksNewTaskButton(tile);
-
-  // Rebuild category filter tabs
-  const catFilter = tile?.querySelector(".tasks-cat-filter");
-  if (catFilter) {
-    const cats = state.taskCategories;
-    catFilter.innerHTML = "";
-    const allBtn = document.createElement("span");
-    allBtn.className = "tasks-cat-btn" + (state.taskCategoryFilter == null ? " active" : "");
-    allBtn.textContent = "All";
-    allBtn.dataset.catId = "";
-    allBtn.addEventListener("click", () => {
-      state.taskCategoryFilter = null;
-      renderTasksByUser();
-    });
-    catFilter.appendChild(allBtn);
-    for (const cat of cats) {
-      const cid = String(cat.id ?? cat.ID ?? "");
-      const btn = document.createElement("span");
-      btn.className = "tasks-cat-btn" + (state.taskCategoryFilter === cid ? " active" : "");
-      btn.textContent = cat.title || cat.Title || `Cat ${cid}`;
-      btn.dataset.catId = cid;
-      btn.addEventListener("click", () => {
-        state.taskCategoryFilter = cid;
-        renderTasksByUser();
-      });
-      catFilter.appendChild(btn);
-    }
-  }
 
   if (tile && !tile.dataset.tasksFilterBound) {
     tile.dataset.tasksFilterBound = "1";
@@ -13814,6 +13786,9 @@ async function openMailInboxModal() {
   $("#mail-search-input").value = "";
   await loadMailMessagesForModal();
   attachMailModalListeners();
+  _appendMailInboxTabListeners();
+  // Reset to Inbox tab every open
+  _switchMailInboxTab("inbox");
 }
 
 function attachMailModalListeners() {
@@ -17711,6 +17686,303 @@ function bindEventLogModal() {
   });
 }
 
+// ── Scanner Admin (inside mail modal) ──
+
+function _scannerShowSection(showId) {
+  const sections = ["scanner-admin-status", "scanner-admin-log", "scanner-admin-rules", "scanner-admin-contractors"];
+  for (const id of sections) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = id === showId ? "" : "none";
+  }
+}
+
+async function _renderScannerAdminStatus() {
+  const el = $("#scanner-admin-status");
+  if (!el) return;
+  try {
+    const res = await fetch("/api/scanner/status", { credentials: "same-origin" });
+    const s = await res.json();
+    el.innerHTML = `
+      <div class="scanner-status-display">
+        <span class="label">Status</span><span class="value">${s.enabled ? "Enabled" : "Disabled"}</span>
+        <span class="label">Poll interval</span><span class="value">${s.poll_interval_s}s</span>
+        <span class="label">Total processed</span><span class="value">${s.total_processed}</span>
+        <span class="label">Create deals</span><span class="value">${s.create_deals ? "Yes" : "No (dry-run)"}</span>
+        <span class="label">Create tasks</span><span class="value">${s.create_tasks ? "Yes" : "No (dry-run)"}</span>
+        <span class="label">Post notes</span><span class="value">${s.post_notes ? "Yes" : "No (dry-run)"}</span>
+        <span class="label">Notify users</span><span class="value">${s.notify_users ? "Yes" : "No (dry-run)"}</span>
+        <span class="label">Portal</span><span class="value">${escapeHtml(s.portal_url)}</span>
+        <span class="label">Bot email</span><span class="value">${escapeHtml(s.email)}</span>
+      </div>
+    `;
+  } catch {
+    el.innerHTML = '<div class="scanner-empty">Failed to load status.</div>';
+  }
+}
+
+async function _renderScannerAdminLog() {
+  const el = $("#scanner-admin-log");
+  if (!el) return;
+  el.innerHTML = `
+    <div class="scanner-log-bar">
+      <button type="button" id="scanner-admin-log-refresh" class="btn btn-secondary btn-sm">Refresh</button>
+      <label>Limit <select id="scanner-admin-log-limit">
+        <option value="50">50</option>
+        <option value="200" selected>200</option>
+        <option value="500">500</option>
+      </select></label>
+    </div>
+    <div id="scanner-admin-log-list" class="scanner-log-list"></div>
+  `;
+  const list = $("#scanner-admin-log-list");
+  if (!list) return;
+
+  const limit = $("#scanner-admin-log-limit")?.value || "200";
+  list.innerHTML = '<div class="scanner-empty">Loading…</div>';
+
+  try {
+    const res = await fetch(`/api/scanner/log?limit=${encodeURIComponent(limit)}`, { credentials: "same-origin" });
+    const data = await res.json();
+    const entries = data.entries || [];
+    if (!entries.length) {
+      list.innerHTML = '<div class="scanner-empty">No scanner activity logged yet.</div>';
+      return;
+    }
+    list.innerHTML = "";
+    for (const e of entries) {
+      const div = document.createElement("div");
+      div.className = "scanner-log-entry";
+
+      const meta = document.createElement("div");
+      meta.className = "log-meta";
+      const timeSpan = document.createElement("span");
+      timeSpan.textContent = (e.timestamp || "").slice(0, 19).replace("T", " ");
+      meta.appendChild(timeSpan);
+      const clsSpan = document.createElement("span");
+      clsSpan.className = "log-classification";
+      clsSpan.textContent = e.classification || "?";
+      meta.appendChild(clsSpan);
+      div.appendChild(meta);
+
+      const subjDiv = document.createElement("div");
+      subjDiv.className = "log-subject";
+      subjDiv.textContent = (e.subject || "").slice(0, 120);
+      div.appendChild(subjDiv);
+
+      if (e.claimant || e.claim_code || e.job_id || e.carrier) {
+        const detail = [e.claimant, e.claim_code, e.job_id, e.carrier].filter(Boolean).join(" · ");
+        const detailDiv = document.createElement("div");
+        detailDiv.className = "log-actions";
+        detailDiv.textContent = detail.slice(0, 120);
+        div.appendChild(detailDiv);
+      }
+      if (e.actions_taken?.length) {
+        const actDiv = document.createElement("div");
+        actDiv.className = "log-actions";
+        actDiv.textContent = "→ " + e.actions_taken.join(", ");
+        div.appendChild(actDiv);
+      }
+      list.appendChild(div);
+    }
+
+    $("#scanner-admin-log-refresh")?.addEventListener("click", _renderScannerAdminLog);
+    $("#scanner-admin-log-limit")?.addEventListener("change", _renderScannerAdminLog);
+  } catch {
+    list.innerHTML = '<div class="scanner-empty">Failed to load log.</div>';
+  }
+}
+
+async function _renderScannerAdminRules() {
+  const el = $("#scanner-admin-rules");
+  if (!el) return;
+  el.innerHTML = '<div class="scanner-empty">Loading rules…</div>';
+
+  try {
+    const [cfgRes, statusRes] = await Promise.all([
+      fetch("/api/scanner/contractors", { credentials: "same-origin" }),
+      fetch("/api/scanner/status", { credentials: "same-origin" }),
+    ]);
+    const cfg = await cfgRes.json();
+    const status = await statusRes.json();
+
+    const rules = cfg.assignee_rules || {};
+    // Build user-name lookup from existing users in config
+    const knownUsers = {
+      ken: { name: "Ken", email: "kenc@vanguardadj.com" },
+      rebeca: { name: "Rebeca", email: "" },
+      claudiu: { name: "Claudiu", email: "" },
+      rebecca: { name: "Rebecca", email: "" },
+    };
+    // Also try to get from portalUsers state
+    const portalMap = {};
+    if (Array.isArray(state.portalUsers)) {
+      for (const u of state.portalUsers) {
+        const email = (u.email || "").toLowerCase();
+        const dn = u.displayName || u.userName || "";
+        portalMap[email] = dn;
+        if (email.includes("ken")) portalMap.ken = dn;
+        if (email.includes("rebec") || email.includes("rebecca")) portalMap.rebeca = dn;
+        if (email.includes("claudiu")) portalMap.claudiu = dn;
+      }
+    }
+
+    const allUserKeys = Object.keys(knownUsers);
+    const friendlyName = (key) => portalMap[key] || knownUsers[key]?.name || key;
+
+    const ruleLabels = {
+      jobnimbus_task: "JobNimbus Tasks (assignee)",
+      jobnimbus_new_job: "JobNimbus New Jobs (assignee)",
+      supplement_new_project: "New Supplement Projects (task)",
+      supplement_request: "Supplement Requests (task)",
+      new_potential: "New Potential Claims (task)",
+      reconciliation: "Reconciliation (task + notify)",
+      adjuster_action: "Adjuster Actions (task + notify)",
+      carrier_email: "Carrier Emails (task)",
+      carrier_email_notify: "Carrier Emails (notify)",
+      supplement_discussion_request: "Supplement Discussion (task)",
+      acculynx_other: "Unclassified Acculynx (task)",
+      uncertain: "Uncertain Emails (task)",
+    };
+
+    let html = '<div class="scanner-rules-list">';
+    for (const [ruleKey, label] of Object.entries(ruleLabels)) {
+      const selected = rules[ruleKey] || [];
+      html += `<div class="scanner-rule-row">
+        <span class="scanner-rule-label" title="${escapeHtml(ruleKey)}">${escapeHtml(label)}</span>
+        <div class="scanner-rule-users">`;
+      for (const uk of allUserKeys) {
+        const checked = selected.includes(uk) ? "checked" : "";
+        html += `<span class="scanner-rule-user">
+          <input type="checkbox" data-rule="${escapeHtml(ruleKey)}" data-user="${escapeHtml(uk)}" ${checked} id="rule-${escapeHtml(ruleKey)}-${escapeHtml(uk)}" />
+          <label for="rule-${escapeHtml(ruleKey)}-${escapeHtml(uk)}">${escapeHtml(friendlyName(uk))}</label>
+        </span>`;
+      }
+      html += `</div></div>`;
+    }
+    html += `</div>
+      <button type="button" id="scanner-rules-save-btn" class="btn btn-secondary btn-sm scanner-rules-save">Save Assignee Rules</button>
+      <span id="scanner-rules-save-status" style="margin-left:0.5rem;font-size:0.8rem;color:var(--muted);"></span>`;
+    el.innerHTML = html;
+
+    $("#scanner-rules-save-btn")?.addEventListener("click", async () => {
+      const newRules = {};
+      const chk = el.querySelectorAll('input[type="checkbox"][data-rule]');
+      for (const cb of chk) {
+        const rk = cb.dataset.rule;
+        if (!newRules[rk]) newRules[rk] = [];
+        if (cb.checked) newRules[rk].push(cb.dataset.user);
+      }
+      try {
+        cfg.assignee_rules = newRules;
+        const saveRes = await fetch("/api/scanner/contractors", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(cfg),
+          credentials: "same-origin",
+        });
+        if (saveRes.ok) {
+          const statusEl = $("#scanner-rules-save-status");
+          if (statusEl) { statusEl.textContent = "Saved!"; statusEl.style.color = "var(--accent)"; }
+        } else {
+          const statusEl = $("#scanner-rules-save-status");
+          if (statusEl) { statusEl.textContent = "Failed to save"; statusEl.style.color = "red"; }
+        }
+      } catch {
+        const statusEl = $("#scanner-rules-save-status");
+        if (statusEl) { statusEl.textContent = "Error saving"; statusEl.style.color = "red"; }
+      }
+    });
+  } catch {
+    el.innerHTML = '<div class="scanner-empty">Failed to load assignee rules.</div>';
+  }
+}
+
+async function _renderScannerAdminContractors() {
+  const el = $("#scanner-admin-contractors");
+  if (!el) return;
+  el.innerHTML = '<div class="scanner-empty">Loading…</div>';
+  try {
+    const res = await fetch("/api/scanner/contractors", { credentials: "same-origin" });
+    const data = await res.json();
+    const contractors = data.contractors || [];
+    if (!contractors.length) {
+      el.innerHTML = '<div class="scanner-empty">No contractors configured.</div>';
+      return;
+    }
+    el.innerHTML = '<div class="scanner-contractor-list"></div>';
+    const list = el.querySelector(".scanner-contractor-list");
+    for (const c of contractors) {
+      const div = document.createElement("div");
+      div.className = "scanner-contractor-item";
+      div.innerHTML = `
+        <h4>${escapeHtml(c.name || c.id)}</h4>
+        <div class="domains">${(c.email_domains || []).map((d) => escapeHtml(d)).join(", ")}</div>
+        <div class="action">${escapeHtml(c.action || "?")} · responsible: ${escapeHtml(c.responsible || "?")}</div>
+      `;
+      list.appendChild(div);
+    }
+  } catch {
+    el.innerHTML = '<div class="scanner-empty">Failed to load contractors.</div>';
+  }
+}
+
+function _switchMailInboxTab(name) {
+  const modal = $("#mail-inbox-modal");
+  if (!modal) return;
+  modal.querySelectorAll(".mail-inbox-tab").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.mailtab === name);
+  });
+  modal.querySelectorAll(".mail-tab-pane").forEach((pane) => {
+    pane.style.display = pane.id === `mail-tab-${name}` ? "" : "none";
+  });
+
+  if (name === "scanner-admin") {
+    // Show Status by default inside admin tab
+    _scannerShowSection("scanner-admin-status");
+    _renderScannerAdminStatus();
+  }
+}
+
+function _appendMailInboxTabListeners() {
+  const modal = $("#mail-inbox-modal");
+  if (!modal || modal.dataset.mailtabBound) return;
+  modal.dataset.mailtabBound = "1";
+
+  modal.querySelectorAll(".mail-inbox-tab").forEach((btn) => {
+    btn.addEventListener("click", () => _switchMailInboxTab(btn.dataset.mailtab));
+  });
+
+  // Scanner admin sub-navigation
+  const bindClick = (id, section) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("click", (e) => { e.preventDefault(); _scannerShowSection(section); });
+  };
+  bindClick("scanner-admin-toggle", "scanner-admin-status");
+  bindClick("scanner-admin-log-btn", "scanner-admin-log");
+  bindClick("scanner-admin-rules-btn", "scanner-admin-rules");
+  bindClick("scanner-admin-contractors-btn", "scanner-admin-contractors");
+
+  // Deferred render on section show
+  const observer = new MutationObserver(() => {
+    const logEl = $("#scanner-admin-log");
+    if (logEl && logEl.style.display !== "none" && !logEl.dataset.rendered) {
+      logEl.dataset.rendered = "1";
+      _renderScannerAdminLog();
+    }
+    const rulesEl = $("#scanner-admin-rules");
+    if (rulesEl && rulesEl.style.display !== "none" && !rulesEl.dataset.rendered) {
+      rulesEl.dataset.rendered = "1";
+      _renderScannerAdminRules();
+    }
+    const contractorsEl = $("#scanner-admin-contractors");
+    if (contractorsEl && contractorsEl.style.display !== "none" && !contractorsEl.dataset.rendered) {
+      contractorsEl.dataset.rendered = "1";
+      _renderScannerAdminContractors();
+    }
+  });
+  observer.observe(modal, { subtree: true, attributes: true, attributeFilter: ["style"] });
+}
+
 // ── Customer Bot Modal ──
 
 function updateBotCustomersBtn() {
@@ -19041,6 +19313,10 @@ function createTaskRow(task) {
   return row;
 }
 
+function getTaskCategoryId(t) {
+  return String(t.categoryId ?? t.category?.id ?? t.CategoryId ?? "");
+}
+
 function renderTasksByUser() {
   const root = $("#tasks-by-user");
   if (!root) return;
@@ -19054,8 +19330,42 @@ function renderTasksByUser() {
   if (filterUser) {
     tasks = tasks.filter((t) => String(t.responsible?.id) === String(filterUser));
   }
+
+  // Build category tabs — count tasks per category (pre-filter) so we hide empty ones
+  const catFilter = tasksTile?.querySelector(".tasks-cat-filter");
+  if (catFilter) {
+    const catTaskCount = new Map();
+    for (const t of tasks) {
+      const cid = getTaskCategoryId(t);
+      catTaskCount.set(cid, (catTaskCount.get(cid) || 0) + 1);
+    }
+    catFilter.innerHTML = "";
+    const allBtn = document.createElement("span");
+    allBtn.className = "tasks-cat-btn" + (state.taskCategoryFilter == null ? " active" : "");
+    allBtn.textContent = "All";
+    allBtn.dataset.catId = "";
+    allBtn.addEventListener("click", () => {
+      state.taskCategoryFilter = null;
+      renderTasksByUser();
+    });
+    catFilter.appendChild(allBtn);
+    for (const cat of state.taskCategories) {
+      const cid = String(cat.id ?? cat.ID ?? "");
+      if (!catTaskCount.has(cid)) continue;
+      const btn = document.createElement("span");
+      btn.className = "tasks-cat-btn" + (state.taskCategoryFilter === cid ? " active" : "");
+      btn.textContent = cat.title || cat.Title || `Cat ${cid}`;
+      btn.dataset.catId = cid;
+      btn.addEventListener("click", () => {
+        state.taskCategoryFilter = cid;
+        renderTasksByUser();
+      });
+      catFilter.appendChild(btn);
+    }
+  }
+
   if (state.taskCategoryFilter != null) {
-    tasks = tasks.filter((t) => String(t.categoryId ?? t.CategoryId ?? "") === state.taskCategoryFilter);
+    tasks = tasks.filter((t) => getTaskCategoryId(t) === state.taskCategoryFilter);
   }
 
   updatePanelTileCount("tile-tasks", tasks.length);

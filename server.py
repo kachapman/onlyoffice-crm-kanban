@@ -35,7 +35,7 @@ try:
 except Exception:
     pass
 from user_profile_store import load_user_profile, save_user_profile
-from mail_scanner import start_scanner, get_scanner_status, get_contractors, update_contractors
+from mail_scanner import start_scanner, get_scanner_status, get_contractors, update_contractors, get_scanner_log
 from event_log_store import append_event_log, load_event_log, list_users_with_logs
 from crm_bot_store import (add_mapping, cancel_code, cancel_code_by_value,
                            generate_code, get_mapping_by_chat, get_pending_codes,
@@ -2224,6 +2224,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         if api_path == "/api/scanner/status":
             _json_response(self, 200, get_scanner_status())
+            return
+        if api_path == "/api/scanner/log":
+            from urllib.parse import parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            limit_str = (qs.get("limit") or [""])[0]
+            limit = 200
+            if limit_str.isdigit():
+                limit = int(limit_str)
+            _json_response(self, 200, {"entries": get_scanner_log(limit)})
             return
 
         route = self._api_route()
