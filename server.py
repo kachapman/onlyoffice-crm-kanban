@@ -35,6 +35,7 @@ try:
 except Exception:
     pass
 from user_profile_store import load_user_profile, save_user_profile
+from mail_scanner import start_scanner, get_scanner_status, get_contractors, update_contractors
 from event_log_store import append_event_log, load_event_log, list_users_with_logs
 from crm_bot_store import (add_mapping, cancel_code, cancel_code_by_value,
                            generate_code, get_mapping_by_chat, get_pending_codes,
@@ -93,6 +94,24 @@ PRESENCE_AUTO_STATUS_TIMEOUT_S = 300  # 5 min — clear auto-status if no dashbo
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 BOT_CRM_EMAIL = os.environ.get("BOT_CRM_EMAIL", "")
 BOT_CRM_PASSWORD = os.environ.get("BOT_CRM_PASSWORD", "")
+
+# Mail scanner config
+SCANNER_ENABLED = os.environ.get("SCANNER_ENABLED", "true").lower() in ("1", "true", "yes")
+SCANNER_POLL_INTERVAL = int(os.environ.get("SCANNER_POLL_INTERVAL", "120"))
+SCANNER_CREATE_DEALS = os.environ.get("SCANNER_CREATE_DEALS", "true").lower() in ("1", "true", "yes")
+SCANNER_CREATE_TASKS = os.environ.get("SCANNER_CREATE_TASKS", "true").lower() in ("1", "true", "yes")
+SCANNER_POST_NOTES = os.environ.get("SCANNER_POST_NOTES", "true").lower() in ("1", "true", "yes")
+SCANNER_NOTIFY_USERS = os.environ.get("SCANNER_NOTIFY_USERS", "true").lower() in ("1", "true", "yes")
+SCANNER_STAGE_NEW_SUPPLEMENT = int(os.environ.get("SCANNER_STAGE_NEW_SUPPLEMENT", "18"))
+SCANNER_STAGE_FLAT_RATE = int(os.environ.get("SCANNER_STAGE_FLAT_RATE", "17"))
+SCANNER_USER_KEN = os.environ.get("SCANNER_USER_KEN", "")
+SCANNER_USER_REBECA = os.environ.get("SCANNER_USER_REBECA", "")
+SCANNER_USER_CLAUDIU = os.environ.get("SCANNER_USER_CLAUDIU", "")
+SCANNER_FIELD_CLAIM_NUMBER = int(os.environ.get("SCANNER_FIELD_CLAIM_NUMBER", "11"))
+SCANNER_FIELD_CRM_JOB_ID = int(os.environ.get("SCANNER_FIELD_CRM_JOB_ID", "26"))
+SCANNER_FIELD_ADDRESS = int(os.environ.get("SCANNER_FIELD_ADDRESS", "4"))
+SCANNER_TASK_CAT_ESTIMATE = int(os.environ.get("SCANNER_TASK_CAT_ESTIMATE", "34"))
+SCANNER_TASK_CAT_FOLLOW_UP = int(os.environ.get("SCANNER_TASK_CAT_FOLLOW_UP", "35"))
 
 
 def _crm_display_name(user_dict: dict[str, Any], user_id: str = "") -> str:
@@ -2199,6 +2218,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self._handle_bot_usage()
             return
 
+        # Mail scanner endpoints
+        if api_path == "/api/scanner/contractors":
+            _json_response(self, 200, get_contractors())
+            return
+        if api_path == "/api/scanner/status":
+            _json_response(self, 200, get_scanner_status())
+            return
+
         route = self._api_route()
         if not route:
             self.send_error(404)
@@ -2307,6 +2334,24 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self._handle_bot_send_message()
             return
 
+        # Mail scanner endpoints
+        if api_path == "/api/scanner/contractors" and method == "PUT":
+            auth = _require_auth(self)
+            if not auth:
+                return
+            portal, token, _user_id = auth
+            if not self._is_admin(portal, token):
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON body"})
+                return
+            result = update_contractors(payload)
+            _json_response(self, 200, result)
+            return
+
         route = self._api_route()
         if not route:
             self.send_error(404)
@@ -2357,6 +2402,36 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 def main() -> None:
     if not PUBLIC.is_dir():
         raise SystemExit(f"Missing public directory: {PUBLIC}")
+
+    # Start mail scanner daemon
+    if PORTAL_URL and BOT_CRM_EMAIL and BOT_CRM_PASSWORD:
+        scanner_config = {
+            "PORTAL_URL": PORTAL_URL,
+            "SCANNER_CRM_EMAIL": BOT_CRM_EMAIL,
+            "SCANNER_CRM_PASSWORD": BOT_CRM_PASSWORD,
+            "SCANNER_ENABLED": SCANNER_ENABLED,
+            "SCANNER_POLL_INTERVAL": SCANNER_POLL_INTERVAL,
+            "SCANNER_CREATE_DEALS": SCANNER_CREATE_DEALS,
+            "SCANNER_CREATE_TASKS": SCANNER_CREATE_TASKS,
+            "SCANNER_POST_NOTES": SCANNER_POST_NOTES,
+            "SCANNER_NOTIFY_USERS": SCANNER_NOTIFY_USERS,
+            "STAGE_NEW_SUPPLEMENT": SCANNER_STAGE_NEW_SUPPLEMENT,
+            "STAGE_FLAT_RATE": SCANNER_STAGE_FLAT_RATE,
+            "USER_KEN": SCANNER_USER_KEN or "",
+            "USER_REBECA": SCANNER_USER_REBECA or "",
+            "USER_CLAUDIU": SCANNER_USER_CLAUDIU or "",
+            "FIELD_CLAIM_NUMBER": SCANNER_FIELD_CLAIM_NUMBER,
+            "FIELD_CRM_JOB_ID": SCANNER_FIELD_CRM_JOB_ID,
+            "FIELD_ADDRESS": SCANNER_FIELD_ADDRESS,
+            "TASK_CAT_ESTIMATE": SCANNER_TASK_CAT_ESTIMATE,
+            "TASK_CAT_FOLLOW_UP": SCANNER_TASK_CAT_FOLLOW_UP,
+            "SSL_VERIFY": SSL_VERIFY,
+        }
+        start_scanner(scanner_config)
+        print(f"Mail scanner: {'enabled' if SCANNER_ENABLED else 'disabled'} (interval: {SCANNER_POLL_INTERVAL}s)")
+    else:
+        print("Mail scanner: not configured (set SCANNER_CRM_EMAIL/PASSWORD or ONLYOFFICE_PORTAL_URL)")
+
     server = ThreadingHTTPServer(("0.0.0.0", PORT), KanbanHandler)
     print(f"CRM Kanban dashboard: http://127.0.0.1:{PORT}")
     if PORTAL_URL:

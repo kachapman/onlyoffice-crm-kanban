@@ -382,6 +382,7 @@ const state = {
   customFieldDefs: [],
   customFieldById: new Map(),
   taskCategories: [],
+  taskCategoryFilter: null,
   newTaskOpportunity: { id: null, title: "" },
   dealEdit: null,
   quickNote: null,
@@ -1879,6 +1880,7 @@ function renderTasksTile() {
           <select id="tasks-user-filter"></select>
         </label>
       </div>
+      <div class="tasks-cat-filter"></div>
       <div id="tasks-by-user" class="tasks-by-user"></div>
     `;
     $("#dashboard-panel-row")?.appendChild(tile);
@@ -1888,6 +1890,35 @@ function renderTasksTile() {
   ensurePanelToolbarCount(tile, tileId);
   ensureTileAutoRefreshButton(tile, tileId);
   ensureTasksNewTaskButton(tile);
+
+  // Rebuild category filter tabs
+  const catFilter = tile?.querySelector(".tasks-cat-filter");
+  if (catFilter) {
+    const cats = state.taskCategories;
+    catFilter.innerHTML = "";
+    const allBtn = document.createElement("span");
+    allBtn.className = "tasks-cat-btn" + (state.taskCategoryFilter == null ? " active" : "");
+    allBtn.textContent = "All";
+    allBtn.dataset.catId = "";
+    allBtn.addEventListener("click", () => {
+      state.taskCategoryFilter = null;
+      renderTasksByUser();
+    });
+    catFilter.appendChild(allBtn);
+    for (const cat of cats) {
+      const cid = String(cat.id ?? cat.ID ?? "");
+      const btn = document.createElement("span");
+      btn.className = "tasks-cat-btn" + (state.taskCategoryFilter === cid ? " active" : "");
+      btn.textContent = cat.title || cat.Title || `Cat ${cid}`;
+      btn.dataset.catId = cid;
+      btn.addEventListener("click", () => {
+        state.taskCategoryFilter = cid;
+        renderTasksByUser();
+      });
+      catFilter.appendChild(btn);
+    }
+  }
+
   if (tile && !tile.dataset.tasksFilterBound) {
     tile.dataset.tasksFilterBound = "1";
     $("#tasks-user-filter", tile)?.addEventListener("change", () => {
@@ -18631,6 +18662,7 @@ async function loadTasks({ force = false } = {}) {
     showTileCollapsedHint("tile-tasks", "Minimized — expand to load tasks");
     return;
   }
+  await loadTaskCategories({ force });
   renderTasksTile();
   const params = new URLSearchParams({ startIndex: "0", count: "200", isClosed: "false" });
   const filterUser = $("#tasks-user-filter")?.value;
@@ -19021,6 +19053,9 @@ function renderTasksByUser() {
   let tasks = state.tasks;
   if (filterUser) {
     tasks = tasks.filter((t) => String(t.responsible?.id) === String(filterUser));
+  }
+  if (state.taskCategoryFilter != null) {
+    tasks = tasks.filter((t) => String(t.categoryId ?? t.CategoryId ?? "") === state.taskCategoryFilter);
   }
 
   updatePanelTileCount("tile-tasks", tasks.length);

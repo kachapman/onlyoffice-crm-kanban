@@ -2065,6 +2065,36 @@ body {
   color: var(--text);
 }
 
+.tasks-cat-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.15rem 1rem 0.35rem;
+  flex-shrink: 0;
+}
+
+.tasks-cat-btn {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  background: var(--surface-1);
+  color: var(--text);
+  user-select: none;
+  white-space: nowrap;
+}
+
+.tasks-cat-btn:hover {
+  background: var(--surface-3);
+}
+
+.tasks-cat-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
 .task-row label a:first-of-type,
 .tasks-list-row label a:first-of-type {
   color: #d4942b;

@@ -2,6 +2,17 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [Unreleased]
+
+### New features
+
+- **Auto mail scanner daemon.** New `mail_scanner.py` polls CRM inbox every 120s, classifies emails via 12 ordered rules (Acculynx supplements/jobs, JobNimbus tasks/jobs, reconciliation, adjuster actions, carrier emails, claim-code BCC records, and more), and automatically creates deals, tasks, notes with tags and notifications. Three-level dedup (job ID → claim # → name+address) prevents duplicate deals. Tags are fetched from CRM on startup for canonical title lookup. Config via `.env` (user GUIDs, stage IDs, field IDs, task category IDs). Scanner wires into `server.py` as a background daemon thread. Admin API at `GET/PUT /api/scanner/contractors` and `GET /api/scanner/status`. Body sanitization strips HTML and prevents injection. See `docs/MAIL_SCANNER_PLAN.md` for full architecture.
+
+- **Tasks tile category filter.** New pill-button row (All, Estimate, Follow-Up, etc.) below the user filter in the tasks tile. Clicking a tab filters `state.tasks` by `categoryId`. Tabs are rebuilt from `state.taskCategories` on each render. CSS styles for `.tasks-cat-filter` and `.tasks-cat-btn` with active/hover states.
+
+### Files changed
+- `mail_scanner.py` (new), `server.py`, `public/app.js`, `public/styles.css`, `.env`, `CHANGELOG.md`, `AGENTS.md`, `docs/MAIL_SCANNER_PLAN.md`
+
 ## [2.2.1] — 2026-07-08
 
 ### Bug fixes
