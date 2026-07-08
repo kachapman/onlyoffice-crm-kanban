@@ -2330,7 +2330,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         # Invalidate proxy cache on successful mutations so long TTLs are safe.
         if status < 400:
             p = api_path.lower()
-            if "/crm/opportunity/tag" in p:
+            if "/crm/opportunity/tag" in p or re.search(r"/crm/opportunity/\d+/tag", p):
                 _proxy_cache.invalidate_prefix("GET:/api/2.0/crm/opportunity/tag")
                 _proxy_cache.invalidate_prefix("GET:/api/2.0/crm/opportunity/filter")
                 # Also invalidate the single-opp cache line for the affected opportunity

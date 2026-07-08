@@ -5636,13 +5636,14 @@ async function enrichOpportunitiesTags(items, force = false) {
     }
   } catch {
     // Fallback: individual requests if batch endpoint fails
+    const tagOpts = force ? { headers: { "X-Force-Refresh": "1" }, cache: "reload" } : {};
     await Promise.allSettled(
       uncached.map(async (opp) => {
         const id = opp.id ?? opp.ID;
         if (id == null) return;
         try {
           const tagPath = `/api/2.0/crm/opportunity/tag/${id}`;
-          const tags = unwrapEntityTags(await api(tagPath));
+          const tags = unwrapEntityTags(await api(tagPath, tagOpts));
           if (tags.length) {
             opp.tags = tags;
             state.oppTagCache?.set(id, tags);
@@ -8526,7 +8527,7 @@ function bindFeedHiddenModal() {
 }
 
 const TILE_REFRESH_ICON_HTML = `<svg class="tile-refresh-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M21 21v-5h-5"/></svg>`;
-const GROUP_NUKE_ICON_HTML = `<svg class="tile-refresh-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M15.349 5.349l3.301 3.301a1.2 1.2 0 0 1 0 1.698l-.972 .972a7.5 7.5 0 1 1 -5 -5l.972 -.972a1.2 1.2 0 0 1 1.698 0l.001 .001" /><path d="M17 7l1.293 -1.293a2.414 2.414 0 0 0 .707 -1.707a1 1 0 0 1 1 -1h1" /><path d="M7 13a3 3 0 0 1 3 -3" /></svg>`;
+const GROUP_NUKE_ICON_HTML = `<svg class="tile-refresh-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M13.5 14.6l3 5.19a9 9 0 0 0 4.5 -7.79h-6a3 3 0 0 1 -1.5 2.6" /><path d="M13.5 9.4l3 -5.19a9 9 0 0 0 -9 0l3 5.19a3 3 0 0 1 3 0" /><path d="M10.5 14.6l-3 5.19a9 9 0 0 1 -4.5 -7.79h6a3 3 0 0 0 1.5 2.6" /></svg>`;
 
 let lastDashboardActivityAt = Date.now();
 let panelTileAutoRefreshTimer = null;
@@ -9460,7 +9461,7 @@ async function submitDealEditForm(e) {
           try {
             const updatedOpp = await fetchOpportunityForUpdate(oppId);
             if (!updatedOpp) { await refreshGroup(group, { force: true }); return; }
-            await enrichOpportunitiesTags([updatedOpp]);
+            await enrichOpportunitiesTags([updatedOpp], true);
             indexOpportunity(updatedOpp);
             const oppIdx = group.opportunities.findIndex(o => Number(o.id ?? o.ID) === oppId);
             const oldStageId = oppIdx >= 0 ? Number(group.opportunities[oppIdx].stage?.id ?? group.opportunities[oppIdx].stage?.ID) : null;
@@ -9811,7 +9812,7 @@ async function submitQuickNoteForm(e) {
           try {
             const updatedOpp = await fetchOpportunityForUpdate(oppId);
             if (!updatedOpp) { await refreshGroup(group, { force: true }); return; }
-            await enrichOpportunitiesTags([updatedOpp]);
+            await enrichOpportunitiesTags([updatedOpp], true);
             indexOpportunity(updatedOpp);
             const oppIdx = group.opportunities.findIndex(o => Number(o.id ?? o.ID) === oppId);
             if (oppIdx >= 0) group.opportunities[oppIdx] = updatedOpp;
@@ -19391,10 +19392,14 @@ async function refreshGroup(group, opts = {}) {
   }
   // On a manual force-refresh, clear the filter result cache for this group so
   // we always fetch fresh data from the CRM (not a 30-second stale cached response).
+  // Also clear the tag cache so tags are re-fetched fresh from the server.
   if (force) {
     const baseQs = buildFilterQuery(group);
     const cacheKey = `${group.id}::${baseQs}`;
     state.filterResultCache?.delete(cacheKey);
+    if (_manualGroupTileRefresh) {
+      state.oppTagCache?.clear();
+    }
   }
   // Show tile-level loading indicator after 200ms (avoids flash on fast/cached refreshes)
   let loadingTimer;
