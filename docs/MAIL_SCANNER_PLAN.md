@@ -694,7 +694,66 @@ All of these are off by default (DRY RUN). Each has an independent checkbox in B
 
 Toggles are stored under `action_toggles` (or inside `scanner_behavior`) in the config file. Scanner service applies them at every decision point and logs which toggle allowed (or blocked) the action.
 
-## 13. Research Commands (run on/against the CRM server as the bot)
+## 13. Research Results (live run on CRM droplet 2026-07-11)
+
+### Key findings from `/api/2.0/mail/conversations.json` (bot account)
+
+Conversations from **both inboxes** are returned mixed (as expected for the bot login). Useful fields observed:
+
+- `to` — present on many items (e.g. "Aplus@vanguardadj.com", specific contractor estimate addresses, "Vanguard Adjusting - Team" <Aplus@vanguardadj.com>)
+- `folder: 1` — common for inbox items
+- No top-level `mailboxId` or `accountId` visible on individual conversation objects in the sample, but the separate mailboxes are queryable via accounts.
+
+Example records:
+- Action-like: to: Aplus@vanguardadj.com (requests@ inbox)
+- Record-like: to: a contractor's own estimate address (e.g. elfernandez@acg.aaa.com) — typical BCC of outbound mail
+- From contractor sending domains (estimates@baneyconstruction.online, aplus.estimates@outlook.com) often appear with bare claim subjects or "Fwd:" + reconciliation language.
+
+### Mail accounts (the two inboxes)
+
+From `GET /api/2.0/mail/accounts`:
+
+- mailboxId: 20
+  - email: requests@sherwoodestimates.com
+  - name: "Contractor Requests"
+  - isDefault: true
+
+- mailboxId: 21
+  - email: crm@vanguardadj.online
+  - name: ""
+  - isDefault: false
+
+These are the two distinct mailboxes visible to the bot.
+
+### History categories (for notes)
+
+From `GET /api/2.0/crm/history/category`:
+
+- 38 Note
+- **39 Email**   ← use this for "most recent sanitized body" notes on record inbox (and carrier-style)
+- 40 Phone call
+- 42 Text
+- 41 Appointment
+- 47 Customer Update
+- 48 Quick Context
+
+### Mail tags
+
+Top tags returned: -5 Lead, -6 Customer, -7 Supplier, -8 Staff.  
+"Bot Review" (the custom tag the scanner applies) was not in the first page; it is created in the Mail module UI under the bot account and referenced by numeric id at runtime (see `_get_bot_review_mail_tag_id` and cached tags logic).
+
+### Detection strategy (updated from research)
+
+1. **Preferred**: Use `mailboxId` / account context if the API surfaces it on convs or via query params (`?mailboxId=20|21` or similar). Fall back to accounts list.
+2. **Strong heuristic** (proven by samples):
+   - `to` contains one of the record inbox addresses (crm@vanguardadj.online or the shared Aplus/requests team addresses in BCC context) **or**
+   - `from` matches contractor sending domains (estimates@baneyconstruction.online, aplus.estimates@outlook.com, etc.) **and** the mail looks like outbound/BCC (to a carrier or the contractor's own estimate address).
+3. `folder: 1` is the inbox folder for both; not distinguishing by itself.
+4. Log `source_inbox` + the raw `to`/`from`/`mailboxId` (if present) on every processed item.
+
+This data replaces the previous "unknown" signal. Implementation of `_detect_mailbox` can now be written with these concrete keys.
+
+## 14. Research Commands (run on/against the CRM server as the bot) (historical template)
 
 These are safe read-only inspection commands. Capture the JSON for a few records from each inbox and note the exact keys.
 
