@@ -31,6 +31,55 @@
   - Each cycle: small number of CRM REST calls
   - ML (sentence-transformers/all-MiniLM-L6-v2 + head): <500 MB RAM target at inference
 
+### Memory & container reality on CRM droplet (research run 2026-07-11, live output)
+
+From the exact commands run on the droplet (68.183.130.39):
+
+- Total RAM: 7.8 GiB
+  - Used: 4.7 GiB (64%)
+  - Available: ~2.3 GiB
+  - Swap: 6 GiB with 1.3 GiB used (22%)
+- Root disk: 233 GiB, 57% used.
+
+**OnlyOffice runs as exactly 5 containers** (official one-click images, no single "onlyoffice" container):
+
+| Container                        | Image                                 | Memory (typical) | Notes |
+|----------------------------------|---------------------------------------|------------------|-------|
+| onlyoffice-community-server     | onlyoffice/communityserver:12.7.1.1942 | ~2.8 GiB (36%)  | Main CRM + Mail module + **nginx inside** |
+| onlyoffice-document-server      | onlyoffice/documentserver:9.3.1.2     | ~0.54 GiB       | - |
+| onlyoffice-control-panel        | onlyoffice/controlpanel:3.5.4.541     | ~65 MiB         | - |
+| onlyoffice-elasticsearch        | onlyoffice/elasticsearch:7.16.3       | ~1.66 GiB (21%) | - |
+| onlyoffice-mysql-server         | mysql:8.0.29                          | ~0.43 GiB       | - |
+
+**Rough OnlyOffice total ≈ 5.5 GiB** → ~2.3 GiB headroom before swap pressure.
+
+**Nginx location:**
+- **No nginx on the host** (`nginx` command not found, no `/etc/nginx/sites-enabled`).
+- Nginx runs **inside** onlyoffice-community-server.
+- On startup the container does: `mv .../prepare-onlyoffice /etc/nginx/sites-enabled/onlyoffice`, then manages nginx.
+- Host ports 80/443/5222 are published via docker-proxy directly to the community-server container.
+
+**Docker networks (key for scanner service):**
+- `onlyoffice` (bridge, 172.18.0.0/16) — the network used by all 5 OnlyOffice containers.
+- `onlyoffice_default` (172.19.0.0/16)
+- Community server is reachable from other containers on this network by name `onlyoffice-community-server`.
+
+**Volumes:**
+- Community data typically at `/var/www/onlyoffice/Data` inside container (source often `/app/onlyoffice/CommunityServer/data` or named volume).
+- A volume named `crm-kanban_dashboard-data` was visible (historical).
+
+**Current services:**
+- No scanner, no extra mail-bot containers running.
+- Only the 5 OnlyOffice ones.
+
+**Implications for new scanner service container:**
+- Place the scanner service container on the `onlyoffice` Docker network.
+- It can call the CRM API at `http://onlyoffice-community-server` (port 80 inside the network) using bot credentials.
+- Memory budget for scanner + sentence-transformers/all-MiniLM-L6-v2 + head: comfortably **< 600 MiB**.
+- Dashboard (separate 1 GB droplet) will talk to the scanner service on the CRM droplet's public IP + a chosen port (e.g. 8787), or via internal networking if available.
+
+This matches the two-droplet model: heavy work + OnlyOffice on the 8 GB droplet; UI + admin only on the 1 GB droplet.
+
 ### Process model
 - Scanner logic lives in its own container (separate Dockerfile / compose service on CRM droplet).
 - It uses bot credentials (`BOT_CRM_EMAIL` / `BOT_CRM_PASSWORD`) to call CRM APIs directly.
