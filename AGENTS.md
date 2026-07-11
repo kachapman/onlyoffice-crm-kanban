@@ -1,7 +1,23 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
 **Current version:** 2.2.1 (released 2026-07-08; see CHANGELOG.md)  
-**Last session summary (for next resume):** Built auto mail scanner daemon (`mail_scanner.py`): polls CRM inbox every 120s, 12 classifier rules (Acculynx, JobNimbus, reconciliation, adjuster/carrier, claim code BCC, etc.), three-level dedup (job ID → claim # → name+address), action dispatcher (create deal/task/note/tag/link email), body sanitization, tag cache fetch on startup. Wired into `server.py` as daemon thread with `.env` config (user GUIDs, field IDs, stage IDs, task cat IDs). Admin API endpoints: `GET/PUT /api/scanner/contractors`, `GET /api/scanner/status`. Client-side: task tile category filter tabs (All, Estimate, Follow-Up) in `renderTasksTile`/`renderTasksByUser` with CSS pill buttons. Contractor config auto-generated in `data/mail_scanner/contractors.json`. Full plan at `docs/MAIL_SCANNER_PLAN.md`. Scanner admin built inside CRM Mail Quick View modal as new "Scanner Admin" tab (tab bar at top switches Inbox/Admin). Admin tab has sub-nav: Status, Log (with limit/refresh), editable Assignee Rules (checkboxes per classification rule saved via PUT /api/scanner/contractors), and Contractors list. Scanner now uses configurable assignee_rules from contractors.json instead of hardcoded UUIDs — 12 rules map friendly names (ken/rebeca/claudiu) to env-var UUIDs. Prior: v2.2.1 deployed — tag cache fix.
+**Last session summary (for next resume):** 
+- **Docs updated + branch push (2026-07-11).** Started build phase after user answers. Updated `docs/MAIL_SCANNER_PLAN.md` (and CHANGELOG/AGENTS) with:
+  - Two-droplet architecture: scanner service (incl. ML) as independent container on **CRM droplet** (8 GB). Dashboard droplet (1 GB) only UI + admin + proxies.
+  - Credentials: use `bot@vanguardadj.com` (BOT_CRM_*) for **scanner** and the entire **CRM Mail Quick View (Inbox tab)** for all dashboard users → unified view of both inboxes + bot mail tags.
+  - Admin tab gated by secret token (login prompt in UI; unlocks Behavior etc.).
+  - Granular per-action toggles for **every** action function (link, notes variants, task variants, tags, mark, etc.). Dry-run default (all off).
+  - Record inbox (crm@vanguardadj.online + contractor sending domains): hard link-only + optional most-recent sanitized body as "Email" note (gated by its toggle).
+  - Strongest matches = claim + CRM Job/ID with dash normalization. owner_name_title demoted on record/sending.
+  - Ack/OOO/delay language → actionable review task (notify customer of delay).
+  - Task hygiene: claim + customer title; most-recent request in desc.
+  - ML: start with sentence-transformers/all-MiniLM-L6-v2 + logistic/kNN head (feature only) inside CRM scanner container.
+  - Mail tag mirroring in quick view (visible because bot inbox is now shared).
+  - Research commands (run as bot on CRM server) to discover real to/cc/account/folder signals, tags, Email category, etc.
+  - Updated phases in MAIL_SCANNER_PLAN.md (Phase 0 = research, then unified bot view, granular toggles, scanner service, ML, verification).
+- All work on `email_scanner` branch (separate from main). No main commits.
+- Next: run research commands on CRM server, then implement mailbox detection + bot-creds quick view + granular toggles + record link-only path.
+- Git snapshot captured below.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 

@@ -4,9 +4,22 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 ## [Unreleased]
 
-### New features
+### Architecture & mail scanner plan (2026-07-11)
 
-- **Auto mail scanner daemon.** New `mail_scanner.py` polls CRM inbox every 120s, classifies emails via 12 ordered rules (Acculynx supplements/jobs, JobNimbus tasks/jobs, reconciliation, adjuster actions, carrier emails, claim-code BCC records, and more), and automatically creates deals, tasks, notes with tags and notifications. Three-level dedup (job ID → claim # → name+address) prevents duplicate deals. Tags are fetched from CRM on startup for canonical title lookup. Config via `.env` (user GUIDs, stage IDs, field IDs, task category IDs). Scanner wires into `server.py` as a background daemon thread. Admin API at `GET/PUT /api/scanner/contractors` and `GET /api/scanner/status`. Body sanitization strips HTML and prevents injection. See `docs/MAIL_SCANNER_PLAN.md` for full architecture.
+- **Two-droplet model locked in.** Scanner (including optional ML) runs as an independent Docker container on the **CRM droplet** (8 GB). Dashboard droplet (1 GB) only hosts the UI, admin surface, and proxies to the scanner service. Scanner service uses bot credentials for all CRM calls.
+- **Unified bot inbox for Mail Quick View + scanner.** The CRM Mail Quick View (Inbox tab) now uses `bot@vanguardadj.com` credentials for **all** dashboard users. Everyone sees the same two inboxes (crm@vanguardadj.online record + requests@sherwoodestimates.com action) plus any bot-linked/shared mail and bot-applied mail tags (e.g. "Bot Review"). Personal per-user inboxes are no longer shown in this quick view.
+- **Admin tab gated by secret token.** Scanner Admin (Behavior, Identity, Rules, Log, remote scanner status) requires an admin secret token entered in the UI before controls are unlocked. Inbox tab remains open to any logged-in user.
+- **Granular per-action toggles.** Every action function now has its own toggle (link_email, post_notes/record_post_note, create_tasks/*_create_task variants, create_deals, notify_users, apply_bot_review_mail_tag, mark_read, etc.). All off by default (DRY RUN). Toggles are live, persisted, and logged.
+- **Record inbox policy hardened.** crm@vanguardadj.online (and contractor sending-domain BCCs) = link-only. Optional most-recent sanitized body as "Email" history note category only when its specific toggle is on + strong match. No tasks. No Bot Review tasks.
+- **Strongest unique matches + normalization.** Claim # and CRM Job/ID (custom fields) are primary. All claim codes are dash-normalized (strip non-alphanum) for search and comparison. owner_name_title is demoted for record/sending-domain contexts.
+- **Ack / OOO / delay language policy.** On carrier paths: suppress pure "adjuster wants" tasks. On contractor forwards containing receipt/away/review-time/delay/OOO language: create actionable review task ("notify customer of delay").
+- **Task hygiene.** Titles: claim + customer (+ requester if inferable). Description = sanitized most-recent request body + mail deep link.
+- **ML starting point.** sentence-transformers/all-MiniLM-L6-v2 + logistic/kNN head (feature/tie-breaker only). Runs inside the CRM-droplet scanner container. Bootstrap from hundreds of recent logs + human corrections.
+- **Mail tag mirroring.** Because the quick view now uses the bot inbox, scanner-applied tags (Bot Review etc.) are visible. Quick view will surface and allow basic mirroring of bot mail module tags.
+- **Research commands added.** Safe read-only commands (run as bot on CRM server) to discover exact `to`/`cc`/`account`/`folder` signals, tag shapes, history "Email" category, etc.
+- **Docs updated.** `docs/MAIL_SCANNER_PLAN.md` now leads with the two-droplet + bot-creds + token-gate + granular-toggles architecture, updated phases, and research commands. AGENTS.md + CHANGELOG updated. Work stays on the `email_scanner` branch.
+
+### New features (prior scanner work, still relevant)
 
 - **Tasks tile category filter.** New pill-button row (All, Estimate, Follow-Up, etc.) below the user filter in the tasks tile. Clicking a tab filters `state.tasks` by `categoryId`. Tabs are rebuilt from `state.taskCategories` on each render. CSS styles for `.tasks-cat-filter` and `.tasks-cat-btn` with active/hover states.
 
@@ -15,6 +28,35 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 ### Files changed
 - `mail_scanner.py` (new), `server.py`, `public/app.js`, `public/styles.css`, `public/index.html`, `.env`, `config.example.env`, `CHANGELOG.md`, `AGENTS.md`, `docs/MAIL_SCANNER_PLAN.md`
+
+### Scanner hardening (this session)
+- Timestamp + content dedup gate: `_poll_inbox` now stores `sigs` alongside IDs; skips re-processing when `receivedDate`/`chainDate` + (claim|from|coarse-date|body-hash) matches a prior forward/resent. ID-only was insufficient for resends.
+- +1 day ET deadline on all tasks (was +7). Uses America/New_York when zoneinfo available.
+- JN task descriptions now cleaned: strips "-------- Forwarded Message", Subject/From/Date headers, "Automation (Contact) via JobNimbus", and raw send/receive blocks. Appends `Mail: /addons/mail/...#conversation/{id}` deep link.
+- Explicit "no deal" logging: `no_deal:true` + `no_deal_reason` set for carrier/uncertain/weak/Accln/other paths (no strong match). Visible in admin log and tmp_force_reprocess.py.
+- Preview expand for scanner-linked mail: `fetchMailMessage` now falls back to `/api/2.0/mail/conversation/{id}.json?loadAll=false` and extracts first message when `/messages/{id}` 404s (common when scanner stores convId).
+- Delete × now allowed on mail-linked history items (scanner links) in opp preview, not just plain notes.
+- Updated docs/AGENTS/CHANGELOG + tmp_force_reprocess verification print.
+
+### Mail scanner policy & two-inbox model (this session)
+- **Critical context added**: Two distinct inboxes with different policies.
+  - crm@vanguardadj.online (record/BCC inbox): only CC/BCC correspondence. Contractor sending addresses (estimates@baneyconstruction.online, aplus.estimates@..., etc.) appear here for outbound mail. Policy = **link to deal only**. No tasks, no notes (or minimal record notes), no Bot Review tasks.
+  - requests@sherwoodestimates.com (action inbox): all real work (Acculynx, JobNimbus, forwarded carrier responses with asks, supplements, etc.). Full classification + actions allowed.
+- Early mailbox detection required in classifier. Outbound BCC records from contractor "sending domains" must never create tasks.
+- Reformulated inference fixes needed after live run: wrong strong matches via owner_name_title + claim code (e.g. 872 vs 1136), ack/receipt mail misclassified as "adjuster wants", raw subject used as task title, outbound mail from estimates@baney... treated as inbound.
+- Dry-run now defaults to all-false in contractors.json + server startup (with auto-create of the key). _is_dry_run() + early return in _poll_inbox + guards on link/tag/mark/note/task/mail-tag.
+- Behavior tab + /api/scanner/config remain for live toggles; record-inbox link-only is a hard policy.
+- Added plan for lightweight inference: sentence-transformers/all-MiniLM-L6-v2 + logistic regression/kNN (or small head). ~90MB model, <500MB RAM, sub-100ms, trains in seconds on CPU. To be used as a feature for "actionable vs ack vs record" and tie-breaking, not sole decider. Fits easily on the CRM droplet (8GB).
+- Strong_custom_field_ids updated to [26,11,12,4,2] + phone [2] (Customer Phone) from live CRM definitions.
+- Mail tagging now uses the exact captured payload: PUT /api/2.0/mail/conversations/tag/{tagId}/set.json?__={ms} with body messages[]=... (plus fallbacks + verbose logging).
+- Docs updated: MAIL_SCANNER_PLAN.md now leads with the two-inbox section and includes the ML classifier track. AGENTS.md + CHANGELOG updated. Branch kept separate ("email_scanner").
+
+### Prior scanner items (still relevant)
+- No more "Review carrier email" tasks for carrier/insurance mail.
+- Reconciliation literal first.
+- Bot Review mail tag for ambiguous/unlinked (in action inbox only).
+- Note safety + truncation.
+- Scanner identity UI (restart required).
 
 ## [2.2.1] — 2026-07-08
 
