@@ -7808,6 +7808,8 @@ async function fetchFeedMailInitial(periodFrom, existingRaw = []) {
   for (const q of queries) {
     if (atFeedCap()) break;
     try {
+      // These are feed-notification mail pulls (not the CRM Mail Quick View modal).
+      // All /api/2.0/mail* traffic still goes through the server, which forces bot credentials.
       const rows = unwrap(await api(`/api/2.0/mail/messages?${q}`));
       for (const mail of rows) {
         if (atFeedCap()) break;
@@ -7846,6 +7848,7 @@ async function fetchFeedMailBatch(periodFrom, pagination) {
 
   let rows = [];
   try {
+    // Feed mail batch (not the CRM Mail Quick View modal). Still proxied via server bot creds.
     rows = unwrap(await api(`/api/2.0/mail/messages?${q}`));
   } catch {
     pagination.mailExhausted = true;
@@ -13759,6 +13762,21 @@ function getMailMessageIsRead(m) {
   return false;
 }
 
+function getMailTags(m) {
+  if (!m || typeof m !== 'object') return [];
+  let raw = m.tags || m.Tags || m.tagList || m.tagIds || m.TagIds || m.labels || m.Labels || m.tag || [];
+  if (!Array.isArray(raw)) {
+    if (typeof raw === 'string') raw = raw.split(',').map(s => s.trim()).filter(Boolean);
+    else if (raw && typeof raw === 'object') raw = Object.values(raw);
+    else raw = [];
+  }
+  return (raw || []).map(x => {
+    if (typeof x === 'string') return x;
+    if (x && typeof x === 'object') return x.title || x.name || x.displayName || x.label || x.Tag || x.text || String(x.id || x.ID || x.tagId || '');
+    return String(x || '');
+  }).map(s => s.trim()).filter(Boolean);
+}
+
 function bindMailInboxButton() {
   const btn = $("#mail-inbox-btn");
   if (!btn || btn.dataset.bound) return;
@@ -13784,6 +13802,8 @@ async function openMailInboxModal() {
   resetQuickLinkSidebar();
   mailState = { accounts: [], messages: [], pageSize: 50, search: '', selected: new Set() };
   $("#mail-search-input").value = "";
+  // Note: the server forces all /api/2.0/mail* (GET + mutations) through bot credentials.
+  // Everyone sees the same shared bot view of the two inboxes + bot mail tags.
   await loadMailMessagesForModal();
   attachMailModalListeners();
   _appendMailInboxTabListeners();
@@ -14054,6 +14074,8 @@ async function loadMailAccountsForModal() {
   if (!sel) return;
   sel.innerHTML = '<option value="">Default / All accounts</option>';
   try {
+    // Account list for the (now-unified) bot inbox view in the modal.
+    // The server forces this through bot credentials as well.
     const data = await api("/api/2.0/mail/accounts");
     const accts = unwrap(data) || [];
     mailState.accounts = accts;
@@ -14078,6 +14100,9 @@ async function loadMailMessagesForModal() {
   if (!list) return;
   list.innerHTML = '<div class="mail-loading">Loading emails…</div>';
 
+  // All /api/2.0/mail* traffic (including this) is forced by the server through the bot credentials
+  // (BOT_CRM_EMAIL / BOT_CRM_PASSWORD). This makes the CRM Mail Quick View show the exact same
+  // two inboxes + bot mail tags to every dashboard user. Personal inboxes are excluded.
   const searchVal = ($("#mail-search-input")?.value || "").trim();
   let q = `folder=1&page_size=50&sort=date&sortorder=descending`;
   if (searchVal) q += `&search=${encodeURIComponent(searchVal)}`;
@@ -14129,6 +14154,7 @@ function renderMailList(msgs) {
     <input type="checkbox" id="mail-cb-all" />
     <div class="mail-from"><strong>From</strong></div>
     <div class="mail-subject"><strong>Subject</strong></div>
+    <div class="mail-tags"><strong>Tags</strong></div>
     <div class="mail-date"><strong>Date</strong></div>
   `;
   list.appendChild(header);
@@ -14153,6 +14179,11 @@ function renderMailList(msgs) {
     const subj = (m.subject || m.Subject || "(no subject)").toString();
     const date = m.date || m.receivedDate || m.Date || "";
     const dateStr = date ? new Date(date).toLocaleDateString() + " " + new Date(date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : "";
+    const tags = getMailTags(m);
+    const tagChips = tags.length ? tags.map(t => {
+      const cls = /bot.?review/i.test(t) ? "mail-tag-chip bot-review" : "mail-tag-chip";
+      return `<span class="${cls}">${escapeHtml(t)}</span>`;
+    }).join("") : "";
 
     const item = document.createElement("div");
     item.className = "mail-item";
@@ -14172,6 +14203,7 @@ function renderMailList(msgs) {
       <input type="checkbox" class="mail-cb" data-id="${escapeHtml(id)}" ${mailState.selected.has(id) ? "checked" : ""} />
       <div class="mail-from" title="${escapeHtml(from)}">${escapeHtml(from).slice(0,28)}</div>
       <div class="mail-subject" title="${escapeHtml(subj)}">${escapeHtml(subj).slice(0,80)}</div>
+      <div class="mail-tags">${tagChips}</div>
       <div class="mail-date">${escapeHtml(dateStr)}</div>
     `;
 
@@ -15484,12 +15516,31 @@ async function fetchMailMessage(messageId) {
     try {
       const data = await api(path);
       const mail = data?.response ?? data?.result ?? data;
-      oppPreviewMailCache.set(id, mail);
-      return mail;
+      if (mail && typeof mail === "object") {
+        oppPreviewMailCache.set(id, mail);
+        return mail;
+      }
     } catch (err) {
       lastErr = err;
     }
   }
+
+  // Fallback for scanner-linked conversations: treat id as conversation id
+  // (scanner uses id_message=convId on link; some history events expose conv id as messageId)
+  try {
+    const convData = await api(`/api/2.0/mail/conversation/${id}.json?loadAll=false`);
+    const conv = convData?.response ?? convData?.result ?? convData;
+    const msgs = Array.isArray(conv?.messages) ? conv.messages : Array.isArray(conv?.Messages) ? conv.Messages : [];
+    if (msgs.length > 0) {
+      const m0 = msgs[0] || {};
+      // Cache under the id we were asked for (may be conv id)
+      oppPreviewMailCache.set(id, m0);
+      return m0;
+    }
+  } catch (err) {
+    lastErr = err;
+  }
+
   throw lastErr || new Error("Could not load mail message");
 }
 
@@ -15655,7 +15706,8 @@ function renderHistoryEventItem(ev) {
   const mailPayload = parseHistoryMailPayload(ev);
   const mailIds = extractMailMessageIds(ev);
   const messageId = mailIds[0] || mailPayload?.messageId || null;
-  const isDeletableNote = isDeletableHistoryCategory(ev) && !messageId && !mailPayload && !isHistoryMailEvent(ev, mailPayload);
+  // Allow delete × for regular notes AND for linked mail history items (scanner links etc.)
+  const isDeletableNote = isDeletableHistoryCategory(ev) || isHistoryMailEvent(ev, mailPayload) || !!messageId || !!mailPayload;
 
   const metaRow = document.createElement("div");
   metaRow.className = "opp-preview-history-meta-row";
@@ -17689,7 +17741,7 @@ function bindEventLogModal() {
 // ── Scanner Admin (inside mail modal) ──
 
 function _scannerShowSection(showId) {
-  const sections = ["scanner-admin-status", "scanner-admin-log", "scanner-admin-rules", "scanner-admin-contractors"];
+  const sections = ["scanner-admin-status", "scanner-admin-log", "scanner-admin-rules", "scanner-admin-contractors", "scanner-admin-identity", "scanner-admin-behavior"];
   for (const id of sections) {
     const el = document.getElementById(id);
     if (el) el.style.display = id === showId ? "" : "none";
@@ -17702,8 +17754,12 @@ async function _renderScannerAdminStatus() {
   try {
     const res = await fetch("/api/scanner/status", { credentials: "same-origin" });
     const s = await res.json();
+    const acct = s.scanner_account_hint ? `title="Current scanner account: ${escapeHtml(s.scanner_account_hint)}"` : "";
+    const strongF = (s.strong_custom_field_ids || []).join(", ") || "11,26,4 (default)";
+    const dry = !(s.create_deals || s.create_tasks || s.post_notes || s.notify_users);
     el.innerHTML = `
       <div class="scanner-status-display">
+        ${dry ? '<div style="background:#fee2e2;color:#991b1b;padding:.25rem .5rem;margin-bottom:.5rem;border-radius:4px;font-weight:600;">DRY RUN — no tasks, notes, links, tags or notifications will be created.</div>' : ''}
         <span class="label">Status</span><span class="value">${s.enabled ? "Enabled" : "Disabled"}</span>
         <span class="label">Poll interval</span><span class="value">${s.poll_interval_s}s</span>
         <span class="label">Total processed</span><span class="value">${s.total_processed}</span>
@@ -17711,8 +17767,9 @@ async function _renderScannerAdminStatus() {
         <span class="label">Create tasks</span><span class="value">${s.create_tasks ? "Yes" : "No (dry-run)"}</span>
         <span class="label">Post notes</span><span class="value">${s.post_notes ? "Yes" : "No (dry-run)"}</span>
         <span class="label">Notify users</span><span class="value">${s.notify_users ? "Yes" : "No (dry-run)"}</span>
+        <span class="label">Strong fields (ids)</span><span class="value">${escapeHtml(strongF)}</span>
         <span class="label">Portal</span><span class="value">${escapeHtml(s.portal_url)}</span>
-        <span class="label">Bot email</span><span class="value">${escapeHtml(s.email)}</span>
+        <span class="label">Scanner account</span><span class="value" ${acct}>shared (hidden)</span>
       </div>
     `;
   } catch {
@@ -17762,6 +17819,14 @@ async function _renderScannerAdminLog() {
       clsSpan.className = "log-classification";
       clsSpan.textContent = e.classification || "?";
       meta.appendChild(clsSpan);
+      if (e.match_strength) {
+        const ms = document.createElement("span");
+        ms.style.marginLeft = "6px";
+        ms.style.fontSize = "0.75rem";
+        ms.style.color = e.match_strength === "strong" ? "var(--success)" : (e.match_strength === "weak" ? "var(--warn)" : "var(--muted)");
+        ms.textContent = "[" + e.match_strength + "]";
+        meta.appendChild(ms);
+      }
       div.appendChild(meta);
 
       const subjDiv = document.createElement("div");
@@ -17779,7 +17844,69 @@ async function _renderScannerAdminLog() {
       if (e.actions_taken?.length) {
         const actDiv = document.createElement("div");
         actDiv.className = "log-actions";
-        actDiv.textContent = "→ " + e.actions_taken.join(", ");
+        const pretty = e.actions_taken.map((a) => {
+          if (a === "created_task") return "created task";
+          if (a === "posted_note") return "posted note";
+          if (a === "linked_email") return "linked email";
+          if (a === "added_tag" || a === "added_tags") return "added tag(s)";
+          if (a === "marked_read") return "marked read";
+          if (a === "tagged_bot_review") return "Bot Review (mail tag)";
+          return a.replace(/_/g, " ");
+        });
+        let txt = "→ " + pretty.join(" + ");
+        if (e.classification === "jobnimbus_task" || e.classification === "jobnimbus_new_job" || e.classification === "jobnimbus_mention_est") {
+          txt += " (Ken, Estimate category)";
+        } else if (e.classification === "reconciliation_task") {
+          txt += " (Ken + Claudiu, Estimate)";
+        } else if (e.classification === "jobnimbus_mention_ambiguous") {
+          txt += " (ambiguous LH mention → Bot Review mail tag)";
+        }
+        if (e.linked_opp_id) {
+          txt += ` | linked opp ${e.linked_opp_id}${e.linked_opp_title ? " ("+e.linked_opp_title.slice(0,40)+")" : ""}`;
+        }
+        if (e.tasked && Array.isArray(e.tasked) && e.tasked.length) {
+          const friendly = e.tasked.map(uid => {
+            const u = (uid || "").toLowerCase();
+            if (u.includes("b1fe2412")) return "ken";
+            if (u.includes("7e5a2a15")) return "rebeca";
+            if (u.includes("0269dc9e")) return "claudiu";
+            return uid;
+          });
+          txt += ` | tasked ${friendly.join(",")}`;
+        }
+        if (e.dedup_reason) {
+          txt += ` | dedup:${e.dedup_reason}`;
+        }
+        if (e.contact_label) {
+          txt += ` | contact:${e.contact_label}`;
+        } else if (e.contact_id) {
+          txt += ` | contact:${e.contact_id}`;
+        }
+        actDiv.textContent = txt;
+        div.appendChild(actDiv);
+
+        // failures
+        if (e.errors && Array.isArray(e.errors) && e.errors.length) {
+          const errDiv = document.createElement("div");
+          errDiv.className = "log-actions";
+          errDiv.style.color = "var(--warn)";
+          errDiv.textContent = "errors: " + e.errors.join(" ; ");
+          div.appendChild(errDiv);
+        }
+        if (e.task_results && Array.isArray(e.task_results) && e.task_results.length) {
+          const fails = e.task_results.filter(r => !r[1]);
+          if (fails.length) {
+            const fDiv = document.createElement("div");
+            fDiv.className = "log-actions";
+            fDiv.style.color = "var(--warn)";
+            fDiv.textContent = "task_fails: " + fails.map(r => r[0]+":"+r[2]).join(" ; ");
+            div.appendChild(fDiv);
+          }
+        }
+      } else if (e.classification) {
+        const actDiv = document.createElement("div");
+        actDiv.className = "log-actions";
+        actDiv.textContent = "No action (classification only)";
         div.appendChild(actDiv);
       }
       list.appendChild(div);
@@ -17798,6 +17925,10 @@ async function _renderScannerAdminRules() {
   el.innerHTML = '<div class="scanner-empty">Loading rules…</div>';
 
   try {
+    if (!Array.isArray(state.portalUsers) || !state.portalUsers.length) {
+      try { await loadPortalUsers(); } catch {}
+    }
+
     const [cfgRes, statusRes] = await Promise.all([
       fetch("/api/scanner/contractors", { credentials: "same-origin" }),
       fetch("/api/scanner/status", { credentials: "same-origin" }),
@@ -17806,32 +17937,32 @@ async function _renderScannerAdminRules() {
     const status = await statusRes.json();
 
     const rules = cfg.assignee_rules || {};
-    // Build user-name lookup from existing users in config
-    const knownUsers = {
-      ken: { name: "Ken", email: "kenc@vanguardadj.com" },
-      rebeca: { name: "Rebeca", email: "" },
-      claudiu: { name: "Claudiu", email: "" },
-      rebecca: { name: "Rebecca", email: "" },
-    };
-    // Also try to get from portalUsers state
-    const portalMap = {};
-    if (Array.isArray(state.portalUsers)) {
-      for (const u of state.portalUsers) {
-        const email = (u.email || "").toLowerCase();
-        const dn = u.displayName || u.userName || "";
-        portalMap[email] = dn;
-        if (email.includes("ken")) portalMap.ken = dn;
-        if (email.includes("rebec") || email.includes("rebecca")) portalMap.rebeca = dn;
-        if (email.includes("claudiu")) portalMap.claudiu = dn;
+
+    // Build selectable users from live CRM portal users (auto-updates when users added/removed)
+    const portalUsers = Array.isArray(state.portalUsers) ? state.portalUsers : [];
+    const selectableUsers = [];
+    const seenKeys = new Set();
+    for (const u of portalUsers) {
+      const uid = String(u.id || u.ID || u.userId || u.UserId || "").trim();
+      const email = (u.email || u.Email || "").toLowerCase().trim();
+      const dn = u.displayName || u.userName || u.UserName || email || uid;
+      // Prefer short keys for the main people so existing configs continue to work
+      let key = uid || email;
+      const nameLower = (dn + " " + email).toLowerCase();
+      if (nameLower.includes("ken")) key = "ken";
+      else if (nameLower.includes("rebeca") || nameLower.includes("rebecca")) key = "rebeca";
+      else if (nameLower.includes("claudiu")) key = "claudiu";
+      if (!key) key = uid || email;
+      if (key && !seenKeys.has(key)) {
+        seenKeys.add(key);
+        selectableUsers.push({ key, label: dn });
       }
     }
-
-    const allUserKeys = Object.keys(knownUsers);
-    const friendlyName = (key) => portalMap[key] || knownUsers[key]?.name || key;
 
     const ruleLabels = {
       jobnimbus_task: "JobNimbus Tasks (assignee)",
       jobnimbus_new_job: "JobNimbus New Jobs (assignee)",
+      jobnimbus_mention_est: "JobNimbus Mentions - Estimate requests (assignee)",
       supplement_new_project: "New Supplement Projects (task)",
       supplement_request: "Supplement Requests (task)",
       new_potential: "New Potential Claims (task)",
@@ -17841,7 +17972,7 @@ async function _renderScannerAdminRules() {
       carrier_email_notify: "Carrier Emails (notify)",
       supplement_discussion_request: "Supplement Discussion (task)",
       acculynx_other: "Unclassified Acculynx (task)",
-      uncertain: "Uncertain Emails (task)",
+      uncertain: "Uncertain / Ambiguous (Bot Review mail tag, leave unread)",
     };
 
     let html = '<div class="scanner-rules-list">';
@@ -17850,11 +17981,11 @@ async function _renderScannerAdminRules() {
       html += `<div class="scanner-rule-row">
         <span class="scanner-rule-label" title="${escapeHtml(ruleKey)}">${escapeHtml(label)}</span>
         <div class="scanner-rule-users">`;
-      for (const uk of allUserKeys) {
-        const checked = selected.includes(uk) ? "checked" : "";
+      for (const su of selectableUsers) {
+        const checked = selected.includes(su.key) ? "checked" : "";
         html += `<span class="scanner-rule-user">
-          <input type="checkbox" data-rule="${escapeHtml(ruleKey)}" data-user="${escapeHtml(uk)}" ${checked} id="rule-${escapeHtml(ruleKey)}-${escapeHtml(uk)}" />
-          <label for="rule-${escapeHtml(ruleKey)}-${escapeHtml(uk)}">${escapeHtml(friendlyName(uk))}</label>
+          <input type="checkbox" data-rule="${escapeHtml(ruleKey)}" data-user="${escapeHtml(su.key)}" ${checked} id="rule-${escapeHtml(ruleKey)}-${escapeHtml(su.key)}" />
+          <label for="rule-${escapeHtml(ruleKey)}-${escapeHtml(su.key)}">${escapeHtml(su.label)}</label>
         </span>`;
       }
       html += `</div></div>`;
@@ -17926,6 +18057,152 @@ async function _renderScannerAdminContractors() {
   }
 }
 
+async function _renderScannerAdminIdentity() {
+  const el = $("#scanner-admin-identity");
+  if (!el) return;
+  el.innerHTML = '<div class="scanner-empty">Loading…</div>';
+  try {
+    const [cfgRes, statusRes] = await Promise.all([
+      fetch("/api/scanner/contractors", { credentials: "same-origin" }),
+      fetch("/api/scanner/status", { credentials: "same-origin" }),
+    ]);
+    const cfg = await cfgRes.json();
+    const status = await statusRes.json();
+    const hint = status.scanner_account_hint ? `Current account: ${escapeHtml(status.scanner_account_hint)} (credentials not shown)` : "Current scanner account is not displayed for security.";
+    el.innerHTML = `
+      <div class="scanner-identity">
+        <p style="margin:0 0 .5rem 0;font-size:.85rem;color:var(--muted);">${hint}</p>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end;">
+          <label style="font-size:.8rem;">Email<br>
+            <input id="scanner-id-email" type="text" autocomplete="off" placeholder="scanner@yourdomain.com" style="min-width:260px;" />
+          </label>
+          <label style="font-size:.8rem;">Password<br>
+            <input id="scanner-id-pass" type="password" autocomplete="new-password" placeholder="••••••••" style="min-width:220px;" />
+          </label>
+          <button type="button" id="scanner-id-save" class="btn btn-secondary btn-sm">Save</button>
+        </div>
+        <div id="scanner-id-status" style="margin-top:.4rem;font-size:.8rem;color:var(--muted);"></div>
+        <div id="scanner-id-restart" style="display:none;margin-top:.3rem;font-size:.8rem;color:#f59e0b;">
+          Credentials saved. Restart required: run <code>./start.sh</code> (or restart the service) for the new identity to take effect.
+        </div>
+      </div>
+    `;
+    const saveBtn = $("#scanner-id-save");
+    const stat = $("#scanner-id-status");
+    const restart = $("#scanner-id-restart");
+    if (saveBtn) saveBtn.addEventListener("click", async () => {
+      const email = ($("#scanner-id-email")?.value || "").trim();
+      const password = $("#scanner-id-pass")?.value || "";
+      try {
+        const payload = { ...(cfg || {}) };
+        payload.scanner_identity = { email, password };
+        const putRes = await fetch("/api/scanner/contractors", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify(payload),
+        });
+        if (putRes.ok) {
+          if (stat) { stat.textContent = "Saved."; stat.style.color = "var(--accent)"; }
+          if (restart) restart.style.display = "";
+          // Clear fields after save
+          const ei = $("#scanner-id-email"); if (ei) ei.value = "";
+          const pi = $("#scanner-id-pass"); if (pi) pi.value = "";
+        } else {
+          if (stat) { stat.textContent = "Save failed"; stat.style.color = "red"; }
+        }
+      } catch {
+        if (stat) { stat.textContent = "Error saving"; stat.style.color = "red"; }
+      }
+    });
+  } catch {
+    el.innerHTML = '<div class="scanner-empty">Failed to load scanner identity.</div>';
+  }
+}
+
+async function _renderScannerAdminBehavior() {
+  const el = $("#scanner-admin-behavior");
+  if (!el) return;
+  el.innerHTML = '<div class="scanner-empty">Loading…</div>';
+  try {
+    const [statusRes, cfgRes] = await Promise.all([
+      fetch("/api/scanner/status", { credentials: "same-origin" }),
+      fetch("/api/scanner/config", { credentials: "same-origin" }),
+    ]);
+    const status = await statusRes.json();
+    const cfg = await cfgRes.json();
+    const cd = !!(cfg.create_deals ?? status.create_deals);
+    const ct = !!(cfg.create_tasks ?? status.create_tasks);
+    const pn = !!(cfg.post_notes ?? status.post_notes);
+    const nu = !!(cfg.notify_users ?? status.notify_users);
+    const at = (status.action_toggles || cfg.action_toggles || {});
+    const le = !!(at.link_email ?? false);
+    const mr = !!(at.mark_read ?? false);
+    const bt = !!(at.apply_bot_review_mail_tag ?? false);
+    const pnv = !!(at.post_notes ?? pn); // alias
+    const ctv = !!(at.create_tasks ?? ct);
+    const cdv = !!(at.create_deals ?? cd);
+    const nuv = !!(at.notify_users ?? nu);
+    el.innerHTML = `
+      <div class="scanner-behavior">
+        <p style="margin:0 0 .5rem 0;font-size:.85rem;color:var(--muted);"><strong>DRY RUN by default (all off).</strong> Changes live immediately. Every action has its own toggle.</p>
+        <label style="display:block;margin:.15rem 0;"><input type="checkbox" id="sb-link" ${le ? "checked" : ""}/> link_email</label>
+        <label style="display:block;margin:.15rem 0;"><input type="checkbox" id="sb-post" ${pnv ? "checked" : ""}/> post_notes</label>
+        <label style="display:block;margin:.15rem 0;"><input type="checkbox" id="sb-tasks" ${ctv ? "checked" : ""}/> create_tasks</label>
+        <label style="display:block;margin:.15rem 0;"><input type="checkbox" id="sb-deals" ${cdv ? "checked" : ""}/> create_deals</label>
+        <label style="display:block;margin:.15rem 0;"><input type="checkbox" id="sb-notify" ${nuv ? "checked" : ""}/> notify_users</label>
+        <label style="display:block;margin:.15rem 0;"><input type="checkbox" id="sb-mark" ${mr ? "checked" : ""}/> mark_read</label>
+        <label style="display:block;margin:.15rem 0;"><input type="checkbox" id="sb-bot-tag" ${bt ? "checked" : ""}/> apply_bot_review_mail_tag</label>
+        <button type="button" id="sb-save" class="btn btn-secondary btn-sm" style="margin-top:.4rem;">Save</button>
+        <span id="sb-status" style="margin-left:.5rem;font-size:.8rem;color:var(--muted);"></span>
+        <div id="sb-hint" style="display:none;margin-top:.3rem;font-size:.8rem;color:var(--accent);">Saved. Changes are live immediately.</div>
+      </div>
+    `;
+    const saveBtn = $("#sb-save");
+    const stat = $("#sb-status");
+    const hint = $("#sb-hint");
+    if (saveBtn) saveBtn.addEventListener("click", async () => {
+      const payload = {
+        create_deals: !!$("#sb-deals")?.checked,
+        create_tasks: !!$("#sb-tasks")?.checked,
+        post_notes: !!$("#sb-post")?.checked,
+        notify_users: !!$("#sb-notify")?.checked,
+        action_toggles: {
+          link_email: !!$("#sb-link")?.checked,
+          post_notes: !!$("#sb-post")?.checked,
+          create_tasks: !!$("#sb-tasks")?.checked,
+          create_deals: !!$("#sb-deals")?.checked,
+          notify_users: !!$("#sb-notify")?.checked,
+          mark_read: !!$("#sb-mark")?.checked,
+          apply_bot_review_mail_tag: !!$("#sb-bot-tag")?.checked,
+        }
+      };
+      try {
+        const headers = { "Content-Type": "application/json" };
+        if (window.__SCANNER_ADMIN_TOKEN) headers["X-Scanner-Admin-Token"] = window.__SCANNER_ADMIN_TOKEN;
+        const putRes = await fetch("/api/scanner/config", {
+          method: "PUT",
+          headers,
+          credentials: "same-origin",
+          body: JSON.stringify(payload),
+        });
+        if (putRes.ok) {
+          if (stat) { stat.textContent = "Saved."; stat.style.color = "var(--accent)"; }
+          if (hint) hint.style.display = "";
+          // Refresh status so other panes see it
+          try { await _renderScannerAdminStatus(); } catch {}
+        } else {
+          if (stat) { stat.textContent = "Save failed"; stat.style.color = "red"; }
+        }
+      } catch {
+        if (stat) { stat.textContent = "Error saving"; stat.style.color = "red"; }
+      }
+    });
+  } catch {
+    el.innerHTML = '<div class="scanner-empty">Failed to load scanner behavior.</div>';
+  }
+}
+
 function _switchMailInboxTab(name) {
   const modal = $("#mail-inbox-modal");
   if (!modal) return;
@@ -17937,9 +18214,49 @@ function _switchMailInboxTab(name) {
   });
 
   if (name === "scanner-admin") {
-    // Show Status by default inside admin tab
-    _scannerShowSection("scanner-admin-status");
-    _renderScannerAdminStatus();
+    // Token gate for Scanner Admin (Phase 6)
+    (async () => {
+      try {
+        const st = await fetch("/api/scanner/status", { credentials: "same-origin" }).then(r => r.json());
+        if (st && st.admin_token_required) {
+          const body = $("#mail-tab-scanner-admin");
+          if (body && !body.dataset.scannerAdminUnlocked) {
+            body.innerHTML = `
+              <div style="padding:1rem;">
+                <div style="margin-bottom:.5rem;font-size:.9rem;color:var(--muted);">Scanner Admin is protected.</div>
+                <input type="password" id="scanner-admin-token" placeholder="Scanner Admin Token" style="width:260px;" />
+                <button type="button" id="scanner-admin-unlock" class="btn btn-secondary btn-sm" style="margin-left:.5rem;">Unlock</button>
+                <div id="scanner-admin-token-status" style="margin-top:.4rem;font-size:.8rem;color:var(--muted);"></div>
+              </div>
+            `;
+            const unlockBtn = $("#scanner-admin-unlock");
+            const tokInput = $("#scanner-admin-token");
+            const stEl = $("#scanner-admin-token-status");
+            if (unlockBtn && tokInput) {
+              unlockBtn.addEventListener("click", () => {
+                const tok = (tokInput.value || "").trim();
+                if (!tok) { if (stEl) stEl.textContent = "Token required"; return; }
+                window.__SCANNER_ADMIN_TOKEN = tok;  // session lifetime for this modal
+                body.dataset.scannerAdminUnlocked = "1";
+                body.innerHTML = ''; // restore original content by re-rendering
+                // Rebuild the admin UI
+                body.innerHTML = document.querySelector('#mail-tab-scanner-admin').dataset.originalHtml || '';
+                // Fallback: reload the sections
+                _switchMailInboxTab('scanner-admin');
+              });
+            }
+            // stash original html once
+            if (!body.dataset.originalHtml) {
+              // we will re-init on unlock via _switch
+            }
+            return;
+          }
+        }
+      } catch {}
+      // normal
+      _scannerShowSection("scanner-admin-status");
+      _renderScannerAdminStatus();
+    })();
   }
 }
 
@@ -17961,6 +18278,8 @@ function _appendMailInboxTabListeners() {
   bindClick("scanner-admin-log-btn", "scanner-admin-log");
   bindClick("scanner-admin-rules-btn", "scanner-admin-rules");
   bindClick("scanner-admin-contractors-btn", "scanner-admin-contractors");
+  bindClick("scanner-admin-identity-btn", "scanner-admin-identity");
+  bindClick("scanner-admin-behavior-btn", "scanner-admin-behavior");
 
   // Deferred render on section show
   const observer = new MutationObserver(() => {
@@ -17978,6 +18297,16 @@ function _appendMailInboxTabListeners() {
     if (contractorsEl && contractorsEl.style.display !== "none" && !contractorsEl.dataset.rendered) {
       contractorsEl.dataset.rendered = "1";
       _renderScannerAdminContractors();
+    }
+    const identityEl = $("#scanner-admin-identity");
+    if (identityEl && identityEl.style.display !== "none" && !identityEl.dataset.rendered) {
+      identityEl.dataset.rendered = "1";
+      _renderScannerAdminIdentity();
+    }
+    const behaviorEl = $("#scanner-admin-behavior");
+    if (behaviorEl && behaviorEl.style.display !== "none" && !behaviorEl.dataset.rendered) {
+      behaviorEl.dataset.rendered = "1";
+      _renderScannerAdminBehavior();
     }
   });
   observer.observe(modal, { subtree: true, attributes: true, attributeFilter: ["style"] });

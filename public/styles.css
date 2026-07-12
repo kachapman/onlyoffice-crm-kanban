@@ -3458,6 +3458,33 @@ body {
   color: #666;
   font-size: 0.8rem;
 }
+.mail-tags {
+  width: 130px;
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  align-items: center;
+  font-size: 0.65rem;
+  line-height: 1.1;
+  overflow: hidden;
+}
+.mail-tag-chip {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: 1px 4px;
+  border-radius: 3px;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mail-tag-chip.bot-review {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
 .mail-sidebar-toggle {
   flex: 0 0 auto;
   align-self: stretch;
@@ -3578,6 +3605,16 @@ body {
   margin-top: 0.5rem;
   font-size: 0.8rem;
   color: #555;
+}
+.mail-bot-badge {
+  font-size: 0.65rem;
+  padding: 1px 6px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 999px;
+  margin-left: 0.5rem;
+  vertical-align: middle;
+  white-space: nowrap;
 }
 
 #mail-inbox-btn {

@@ -411,8 +411,9 @@
           <button type="button" id="mail-delete" class="btn btn-secondary btn-small" disabled title="Delete selected conversations">Delete</button>
           <button type="button" id="mail-clear-selection" class="btn btn-ghost btn-small" disabled>Clear selection</button>
           <button type="button" id="mail-mark-all-read" class="btn btn-secondary btn-small">Mark all loaded as read</button>
-          <button type="button" id="mail-refresh" class="btn btn-secondary btn-small">Refresh</button>
-          <span id="mail-today-count" class="mail-today-count"></span>
+           <button type="button" id="mail-refresh" class="btn btn-secondary btn-small">Refresh</button>
+           <span id="mail-today-count" class="mail-today-count"></span>
+           <span class="mail-bot-badge" title="All dashboard users see the same bot-managed inboxes + tags">bot inbox</span>
         </div>
 
         <div class="mail-main-area">
@@ -429,12 +430,13 @@
               <button type="button" id="mail-link-btn" class="btn btn-secondary btn-small mail-link-btn" disabled>Link selected to deal</button>
               <div id="mail-selected-info" class="mail-selected-info"></div>
               <hr style="margin:0.75rem 0; border:none; border-top:1px solid var(--border);" />
-              <h4 style="margin:0 0 0.5rem 0; font-size:0.85rem; color:var(--text);">Quick View Limitations</h4>
-              <ul style="margin:0; padding-left:1rem; font-size:0.7rem; color:var(--muted); line-height:1.5;">
-                <li>Loads the 50 most recent emails</li>
-                <li>Attachments open in native mail module</li>
-                <li>Sent mail not shown (inbox only)</li>
-              </ul>
+               <h4 style="margin:0 0 0.5rem 0; font-size:0.85rem; color:var(--text);">Quick View Limitations</h4>
+               <ul style="margin:0; padding-left:1rem; font-size:0.7rem; color:var(--muted); line-height:1.5;">
+                 <li>Loads the 50 most recent emails</li>
+                 <li>Attachments open in native mail module</li>
+                 <li>Sent mail not shown (inbox only)</li>
+                 <li><strong>Shared bot inbox:</strong> all dashboard users see the same two inboxes + bot mail tags (e.g. "Bot Review"). Personal inboxes are excluded.</li>
+               </ul>
             </div>
           </div>
         </div>
@@ -449,13 +451,17 @@
             <span id="scanner-admin-log-btn" class="clickable" style="cursor:pointer;margin-left:0.5rem;text-decoration:underline;">Log</span>
             <span id="scanner-admin-rules-btn" class="clickable" style="cursor:pointer;margin-left:0.5rem;text-decoration:underline;">Assignee Rules</span>
             <span id="scanner-admin-contractors-btn" class="clickable" style="cursor:pointer;margin-left:0.5rem;text-decoration:underline;">Contractors</span>
+            <span id="scanner-admin-identity-btn" class="clickable" style="cursor:pointer;margin-left:0.5rem;text-decoration:underline;">Scanner Identity</span>
+            <span id="scanner-admin-behavior-btn" class="clickable" style="cursor:pointer;margin-left:0.5rem;text-decoration:underline;">Behavior</span>
           </span>
         </div>
         <div class="mail-scanner-admin-body">
-          <div id="scanner-admin-status" class="scanner-section"></div>
-          <div id="scanner-admin-log" class="scanner-section" style="display:none;"></div>
-          <div id="scanner-admin-rules" class="scanner-section" style="display:none;"></div>
-          <div id="scanner-admin-contractors" class="scanner-section" style="display:none;"></div>
+           <div id="scanner-admin-status" class="scanner-section"></div>
+           <div id="scanner-admin-log" class="scanner-section" style="display:none;"></div>
+           <div id="scanner-admin-rules" class="scanner-section" style="display:none;"></div>
+           <div id="scanner-admin-contractors" class="scanner-section" style="display:none;"></div>
+           <div id="scanner-admin-identity" class="scanner-section" style="display:none;"></div>
+           <div id="scanner-admin-behavior" class="scanner-section" style="display:none;"></div>
         </div>
       </div>
 
