@@ -1,6 +1,6 @@
 # Mail Scanner — Planning Document
 
-> Created 2026-07-08. Last updated 2026-07-11 (Phase 1 complete for bot inbox: ALL /api/2.0/mail* (GET+PUT+POST+DELETE for conversations, messages, mark, move, link, tag, accounts, etc.) are unconditionally proxied via _bot_crm_proxy using BOT_CRM_EMAIL/PASSWORD. This forces the entire CRM Mail Quick View modal (Inbox tab + mutations) to show the shared bot view of both inboxes + bot mail tags to every dashboard user. Personal per-user inboxes are excluded. + other Phase 1/2/3/4 items listed below).
+> Created 2026-07-08. Last updated 2026-07-11 (bot-cred enforcement for dashboard mail modal complete + pushed: ALL /api/2.0/mail* traffic (GET+mutations for conversations, messages, accounts, mark, move, link, tag, etc.) is unconditionally forced through _bot_crm_proxy using BOT_CRM_EMAIL/PASSWORD in both _handle_api_get and _handle_api_post_put. The CRM Mail Quick View modal (Inbox tab) now guarantees the shared bot view of the two inboxes + bot tags to every user. Personal inboxes excluded. UI badge + notes added. + prior Phase 1-4 items).
 > Scanned 200+ conversations from bot@vanguardadj.com inbox (accounts: requests@sherwoodestimates.com, crm@vanguardadj.online).
 > Source of truth for the auto mail scanner feature.
 
