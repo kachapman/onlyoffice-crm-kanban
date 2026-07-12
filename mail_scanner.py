@@ -172,7 +172,6 @@ def _init_ml() -> bool:
         return True
     except ImportError:
         logger.info("ML dependencies not installed (sentence-transformers/torch). ML disabled.")
-        ML_ENABLED_FLAG = False
         return False
     except Exception as e:
         logger.warning("ML init failed: %s", e)

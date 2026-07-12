@@ -44,21 +44,25 @@ def _read_body(handler: BaseHTTPRequestHandler) -> bytes:
         length = 0
     return handler.rfile.read(length) if length else b""
 
-def _require_admin(handler: BaseHTTPRequestHandler) -> bool:
+def _require_admin(handler: BaseHTTPRequestHandler, cached_body: bytes | None = None) -> tuple[bool, bytes]:
+    """Check admin token from header or JSON body. Returns (authorized, body_bytes).
+    The caller should pass cached_body=None on first call; _require_admin reads
+    the body and returns it so the handler can reuse it without a second read."""
     if not ADMIN_TOKEN:
-        return True
+        return True, cached_body or b""
     supplied = handler.headers.get("X-Scanner-Admin-Token", "") or ""
     if supplied == ADMIN_TOKEN:
-        return True
+        return True, cached_body or b""
     # Also allow token in JSON body for convenience from UI proxies
+    body = cached_body if cached_body is not None else _read_body(handler)
     try:
-        body = json.loads(_read_body(handler) or b"{}")
-        if body.get("admin_token") == ADMIN_TOKEN:
-            return True
+        parsed = json.loads(body or b"{}")
+        if parsed.get("admin_token") == ADMIN_TOKEN:
+            return True, body
     except Exception:
         pass
     _json_response(handler, 403, {"error": "Scanner admin token required"})
-    return False
+    return False, body
 
 class ScannerHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):  # quieter
@@ -121,7 +125,7 @@ class ScannerHandler(BaseHTTPRequestHandler):
         path = parsed.path
 
         if path == "/config":
-            if not _require_admin(self):
+            if not _require_admin(self)[0]:
                 return
             try:
                 payload = json.loads(_read_body(self) or b"{}")
@@ -167,10 +171,11 @@ class ScannerHandler(BaseHTTPRequestHandler):
         path = parsed.path
 
         if path == "/reprocess":
-            if not _require_admin(self):
+            ok, body = _require_admin(self)
+            if not ok:
                 return
             try:
-                payload = json.loads(_read_body(self) or b"{}")
+                payload = json.loads(body or b"{}")
             except json.JSONDecodeError:
                 _json_response(self, 400, {"error": "Invalid JSON"})
                 return

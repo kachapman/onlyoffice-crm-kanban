@@ -2527,11 +2527,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not self._is_admin(portal, token):
                 _json_response(self, 403, {"error": "Forbidden"})
                 return
+            body = _read_body(self)
             # Extra secret token gate for scanner admin (if configured)
             if SCANNER_ADMIN_TOKEN:
                 supplied = self.headers.get("X-Scanner-Admin-Token", "") or ""
                 try:
-                    body_preview = json.loads(_read_body(self) or b"{}")
+                    body_preview = json.loads(body or b"{}")
                     supplied = supplied or (body_preview.get("admin_token") or "")
                 except Exception:
                     pass
@@ -2539,7 +2540,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     _json_response(self, 403, {"error": "Scanner admin token required"})
                     return
             try:
-                payload = json.loads(_read_body(self) or b"{}")
+                payload = json.loads(body or b"{}")
             except json.JSONDecodeError:
                 _json_response(self, 400, {"error": "Invalid JSON body"})
                 return
@@ -2610,10 +2611,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             if not self._is_admin(portal, token):
                 _json_response(self, 403, {"error": "Forbidden"})
                 return
+            body = _read_body(self)
             if SCANNER_ADMIN_TOKEN:
                 supplied = self.headers.get("X-Scanner-Admin-Token", "") or ""
                 try:
-                    body_preview = json.loads(_read_body(self) or b"{}")
+                    body_preview = json.loads(body or b"{}")
                     supplied = supplied or (body_preview.get("admin_token") or "")
                 except Exception:
                     pass
@@ -2621,14 +2623,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     _json_response(self, 403, {"error": "Scanner admin token required"})
                     return
             # Forward to remote scanner service or run locally
-            fwd = _forward_scanner_request(self, "/reprocess", "POST", _read_body(self) or b"{}")
+            fwd = _forward_scanner_request(self, "/reprocess", "POST", body or b"{}")
             if fwd is not None:
                 code, data = fwd
                 _json_response(self, code, data)
                 return
             # Local fallback
             try:
-                payload = json.loads(_read_body(self) or b"{}")
+                payload = json.loads(body or b"{}")
             except json.JSONDecodeError:
                 _json_response(self, 400, {"error": "Invalid JSON body"})
                 return
