@@ -7794,6 +7794,35 @@ body {
 }
 
 /* ── Shared ── */
+.scanner-behavior label {
+  color: var(--text);
+  cursor: pointer;
+}
+
+.scanner-behavior input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--accent);
+  cursor: pointer;
+  vertical-align: middle;
+  margin-right: 0.3rem;
+}
+
+.scanner-behavior p {
+  color: var(--muted);
+}
+
+.scanner-identity label {
+  color: var(--text);
+}
+
+.scanner-identity input {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
 .scanner-empty {
   padding: 1.5rem;
   text-align: center;

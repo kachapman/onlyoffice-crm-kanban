@@ -17792,7 +17792,7 @@ async function _renderScannerAdminLog() {
         <option value="200" selected>200</option>
         <option value="500">500</option>
       </select></label>
-      <button type="button" id="scanner-admin-reprocess-btn" class="btn btn-secondary btn-sm" style="margin-left:1rem;background:#fef3c7;border-color:#f59e0b;">Reprocess Selected</button>
+      <button type="button" id="scanner-admin-reprocess-btn" class="btn btn-secondary btn-sm" style="margin-left:1rem;background:#92400e;border-color:#d97706;color:#fef3c7;">Reprocess Selected</button>
       <span id="scanner-reprocess-status" style="margin-left:.5rem;font-size:.8rem;color:var(--muted);"></span>
     </div>
     <div id="scanner-admin-log-list" class="scanner-log-list"></div>

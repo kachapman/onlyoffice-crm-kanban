@@ -2328,18 +2328,35 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     limit = int(limit_str)
                 _json_response(self, 200, {"entries": get_scanner_log(limit)})
                 return
-            if api_path == "/api/scanner/config" and method == "GET":
+            if api_path == "/api/scanner/config":
                 fwd = _forward_scanner_request(self, "/config")
                 if fwd is not None:
                     code, data = fwd
                     _json_response(self, code, data)
                     return
-            if api_path == "/api/scanner/config" and method in ("PUT", "POST"):
-                fwd = _forward_scanner_request(self, "/config", "PUT", _read_body(self) or b"{}")
-                if fwd is not None:
-                    code, data = fwd
-                    _json_response(self, code, data)
-                    return
+                # Local fallback
+                try:
+                    cfg = get_contractors() or {}
+                    sb = cfg.get("scanner_behavior") or {}
+                    if not isinstance(sb, dict):
+                        sb = {}
+                except Exception:
+                    sb = {}
+                _json_response(self, 200, {
+                    "create_deals": bool(sb.get("create_deals", SCANNER_CREATE_DEALS)),
+                    "create_tasks": bool(sb.get("create_tasks", SCANNER_CREATE_TASKS)),
+                    "post_notes": bool(sb.get("post_notes", SCANNER_POST_NOTES)),
+                    "notify_users": bool(sb.get("notify_users", SCANNER_NOTIFY_USERS)),
+                    "action_toggles": (get_contractors() or {}).get("action_toggles") or {},
+                    "dry_run": not any([
+                        bool(sb.get("create_deals", SCANNER_CREATE_DEALS)),
+                        bool(sb.get("create_tasks", SCANNER_CREATE_TASKS)),
+                        bool(sb.get("post_notes", SCANNER_POST_NOTES)),
+                        bool(sb.get("notify_users", SCANNER_NOTIFY_USERS)),
+                    ]),
+                    "admin_token_required": bool(SCANNER_ADMIN_TOKEN),
+                })
+                return
 
         route = self._api_route()
         if not route:
