@@ -2552,3 +2552,25 @@ def get_scanner_log(limit: int = 200) -> list[dict[str, Any]]:
         return list(reversed(entries[-limit:]))
     except OSError:
         return []
+
+
+def reprocess_conversations(conversation_ids: list[int]) -> list[dict[str, Any]]:
+    """Re-process specific conversation IDs (for admin verification).
+    Fetches each conversation's message, runs _process_email, returns results.
+    Does NOT update processed_ids — the original processed record is preserved.
+    """
+    results: list[dict[str, Any]] = []
+    for cid in conversation_ids:
+        try:
+            msg_full = _fetch_message(cid)
+            if not msg_full:
+                results.append({"conversation_id": cid, "error": "message_not_found"})
+                continue
+            # Build a minimal conv dict for mailbox detection
+            conv = {"id": cid, "subject": msg_full.get("subject", ""), "from": msg_full.get("from", "")}
+            log_entry = _process_email(msg_full, cid, conv=conv)
+            results.append(log_entry or {"conversation_id": cid, "error": "no_result"})
+        except Exception as e:
+            logger.error("Reprocess failed for conversation %s: %s", cid, e)
+            results.append({"conversation_id": cid, "error": str(e)})
+    return results

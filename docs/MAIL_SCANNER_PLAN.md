@@ -627,10 +627,11 @@ Add a row of category pill buttons between the "User" filter dropdown and the ta
 - [ ] Use ML for tie-breaks / weak signals only. Deterministic rules remain primary for auditability.
 
 ### Phase 6 — Admin UI Polish + Logging
-- Scanner Admin tab: secret token login prompt (unlocks all controls). Inbox tab open to everyone.
-- Per-action toggle UI (grouped).
-- Log entries show `source_inbox`, toggles that fired, ML scores, normalized claim, etc.
-- Remote scanner status visible from dashboard.
+- [x] Scanner Admin tab: secret token login prompt (unlocks all controls). Inbox tab open to everyone.
+- [x] Per-action toggle UI (grouped).
+- [x] Log entries show `source_inbox` badge, `ml_actionable_score` badge, `normalized_claim`, `policy`, `no_deal`, toggles that fired.
+- [x] Remote scanner status visible from dashboard.
+- [x] Real reprocess endpoint (scanner service + server.py proxy + UI button with checkboxes).
 
 ### Phase 7 — Verification, Docs, Deploy
 - Re-verify on known bad cases (39978 ack, 961/872/1136 collisions, outbound BCCs).

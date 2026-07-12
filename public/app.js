@@ -17788,6 +17788,8 @@ async function _renderScannerAdminLog() {
         <option value="200" selected>200</option>
         <option value="500">500</option>
       </select></label>
+      <button type="button" id="scanner-admin-reprocess-btn" class="btn btn-secondary btn-sm" style="margin-left:1rem;background:#fef3c7;border-color:#f59e0b;">Reprocess Selected</button>
+      <span id="scanner-reprocess-status" style="margin-left:.5rem;font-size:.8rem;color:var(--muted);"></span>
     </div>
     <div id="scanner-admin-log-list" class="scanner-log-list"></div>
   `;
@@ -17810,11 +17812,34 @@ async function _renderScannerAdminLog() {
       const div = document.createElement("div");
       div.className = "scanner-log-entry";
 
+      // Checkbox for reprocess selection
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "scanner-log-cb";
+      cb.dataset.convId = e.conversation_id || "";
+      cb.style.marginRight = "6px";
+      cb.style.alignSelf = "flex-start";
+      cb.style.marginTop = "2px";
+      div.appendChild(cb);
+
+      const contentWrap = document.createElement("span");
+      contentWrap.style.flex = "1";
+
       const meta = document.createElement("div");
+      meta.className = "log-meta";
       meta.className = "log-meta";
       const timeSpan = document.createElement("span");
       timeSpan.textContent = (e.timestamp || "").slice(0, 19).replace("T", " ");
       meta.appendChild(timeSpan);
+      // Source inbox badge (record / action)
+      if (e.source_inbox) {
+        const inboxSpan = document.createElement("span");
+        inboxSpan.className = "log-classification";
+        inboxSpan.style.marginLeft = "6px";
+        inboxSpan.textContent = e.source_inbox === "record" ? "[record]" : e.source_inbox === "action" ? "[action]" : `[${e.source_inbox}]`;
+        inboxSpan.style.color = e.source_inbox === "record" ? "var(--muted)" : "var(--accent)";
+        meta.appendChild(inboxSpan);
+      }
       const clsSpan = document.createElement("span");
       clsSpan.className = "log-classification";
       clsSpan.textContent = e.classification || "?";
@@ -17827,19 +17852,51 @@ async function _renderScannerAdminLog() {
         ms.textContent = "[" + e.match_strength + "]";
         meta.appendChild(ms);
       }
-      div.appendChild(meta);
+      // ML score badge
+      if (e.ml_actionable_score != null) {
+        const mlSpan = document.createElement("span");
+        mlSpan.style.marginLeft = "6px";
+        mlSpan.style.fontSize = "0.75rem";
+        mlSpan.style.padding = "0 4px";
+        mlSpan.style.borderRadius = "3px";
+        mlSpan.style.background = e.ml_actionable_score >= 0.7 ? "#dcfce7" : e.ml_actionable_score >= 0.4 ? "#fef9c3" : "#f3f4f6";
+        mlSpan.style.color = e.ml_actionable_score >= 0.7 ? "#166534" : e.ml_actionable_score >= 0.4 ? "#854d0e" : "#6b7280";
+        mlSpan.textContent = `ml:${(e.ml_actionable_score * 100).toFixed(0)}%`;
+        mlSpan.title = `ML actionable score: ${e.ml_actionable_score}${e.ml_category ? " | category: " + e.ml_category : ""}`;
+        meta.appendChild(mlSpan);
+      } else if (e.ml_category) {
+        const mlSpan = document.createElement("span");
+        mlSpan.style.marginLeft = "6px";
+        mlSpan.style.fontSize = "0.75rem";
+        mlSpan.textContent = `[ml:${e.ml_category}]`;
+        meta.appendChild(mlSpan);
+      }
+      contentWrap.appendChild(meta);
 
       const subjDiv = document.createElement("div");
       subjDiv.className = "log-subject";
       subjDiv.textContent = (e.subject || "").slice(0, 120);
-      div.appendChild(subjDiv);
+      contentWrap.appendChild(subjDiv);
 
       if (e.claimant || e.claim_code || e.job_id || e.carrier) {
         const detail = [e.claimant, e.claim_code, e.job_id, e.carrier].filter(Boolean).join(" · ");
         const detailDiv = document.createElement("div");
         detailDiv.className = "log-actions";
-        detailDiv.textContent = detail.slice(0, 120);
-        div.appendChild(detailDiv);
+        let detailTxt = detail.slice(0, 120);
+        if (e.normalized_claim) detailTxt += ` | claim:${e.normalized_claim}`;
+        if (e.policy) detailTxt += ` | policy:${e.policy}`;
+        if (e.no_deal) detailTxt += " | NO_DEAL";
+        detailDiv.textContent = detailTxt;
+        contentWrap.appendChild(detailDiv);
+      } else if (e.normalized_claim || e.policy || e.no_deal) {
+        const detailDiv = document.createElement("div");
+        detailDiv.className = "log-actions";
+        let detailTxt = "";
+        if (e.normalized_claim) detailTxt += `claim:${e.normalized_claim}`;
+        if (e.policy) detailTxt += `${detailTxt ? " | " : ""}policy:${e.policy}`;
+        if (e.no_deal) detailTxt += `${detailTxt ? " | " : ""}NO_DEAL`;
+        detailDiv.textContent = detailTxt;
+        contentWrap.appendChild(detailDiv);
       }
       if (e.actions_taken?.length) {
         const actDiv = document.createElement("div");
@@ -17883,7 +17940,7 @@ async function _renderScannerAdminLog() {
           txt += ` | contact:${e.contact_id}`;
         }
         actDiv.textContent = txt;
-        div.appendChild(actDiv);
+        contentWrap.appendChild(actDiv);
 
         // failures
         if (e.errors && Array.isArray(e.errors) && e.errors.length) {
@@ -17891,7 +17948,7 @@ async function _renderScannerAdminLog() {
           errDiv.className = "log-actions";
           errDiv.style.color = "var(--warn)";
           errDiv.textContent = "errors: " + e.errors.join(" ; ");
-          div.appendChild(errDiv);
+          contentWrap.appendChild(errDiv);
         }
         if (e.task_results && Array.isArray(e.task_results) && e.task_results.length) {
           const fails = e.task_results.filter(r => !r[1]);
@@ -17900,20 +17957,64 @@ async function _renderScannerAdminLog() {
             fDiv.className = "log-actions";
             fDiv.style.color = "var(--warn)";
             fDiv.textContent = "task_fails: " + fails.map(r => r[0]+":"+r[2]).join(" ; ");
-            div.appendChild(fDiv);
+            contentWrap.appendChild(fDiv);
           }
         }
       } else if (e.classification) {
         const actDiv = document.createElement("div");
         actDiv.className = "log-actions";
         actDiv.textContent = "No action (classification only)";
-        div.appendChild(actDiv);
+        contentWrap.appendChild(actDiv);
       }
+      div.appendChild(contentWrap);
       list.appendChild(div);
     }
 
     $("#scanner-admin-log-refresh")?.addEventListener("click", _renderScannerAdminLog);
     $("#scanner-admin-log-limit")?.addEventListener("change", _renderScannerAdminLog);
+
+    // Reprocess selected conversations
+    const reprocessBtn = $("#scanner-admin-reprocess-btn");
+    if (reprocessBtn) {
+      reprocessBtn.addEventListener("click", async () => {
+        const cbs = list.querySelectorAll(".scanner-log-cb:checked");
+        const ids = [...cbs].map(cb => parseInt(cb.dataset.convId)).filter(id => !isNaN(id));
+        const statusEl = $("#scanner-reprocess-status");
+        if (!ids.length) {
+          if (statusEl) { statusEl.textContent = "No conversations selected"; statusEl.style.color = "var(--warn)"; }
+          return;
+        }
+        if (statusEl) { statusEl.textContent = `Reprocessing ${ids.length} conversation(s)…`; statusEl.style.color = "var(--muted)"; }
+        reprocessBtn.disabled = true;
+        try {
+          const headers = { "Content-Type": "application/json" };
+          if (window.__SCANNER_ADMIN_TOKEN) headers["X-Scanner-Admin-Token"] = window.__SCANNER_ADMIN_TOKEN;
+          const res = await fetch("/api/scanner/reprocess", {
+            method: "POST",
+            headers,
+            credentials: "same-origin",
+            body: JSON.stringify({ conversation_ids: ids }),
+          });
+          const data = await res.json();
+          if (res.ok) {
+            const results = data.results || [];
+            const errors = results.filter(r => r.error);
+            if (statusEl) {
+              statusEl.textContent = `Reprocessed ${results.length} conversation(s), ${errors.length} error(s)`;
+              statusEl.style.color = errors.length ? "var(--warn)" : "var(--success)";
+            }
+            // Refresh log to show new entries
+            await _renderScannerAdminLog();
+          } else {
+            if (statusEl) { statusEl.textContent = data.error || "Reprocess failed"; statusEl.style.color = "red"; }
+          }
+        } catch (e) {
+          if (statusEl) { statusEl.textContent = "Error: " + e.message; statusEl.style.color = "red"; }
+        } finally {
+          reprocessBtn.disabled = false;
+        }
+      });
+    }
   } catch {
     list.innerHTML = '<div class="scanner-empty">Failed to load log.</div>';
   }

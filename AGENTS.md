@@ -2,6 +2,12 @@
 
 **Current version:** 2.2.1 (released 2026-07-08; see CHANGELOG.md)  
 **Last session summary (for next resume):** 
+- **Phase 5 ML scaffolding + Phase 6 admin UI polish + Phase 7 deploy prep done (2026-07-11).**
+  - Phase 5: Lazy sentence-transformers/all-MiniLM-L6-v2 loading (`_init_ml`, `_ml_embed`, `_ml_classify`), `ml_*` fields in every log entry, classifier head pickle support, `INSTALL_ML=1` build arg in scanner Dockerfile. ML returns None until labeled data + head trained.
+  - Phase 6: Real reprocess endpoint (`reprocess_conversations` in mail_scanner.py + `/reprocess` in scanner_service.py + proxy in server.py). Log viewer enhanced: source_inbox badge, ml_actionable_score badge, normalized_claim, policy, no_deal indicators. Reprocess button in Scanner Admin Log tab with checkboxes per entry. CSS for flex layout + checkboxes.
+  - Phase 7: Deploy prep — scanner service Dockerfile supports INSTALL_ML, docs updated.
+  - All on `email_scanner` only. No main commits.
+  - Next: full verification on bad cases (39978/961/872/1136) with reprocess button, ML bootstrap training, deploy to CRM droplet.
 - **Phase 2 hygiene + ack/delay complete; Phase 3 tag mirroring + Phase 4 scanner service scaffold + bot-inbox hardening done (2026-07-11).**
   - All create_task sites now use `_task_title_with_claim(claim, base, customer, requester)` (claim — base — customer (requester?)). Ack/delay review task also follows the pattern. Desc = most-recent sanitized request + deep link.
   - Ack/delay/OOO policy: early block in `_process_email`. Carrier/record: suppress tasks (link/note on strong only). Contractor forwards: create "Notify customer of delay — claim — customer" review task.

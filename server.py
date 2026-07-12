@@ -2601,6 +2601,54 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             })
             return
 
+        # Scanner reprocess (POST)
+        if api_path == "/api/scanner/reprocess" and method == "POST":
+            auth = _require_auth(self)
+            if not auth:
+                return
+            portal, token, _user_id = auth
+            if not self._is_admin(portal, token):
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            if SCANNER_ADMIN_TOKEN:
+                supplied = self.headers.get("X-Scanner-Admin-Token", "") or ""
+                try:
+                    body_preview = json.loads(_read_body(self) or b"{}")
+                    supplied = supplied or (body_preview.get("admin_token") or "")
+                except Exception:
+                    pass
+                if supplied != SCANNER_ADMIN_TOKEN:
+                    _json_response(self, 403, {"error": "Scanner admin token required"})
+                    return
+            # Forward to remote scanner service or run locally
+            fwd = _forward_scanner_request(self, "/reprocess", "POST", _read_body(self) or b"{}")
+            if fwd is not None:
+                code, data = fwd
+                _json_response(self, code, data)
+                return
+            # Local fallback
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON body"})
+                return
+            ids = payload.get("conversation_ids") or payload.get("ids") or []
+            if not ids:
+                _json_response(self, 400, {"error": "conversation_ids required"})
+                return
+            try:
+                int_ids = [int(x) for x in ids]
+            except (ValueError, TypeError):
+                _json_response(self, 400, {"error": "ids must be integers"})
+                return
+            try:
+                results = mail_scanner.reprocess_conversations(int_ids)
+            except Exception as e:
+                _json_response(self, 500, {"error": str(e)})
+                return
+            _json_response(self, 200, {"results": results})
+            return
+
         route = self._api_route()
         if not route:
             self.send_error(404)
