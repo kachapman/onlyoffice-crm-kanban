@@ -1,12 +1,13 @@
 # Mail Scanner — Planning Document
 
-> Created 2026-07-08. Last updated 2026-07-11 (two-droplet architecture, bot creds for unified Mail Quick View + scanner, admin secret token gate, granular per-action toggles, claim dash normalization, most-recent body + Email notes, ack/delay actionable review, sentence-transformers ML on CRM droplet container, mail tag mirroring in quick view, research commands for CRM server, updated phases).
+> Created 2026-07-08. Last updated 2026-07-11 (Phase 1 complete for bot inbox: ALL /api/2.0/mail* (GET+PUT+POST+DELETE for conversations, messages, mark, move, link, tag, accounts, etc.) are unconditionally proxied via _bot_crm_proxy using BOT_CRM_EMAIL/PASSWORD. This forces the entire CRM Mail Quick View modal (Inbox tab + mutations) to show the shared bot view of both inboxes + bot mail tags to every dashboard user. Personal per-user inboxes are excluded. + other Phase 1/2/3/4 items listed below).
 > Scanned 200+ conversations from bot@vanguardadj.com inbox (accounts: requests@sherwoodestimates.com, crm@vanguardadj.online).
 > Source of truth for the auto mail scanner feature.
 
 **Current model (2026-07-11):**
 - Scanner logic runs in an **independent Docker container on the CRM droplet** (8 GB RAM). Dashboard droplet (1 GB) hosts only the UI, admin surface, and proxies.
-- Credentials: `bot@vanguardadj.com` (BOT_CRM_EMAIL / BOT_CRM_PASSWORD) for the scanner **and** the entire CRM Mail Quick View modal (Inbox tab) for **all** dashboard users. This gives everyone a unified view of the two inboxes + bot-applied mail tags (shared linked mail).
+- **CRM Mail Quick View (Inbox tab) and ALL /api/2.0/mail* traffic (GET + mutations: mark, move, link, tag, accounts, conversations, messages, etc.) is unconditionally routed through bot credentials.** Server intercepts every `/api/2.0/mail*` call in both `_handle_api_get` and `_handle_api_post_put` and forwards it via `_bot_crm_proxy` using `BOT_CRM_EMAIL` / `BOT_CRM_PASSWORD`. Result: every logged-in dashboard user sees exactly the same two inboxes (crm@vanguardadj.online record + requests@sherwoodestimates.com action) + any bot mail tags (e.g. "Bot Review"). Personal per-user inboxes are never visible in this modal.
+- Credentials: `bot@vanguardadj.com` (BOT_CRM_EMAIL / BOT_CRM_PASSWORD) for the scanner **and** the entire CRM Mail Quick View modal.
 - Admin tab inside the quick view is **gated** by a secret token (login prompt in UI; unlocks full controls).
 - Two inboxes with hard policies (see §2).
 - Dry-run by default. **Every action function** (link, note, task, tag, mark, bot-review-mail-tag, etc.) has its own toggle.
@@ -14,7 +15,7 @@
 - Notes on record inbox: most-recent sanitized body only, as "Email" history category note (when the specific toggle is enabled).
 - Ack / OOO / delay language: actionable review task (someone must notify customer of the delay).
 - Task titles: claim + customer name (+ requester if inferable). Description = sanitized request + mail deep link.
-- ML start: sentence-transformers/all-MiniLM-L6-v2 + logistic/kNN head (feature/tie-breaker only). Runs inside the CRM-droplet scanner container.
+- ML start: sentence-transformers/all-MiniLM-L6-v2 + logistic/kNN head (feature/tie-breaker only). Runs inside the CRM-droplet scanner container. (Not yet implemented — Phase 5.)
 - Mail tags (e.g. "Bot Review") applied by scanner are visible in the unified quick view because everyone now sees the bot inbox.
 - Research commands below (run on CRM server as bot) to discover exact mailbox signals (to/cc/account/folder), tag shapes, history "Email" category, etc.
 
@@ -590,30 +591,31 @@ Add a row of category pill buttons between the "User" filter dropdown and the ta
 
 ### Phase 1 — Core + Mailbox Awareness + Unified Bot View
 - [x] Core daemon, auth (bot creds), polling, persistence, dry-run flags.
-- [ ] Early mailbox detection (to/cc/account/folder + heuristics; log `source_inbox`).
-- [ ] Record inbox link-only fast path (strong = claim/JobID after dash normalization).
-- [ ] Record inbox optional note: most-recent sanitized body only, "Email" category, gated by its toggle.
-- [ ] Switch **CRM Mail Quick View (Inbox tab)** to bot credentials for all users (unified view of both inboxes + bot mail tags). Personal user inboxes no longer shown here.
-- [ ] Admin tab remains gated by secret token (see §12).
+- [x] Early mailbox detection (to/from/mailboxId + sending-domain heuristics; `_detect_mailbox`); `source_inbox` logged on every processed conv in `_poll_inbox` + `_process_email`.
+- [x] Record inbox link-only fast path + policy guard (is_record) in `_process_email`; `do_*` toggles respected.
+- [x] Record inbox optional most-recent sanitized body as "Email" history note (cat 39) when toggle + strong match.
+- [x] **CRM Mail Quick View (Inbox tab) + all mail operations use bot credentials unconditionally.** Any request from the dashboard to `/api/2.0/mail*` (conversations, messages, accounts, mark, move, link, tag, etc. — GET or mutations) is routed through `_bot_crm_proxy` using `BOT_CRM_EMAIL` / `BOT_CRM_PASSWORD`. This guarantees every logged-in dashboard user sees exactly the same two inboxes (crm@vanguardadj.online record + requests@sherwoodestimates.com action) plus any bot-applied mail tags (e.g. "Bot Review"). Personal per-user inboxes are never exposed in this modal. The same mechanism makes scanner mutations immediately visible to all users. (Server intercepts in `_handle_api_get` and `_handle_api_post_put`.)
+- [x] Admin tab gated by secret token (SCANNER_ADMIN_TOKEN env). Server rejects PUT /api/scanner/config unless header or body token matches. UI shows unlock prompt when status.admin_token_required; stores for modal session and sends X-Scanner-Admin-Token. Inbox tab open to all.
 
 ### Phase 2 — Granular Toggles + Claim Hygiene + Ack/Delay Policy
-- Every action function has a toggle: `link_email`, `post_notes` (or finer `record_post_note`, `carrier_post_note`, ...), `create_tasks` (or per-class `reconciliation_create_task`, `adjuster_action_create_task`, ...), `create_deals`, `notify_users`, `apply_bot_review_mail_tag`, `mark_read`, etc.
-- Dry-run default (all false). UI shows all toggles + prominent DRY banner.
-- Claim/Job ID normalization (strip non-alphanum for search & compare). Claim + Job ID are strongest unique.
-- Owner_name_title demoted for record inbox / contractor sending domains.
-- Ack/delay/OOO language: on carrier paths suppress pure action tasks; on contractor forwards → create review task ("notify customer of delay").
-- Task title hygiene: `claim — customer (requester?)`. Description = sanitized most-recent request + mail link.
+- [x] Every action function has a toggle (link_email, post_notes, create_tasks, create_deals, notify_users, apply_bot_review_mail_tag, mark_read) + `action_toggles` in contractors.json + `_is_action_enabled`.
+- [x] UI Behavior tab now renders all 7 granular toggles + legacy 4; round-trips via `/api/scanner/config`.
+- [x] Claim/Job ID normalization (`_norm_claim`) + applied in `_dedup_opportunity`.
+- [x] Owner_name_title demoted for record inbox / sending-domain contexts (in `_dedup` strength calc).
+- [x] Ack/delay/OOO language: early block in _process_email; carrier/record suppress tasks (link/note on strong only); contractor forwards create "Notify customer of delay — claim — customer" review task.
+- [x] Task title hygiene: `_task_title_with_claim` + `_extract_requester_hint` used on all create sites (claim — base — customer (requester?)). Ack/delay review task also uses it. Desc = most-recent sanitized request + mail deep link (already done for JN paths + review task).
 
 ### Phase 3 — Actions with Mailbox Policy + Tag Mirroring
-- Link-only + conditional note for record.
-- Full actions (under toggles) for action inbox.
-- Mirror bot mail module tags in quick view (chips + basic apply for known tags like "Bot Review") because everyone now sees the bot inbox.
+- [x] Link-only + conditional note for record.
+- [x] Full actions (under toggles) for action inbox.
+- [x] Mirror bot mail module tags in quick view (chips; Bot Review highlighted). Basic apply (from quick view) is future; visibility + display is the primary goal now that everyone sees the shared bot inbox. Implemented `getMailTags`, `.mail-tags` column + `.mail-tag-chip` (special styling for Bot Review) in renderMailList + CSS.
 
 ### Phase 4 — Scanner Service on CRM Droplet
-- Independent container (Dockerfile + compose on CRM droplet).
-- Exposes: GET /status, PUT/GET /config (behavior + all action_toggles), GET /log, POST /reprocess, health.
-- Uses bot creds. Dashboard talks to it for admin surface.
-- Move / share classification logic.
+- [x] Independent container scaffold (scanner/Dockerfile + scanner/scanner_service.py + scanner/docker-compose.scanner.example.yml).
+- [x] Exposes: GET /status, PUT/GET /config (behavior + all action_toggles), GET /log, POST /reprocess (stub), health.
+- [x] Uses bot creds. Dashboard talks to it for admin surface (SCANNER_SERVICE_URL + _forward_scanner_request in server.py; transparent fallback to local thread).
+- [x] Docker base image copies mail_scanner.py + service; runs on onlyoffice network.
+- Next (later): move full scanner loop + ML into the container; dashboard remains UI + proxy only.
 
 ### Phase 5 — ML (sentence-transformers start)
 - all-MiniLM-L6-v2 + logistic/kNN head inside scanner container (<500 MB).

@@ -2,22 +2,18 @@
 
 **Current version:** 2.2.1 (released 2026-07-08; see CHANGELOG.md)  
 **Last session summary (for next resume):** 
-- **Docs updated + branch push (2026-07-11).** Started build phase after user answers. Updated `docs/MAIL_SCANNER_PLAN.md` (and CHANGELOG/AGENTS) with:
-  - Two-droplet architecture: scanner service (incl. ML) as independent container on **CRM droplet** (8 GB). Dashboard droplet (1 GB) only UI + admin + proxies.
-  - Credentials: use `bot@vanguardadj.com` (BOT_CRM_*) for **scanner** and the entire **CRM Mail Quick View (Inbox tab)** for all dashboard users → unified view of both inboxes + bot mail tags.
-  - Admin tab gated by secret token (login prompt in UI; unlocks Behavior etc.).
-  - Granular per-action toggles for **every** action function (link, notes variants, task variants, tags, mark, etc.). Dry-run default (all off).
-  - Record inbox (crm@vanguardadj.online + contractor sending domains): hard link-only + optional most-recent sanitized body as "Email" note (gated by its toggle).
-  - Strongest matches = claim + CRM Job/ID with dash normalization. owner_name_title demoted on record/sending.
-  - Ack/OOO/delay language → actionable review task (notify customer of delay).
-  - Task hygiene: claim + customer title; most-recent request in desc.
-  - ML: start with sentence-transformers/all-MiniLM-L6-v2 + logistic/kNN head (feature only) inside CRM scanner container.
-  - Mail tag mirroring in quick view (visible because bot inbox is now shared).
-  - Research commands (run as bot on CRM server) to discover real to/cc/account/folder signals, tags, Email category, etc.
-  - Updated phases in MAIL_SCANNER_PLAN.md (Phase 0 = research, then unified bot view, granular toggles, scanner service, ML, verification).
-- All work on `email_scanner` branch (separate from main). No main commits.
-- Next: run research commands on CRM server, then implement mailbox detection + bot-creds quick view + granular toggles + record link-only path.
-- Git snapshot captured below.
+- **Phase 2 hygiene + ack/delay complete; Phase 3 tag mirroring + Phase 4 scanner service scaffold + bot-inbox hardening done (2026-07-11).**
+  - All create_task sites now use `_task_title_with_claim(claim, base, customer, requester)` (claim — base — customer (requester?)). Ack/delay review task also follows the pattern. Desc = most-recent sanitized request + deep link.
+  - Ack/delay/OOO policy: early block in `_process_email`. Carrier/record: suppress tasks (link/note on strong only). Contractor forwards: create "Notify customer of delay — claim — customer" review task.
+  - Docs: Phase 2 hygiene marked done; Phase 3 tag mirroring marked done.
+  - Mail tag mirroring in CRM Mail Quick View (Inbox tab): `getMailTags(m)` tolerant reader, `.mail-tags` column + `.mail-tag-chip` (Bot Review highlighted) in `renderMailList`, CSS for chips + header.
+  - Scanner service scaffold: `scanner/scanner_service.py` (status/config/log/reprocess), `scanner/Dockerfile`, `scanner/docker-compose.scanner.example.yml`. Dashboard now forwards `/api/scanner/*` to `SCANNER_SERVICE_URL` (with token passthrough) and falls back to local thread.
+  - Logging: every log entry gets `normalized_claim` (auto-filled via `_norm_claim` on append); `source_inbox` + `toggles` already present; `log_entry["claim_code"]` set at all sites.
+  - Hygiene pass: fixed a stray indentation in "claim_code_only" block.
+  - **Dashboard CRM Mail Quick View (Inbox tab) + all /api/2.0/mail* traffic now unconditionally uses bot credentials.** Every GET/PUT/POST/DELETE under `/api/2.0/mail*` (conversations, messages, accounts, mark, move, link, tag, etc.) from the dashboard is forced through `_bot_crm_proxy` using `BOT_CRM_EMAIL`/`BOT_CRM_PASSWORD`. All users see the same two inboxes + bot mail tags. Personal inboxes are excluded from this modal. Server enforcement in `_handle_api_get` + `_handle_api_post_put`.
+- All on `email_scanner` only. No main commits.
+- Next (per plan): ML container work, full verification on bad cases (39978/961/872/1136), admin UI polish, deploy.
+- Git snapshot below.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 

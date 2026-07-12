@@ -6,18 +6,13 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 ### Architecture & mail scanner plan (2026-07-11)
 
-- **Two-droplet model locked in.** Scanner (including optional ML) runs as an independent Docker container on the **CRM droplet** (8 GB). Dashboard droplet (1 GB) only hosts the UI, admin surface, and proxies to the scanner service. Scanner service uses bot credentials for all CRM calls.
-- **Unified bot inbox for Mail Quick View + scanner.** The CRM Mail Quick View (Inbox tab) now uses `bot@vanguardadj.com` credentials for **all** dashboard users. Everyone sees the same two inboxes (crm@vanguardadj.online record + requests@sherwoodestimates.com action) plus any bot-linked/shared mail and bot-applied mail tags (e.g. "Bot Review"). Personal per-user inboxes are no longer shown in this quick view.
-- **Admin tab gated by secret token.** Scanner Admin (Behavior, Identity, Rules, Log, remote scanner status) requires an admin secret token entered in the UI before controls are unlocked. Inbox tab remains open to any logged-in user.
-- **Granular per-action toggles.** Every action function now has its own toggle (link_email, post_notes/record_post_note, create_tasks/*_create_task variants, create_deals, notify_users, apply_bot_review_mail_tag, mark_read, etc.). All off by default (DRY RUN). Toggles are live, persisted, and logged.
-- **Record inbox policy hardened.** crm@vanguardadj.online (and contractor sending-domain BCCs) = link-only. Optional most-recent sanitized body as "Email" history note category only when its specific toggle is on + strong match. No tasks. No Bot Review tasks.
-- **Strongest unique matches + normalization.** Claim # and CRM Job/ID (custom fields) are primary. All claim codes are dash-normalized (strip non-alphanum) for search and comparison. owner_name_title is demoted for record/sending-domain contexts.
-- **Ack / OOO / delay language policy.** On carrier paths: suppress pure "adjuster wants" tasks. On contractor forwards containing receipt/away/review-time/delay/OOO language: create actionable review task ("notify customer of delay").
-- **Task hygiene.** Titles: claim + customer (+ requester if inferable). Description = sanitized most-recent request body + mail deep link.
-- **ML starting point.** sentence-transformers/all-MiniLM-L6-v2 + logistic/kNN head (feature/tie-breaker only). Runs inside the CRM-droplet scanner container. Bootstrap from hundreds of recent logs + human corrections.
-- **Mail tag mirroring.** Because the quick view now uses the bot inbox, scanner-applied tags (Bot Review etc.) are visible. Quick view will surface and allow basic mirroring of bot mail module tags.
-- **Research commands added.** Safe read-only commands (run as bot on CRM server) to discover exact `to`/`cc`/`account`/`folder` signals, tag shapes, history "Email" category, etc.
-- **Docs updated.** `docs/MAIL_SCANNER_PLAN.md` now leads with the two-droplet + bot-creds + token-gate + granular-toggles architecture, updated phases, and research commands. AGENTS.md + CHANGELOG updated. Work stays on the `email_scanner` branch.
+- **Phase 2 hygiene + ack/delay complete; Phase 3 tag mirroring + Phase 4 scanner service scaffold done.** All create_task sites now use `_task_title_with_claim` (claim — base — customer (requester?)). Ack/delay review task follows same pattern. Desc = most-recent sanitized request + deep link. Ack/delay/OOO policy wired early in `_process_email`: carrier/record suppress tasks (link/note on strong only); contractor forwards create "Notify customer of delay" review task.
+- **Dashboard CRM Mail Quick View (Inbox tab) now unconditionally uses bot credentials.** Every call under `/api/2.0/mail*` (conversations list, messages, accounts, mark, move, link, tag, etc. — GET and mutations) from the dashboard is routed through `_bot_crm_proxy` with `BOT_CRM_EMAIL` / `BOT_CRM_PASSWORD`. All users see the exact same two inboxes + bot mail tags (e.g. "Bot Review"). Personal inboxes are excluded from this modal. (Server enforcement in GET and POST/PUT handlers.)
+- **Mail tag mirroring in quick view.** `getMailTags(m)` tolerant reader. `.mail-tags` column + `.mail-tag-chip` (Bot Review highlighted) in `renderMailList`; CSS for chips + header.
+- **Scanner service scaffold.** `scanner/scanner_service.py` (status/config/log/reprocess), `scanner/Dockerfile`, `scanner/docker-compose.scanner.example.yml`. Dashboard forwards `/api/scanner/*` to `SCANNER_SERVICE_URL` (with token passthrough) and falls back to local thread.
+- **Logging hygiene.** Every log entry gets `normalized_claim` (auto-filled via `_norm_claim` on append); `source_inbox` + `toggles` already present; `log_entry["claim_code"]` set at all sites.
+- **Hygiene fix.** Stray indentation in "claim_code_only" block corrected.
+- (Prior items retained for context; see earlier changelog for two-droplet, bot inbox, granular toggles, record policy, etc.)
 
 ### New features (prior scanner work, still relevant)
 

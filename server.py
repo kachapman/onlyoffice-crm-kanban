@@ -98,10 +98,10 @@ BOT_CRM_PASSWORD = os.environ.get("BOT_CRM_PASSWORD", "")
 # Mail scanner config
 SCANNER_ENABLED = os.environ.get("SCANNER_ENABLED", "true").lower() in ("1", "true", "yes")
 SCANNER_POLL_INTERVAL = int(os.environ.get("SCANNER_POLL_INTERVAL", "120"))
-SCANNER_CREATE_DEALS = os.environ.get("SCANNER_CREATE_DEALS", "true").lower() in ("1", "true", "yes")
-SCANNER_CREATE_TASKS = os.environ.get("SCANNER_CREATE_TASKS", "true").lower() in ("1", "true", "yes")
-SCANNER_POST_NOTES = os.environ.get("SCANNER_POST_NOTES", "true").lower() in ("1", "true", "yes")
-SCANNER_NOTIFY_USERS = os.environ.get("SCANNER_NOTIFY_USERS", "true").lower() in ("1", "true", "yes")
+SCANNER_CREATE_DEALS = os.environ.get("SCANNER_CREATE_DEALS", "false").lower() in ("1", "true", "yes")
+SCANNER_CREATE_TASKS = os.environ.get("SCANNER_CREATE_TASKS", "false").lower() in ("1", "true", "yes")
+SCANNER_POST_NOTES = os.environ.get("SCANNER_POST_NOTES", "false").lower() in ("1", "true", "yes")
+SCANNER_NOTIFY_USERS = os.environ.get("SCANNER_NOTIFY_USERS", "false").lower() in ("1", "true", "yes")
 SCANNER_STAGE_NEW_SUPPLEMENT = int(os.environ.get("SCANNER_STAGE_NEW_SUPPLEMENT", "18"))
 SCANNER_STAGE_FLAT_RATE = int(os.environ.get("SCANNER_STAGE_FLAT_RATE", "17"))
 SCANNER_USER_KEN = os.environ.get("SCANNER_USER_KEN", "")
@@ -112,6 +112,38 @@ SCANNER_FIELD_CRM_JOB_ID = int(os.environ.get("SCANNER_FIELD_CRM_JOB_ID", "26"))
 SCANNER_FIELD_ADDRESS = int(os.environ.get("SCANNER_FIELD_ADDRESS", "4"))
 SCANNER_TASK_CAT_ESTIMATE = int(os.environ.get("SCANNER_TASK_CAT_ESTIMATE", "34"))
 SCANNER_TASK_CAT_FOLLOW_UP = int(os.environ.get("SCANNER_TASK_CAT_FOLLOW_UP", "35"))
+SCANNER_ADMIN_TOKEN = os.environ.get("SCANNER_ADMIN_TOKEN", "")  # secret for gating Scanner Admin tab
+SCANNER_SERVICE_URL = os.environ.get("SCANNER_SERVICE_URL", "").rstrip("/")  # if set, proxy /api/scanner/* to remote scanner service (CRM droplet) instead of local thread
+
+def _forward_scanner_request(self, subpath: str, method: str = "GET", body: bytes | None = None) -> tuple[int, Any] | None:
+    """Forward a scanner admin request to remote SCANNER_SERVICE_URL if configured.
+    Returns (status, data) or None to fall back to local handling.
+    """
+    if not SCANNER_SERVICE_URL:
+        return None
+    url = f"{SCANNER_SERVICE_URL}{subpath}"
+    headers = {"Accept": "application/json"}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    tok = self.headers.get("X-Scanner-Admin-Token") or ""
+    if tok:
+        headers["X-Scanner-Admin-Token"] = tok
+    try:
+        req = urllib.request.Request(url, data=body, headers=headers, method=method)
+        with urllib.request.urlopen(req, context=_ssl_context(), timeout=30) as resp:
+            raw = resp.read()
+            try:
+                return resp.status, json.loads(raw.decode("utf-8"))
+            except Exception:
+                return resp.status, raw.decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        data = exc.read()
+        try:
+            return exc.code, json.loads(data.decode("utf-8"))
+        except Exception:
+            return exc.code, {"error": str(exc)}
+    except Exception as exc:
+        return 502, {"error": str(exc)}
 
 
 def _crm_display_name(user_dict: dict[str, Any], user_id: str = "") -> str:
@@ -911,7 +943,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             pass
         return None
 
-    def _bot_crm_proxy(self, portal: str, method: str, api_path: str, query: str = "", body: bytes | None = None, timeout: int = 30) -> tuple[int, Any]:
+    def _bot_crm_proxy(self, portal: str, method: str, api_path: str, query: str = "", body: bytes | None = None, timeout: int = 30, content_type: str | None = None) -> tuple[int, Any]:
         """Make a CRM API call using bot credentials."""
         token = self._bot_crm_token(portal)
         if not token:
@@ -921,7 +953,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             url = f"{url}?{query}"
         headers = {"Accept": "application/json", "Authorization": token}
         if body is not None:
-            headers["Content-Type"] = "application/json"
+            headers["Content-Type"] = content_type or "application/json"
         req = urllib.request.Request(
             url,
             data=body,
@@ -930,7 +962,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         )
         try:
             with urllib.request.urlopen(req, context=_ssl_context(), timeout=timeout) as resp:
-                return resp.status, json.loads(resp.read().decode("utf-8"))
+                raw = resp.read()
+                try:
+                    return resp.status, json.loads(raw.decode("utf-8"))
+                except Exception:
+                    return resp.status, raw.decode("utf-8", errors="replace")
         except urllib.error.HTTPError as exc:
             data = exc.read()
             try:
@@ -2186,12 +2222,28 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 body = changelog_path.read_text("utf-8")
             else:
                 body = "# Changelog\n\nNo changelog available."
-            self.send_response(200)
+            self.send_response(200) 
             self.send_header("Content-Type", "text/markdown; charset=utf-8")
             self.send_header("Content-Length", str(len(body.encode("utf-8"))))
             self.end_headers()
             self.wfile.write(body.encode("utf-8"))
             return
+
+        # === UNIFIED BOT INBOX FOR CRM MAIL QUICK VIEW (AND ALL /mail/* CALLS) ===
+        # All calls under /api/2.0/mail* (GET and mutations) from the dashboard are forced through
+        # the bot credentials (BOT_CRM_EMAIL / BOT_CRM_PASSWORD). This ensures the "CRM Mail Quick View"
+        # modal (Inbox tab) shows the exact same two inboxes + bot-applied tags (e.g. "Bot Review")
+        # to every logged-in dashboard user. Personal per-user inboxes are never shown in this modal.
+        # The same proxy also makes scanner mutations (links, tags, marks) immediately visible to everyone.
+        if api_path.startswith("/api/2.0/mail"):
+            portal = _portal_base(self)
+            if not portal:
+                _json_response(self, 400, {"error": "Portal not configured"})
+                return
+            code, data = self._bot_crm_proxy(portal, "GET", api_path, query)
+            _json_response(self, code, data)
+            return
+
         if api_path == "/api/session":
             jar = cookies.SimpleCookie(self.headers.get("Cookie", ""))
             _json_response(self, 200, {"authenticated": SESSION_COOKIE in jar})
@@ -2219,21 +2271,75 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
 
         # Mail scanner endpoints
-        if api_path == "/api/scanner/contractors":
-            _json_response(self, 200, get_contractors())
-            return
-        if api_path == "/api/scanner/status":
-            _json_response(self, 200, get_scanner_status())
-            return
-        if api_path == "/api/scanner/log":
-            from urllib.parse import parse_qs
-            qs = parse_qs(urlparse(self.path).query)
-            limit_str = (qs.get("limit") or [""])[0]
-            limit = 200
-            if limit_str.isdigit():
-                limit = int(limit_str)
-            _json_response(self, 200, {"entries": get_scanner_log(limit)})
-            return
+        if api_path.startswith("/api/scanner/"):
+            sub = api_path[len("/api/scanner"):]
+            if api_path == "/api/scanner/contractors":
+                fwd = _forward_scanner_request(self, "/config")
+                if fwd is not None:
+                    code, data = fwd
+                    _json_response(self, code, data)
+                    return
+                # Fallback local (dashboard-local scanner)
+                raw = get_contractors()
+                try:
+                    safe = json.loads(json.dumps(raw))
+                except Exception:
+                    safe = dict(raw) if isinstance(raw, dict) else {}
+                si = safe.get("scanner_identity") or {}
+                if isinstance(si, dict):
+                    si.pop("password", None)
+                    si.pop("email", None)
+                    if si:
+                        safe["scanner_identity"] = si
+                    else:
+                        safe.pop("scanner_identity", None)
+                safe.pop("SCANNER_CRM_EMAIL", None)
+                safe.pop("SCANNER_CRM_PASSWORD", None)
+                _json_response(self, 200, safe)
+                return
+            if api_path == "/api/scanner/status":
+                fwd = _forward_scanner_request(self, "/status")
+                if fwd is not None:
+                    code, data = fwd
+                    _json_response(self, code, data)
+                    return
+                s = get_scanner_status()
+                try:
+                    s2 = dict(s)
+                except Exception:
+                    s2 = dict(s) if isinstance(s, dict) else {"enabled": False}
+                email = s2.get("email") or ""
+                if email:
+                    s2["scanner_account_hint"] = email
+                    s2["email"] = ""
+                _json_response(self, 200, s2)
+                return
+            if api_path == "/api/scanner/log":
+                qs = parse_qs(urlparse(self.path).query)
+                limit_str = (qs.get("limit") or [""])[0]
+                q = f"?limit={limit_str}" if limit_str.isdigit() else ""
+                fwd = _forward_scanner_request(self, f"/log{q}")
+                if fwd is not None:
+                    code, data = fwd
+                    _json_response(self, code, data)
+                    return
+                limit = 200
+                if limit_str.isdigit():
+                    limit = int(limit_str)
+                _json_response(self, 200, {"entries": get_scanner_log(limit)})
+                return
+            if api_path == "/api/scanner/config" and method == "GET":
+                fwd = _forward_scanner_request(self, "/config")
+                if fwd is not None:
+                    code, data = fwd
+                    _json_response(self, code, data)
+                    return
+            if api_path == "/api/scanner/config" and method in ("PUT", "POST"):
+                fwd = _forward_scanner_request(self, "/config", "PUT", _read_body(self) or b"{}")
+                if fwd is not None:
+                    code, data = fwd
+                    _json_response(self, code, data)
+                    return
 
         route = self._api_route()
         if not route:
@@ -2316,6 +2422,22 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self._handle_dashboard_notes_put()
             return
 
+        # === UNIFIED BOT INBOX FOR CRM MAIL QUICK VIEW (MUTATIONS) ===
+        # All /api/2.0/mail* mutations (PUT/POST/DELETE for mark, move, link, tag, etc.)
+        # are forced through bot credentials. This makes scanner-applied links and tags
+        # (e.g. "Bot Review") visible to every dashboard user in the shared "CRM Mail Quick View" modal.
+        # Personal user inboxes are excluded from this modal by design.
+        if api_path.startswith("/api/2.0/mail"):
+            portal = _portal_base(self)
+            if not portal:
+                _json_response(self, 400, {"error": "Portal not configured"})
+                return
+            # Preserve original content-type for form-urlencoded mail ops (mark, link, tag)
+            incoming_ct = self.headers.get("Content-Type", "")
+            code, data = self._bot_crm_proxy(portal, method, api_path, query, body if body else None, content_type=incoming_ct or None)
+            _json_response(self, code, data)
+            return
+
         # Bot-customers endpoints
         if api_path.startswith("/api/bot-customers"):
             if api_path == "/api/bot-customers/generate-code" and method == "POST":
@@ -2357,8 +2479,126 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             except json.JSONDecodeError:
                 _json_response(self, 400, {"error": "Invalid JSON body"})
                 return
+
+            # Merge scanner_identity (email/password) into stored config.
+            # Do not echo secrets back to callers; the update_contractors result will be sanitized on GET.
+            # If both top-level SCANNER_* and scanner_identity are present, scanner_identity wins.
+            try:
+                incoming_si = payload.get("scanner_identity") if isinstance(payload, dict) else None
+                if isinstance(incoming_si, dict):
+                    email = (incoming_si.get("email") or "").strip()
+                    password = (incoming_si.get("password") or "")
+                    if email or password:
+                        # Merge into a stable top-level key that mail_scanner.configure will read at next start
+                        # Store under scanner_identity for UI grouping; also set top-level for configure path.
+                        existing = get_contractors() if 'get_contractors' in globals() else {}
+                        if not isinstance(existing, dict):
+                            existing = {}
+                        existing["scanner_identity"] = {"email": email, "password": password}
+                        # Also set the keys the scanner reads on configure (for restart pickup)
+                        existing["SCANNER_CRM_EMAIL"] = email
+                        existing["SCANNER_CRM_PASSWORD"] = password
+                        payload = existing
+            except Exception:
+                pass
+
             result = update_contractors(payload)
+            # If behavior flags were included in this PUT, apply live (no restart)
+            try:
+                if isinstance(payload, dict):
+                    sb = payload.get("scanner_behavior") or {}
+                    if isinstance(sb, dict) and sb:
+                        mail_scanner.configure_scanner_behavior(**sb)
+                    else:
+                        # allow top-level create_* keys in contractors payload too
+                        mail_scanner.configure_scanner_behavior(**{k:v for k,v in payload.items() if k in ("create_deals","create_tasks","post_notes","notify_users")})
+            except Exception:
+                pass
             _json_response(self, 200, result)
+            return
+
+        # Live scanner behavior (dry-run) toggles — no restart required
+        # If SCANNER_ADMIN_TOKEN is set, require the token for mutations (extra gate for Scanner Admin tab).
+        if api_path == "/api/scanner/config" and method == "PUT":
+            auth = _require_auth(self)
+            if not auth:
+                return
+            portal, token, _user_id = auth
+            if not self._is_admin(portal, token):
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            # Extra secret token gate for scanner admin (if configured)
+            if SCANNER_ADMIN_TOKEN:
+                supplied = self.headers.get("X-Scanner-Admin-Token", "") or ""
+                try:
+                    body_preview = json.loads(_read_body(self) or b"{}")
+                    supplied = supplied or (body_preview.get("admin_token") or "")
+                except Exception:
+                    pass
+                if supplied != SCANNER_ADMIN_TOKEN:
+                    _json_response(self, 403, {"error": "Scanner admin token required"})
+                    return
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON body"})
+                return
+            # Accept flat bools or {scanner_behavior: {...}}
+            data = payload.get("scanner_behavior") if isinstance(payload, dict) and isinstance(payload.get("scanner_behavior"), dict) else payload
+            changed = {}
+            try:
+                changed = mail_scanner.configure_scanner_behavior(**data)
+            except Exception:
+                pass
+            # Persist to contractors for restart durability (support both legacy + granular action_toggles)
+            try:
+                cfg = get_contractors() or {}
+                if not isinstance(cfg, dict):
+                    cfg = {}
+                sb = cfg.get("scanner_behavior") or {}
+                if not isinstance(sb, dict):
+                    sb = {}
+                at = cfg.get("action_toggles") or {}
+                if not isinstance(at, dict):
+                    at = {}
+                for k, v in changed.items():
+                    short = k.replace("SCANNER_", "").lower().replace("_", "_")
+                    if short in ("create_deals", "create_tasks", "post_notes", "notify_users"):
+                        sb[short] = bool(v)
+                    if short in ("link_email","post_notes","create_tasks","create_deals","notify_users","apply_bot_review_mail_tag","mark_read"):
+                        at[short] = bool(v)
+                cfg["scanner_behavior"] = sb
+                if at:
+                    cfg["action_toggles"] = at
+                update_contractors(cfg)
+            except Exception:
+                pass
+            _json_response(self, 200, {"ok": True, "changed": changed})
+            return
+
+        if api_path == "/api/scanner/config" and method == "GET":
+            # Return current effective behavior (sanitized view)
+            try:
+                cfg = get_contractors() or {}
+                sb = cfg.get("scanner_behavior") or {}
+                if not isinstance(sb, dict):
+                    sb = {}
+            except Exception:
+                sb = {}
+            _json_response(self, 200, {
+                "create_deals": bool(sb.get("create_deals", SCANNER_CREATE_DEALS)),
+                "create_tasks": bool(sb.get("create_tasks", SCANNER_CREATE_TASKS)),
+                "post_notes": bool(sb.get("post_notes", SCANNER_POST_NOTES)),
+                "notify_users": bool(sb.get("notify_users", SCANNER_NOTIFY_USERS)),
+                "action_toggles": (get_contractors() or {}).get("action_toggles") or {},
+                "dry_run": not any([
+                    bool(sb.get("create_deals", SCANNER_CREATE_DEALS)),
+                    bool(sb.get("create_tasks", SCANNER_CREATE_TASKS)),
+                    bool(sb.get("post_notes", SCANNER_POST_NOTES)),
+                    bool(sb.get("notify_users", SCANNER_NOTIFY_USERS)),
+                ]),
+                "admin_token_required": bool(SCANNER_ADMIN_TOKEN),
+            })
             return
 
         route = self._api_route()
@@ -2413,17 +2653,73 @@ def main() -> None:
         raise SystemExit(f"Missing public directory: {PUBLIC}")
 
     # Start mail scanner daemon
-    if PORTAL_URL and BOT_CRM_EMAIL and BOT_CRM_PASSWORD:
+    # Prefer scanner_identity stored in contractors.json (set via admin UI) over env for next start.
+    # If changed via UI, a manual restart (./start.sh) is required for the new creds to be used.
+    scanner_email = BOT_CRM_EMAIL
+    scanner_pass = BOT_CRM_PASSWORD
+    try:
+        stored = get_contractors() or {}
+        si = stored.get("scanner_identity") or {}
+        stored_email = (si.get("email") or stored.get("SCANNER_CRM_EMAIL") or "").strip()
+        stored_pass = si.get("password") or stored.get("SCANNER_CRM_PASSWORD") or ""
+        if stored_email:
+            scanner_email = stored_email
+        if stored_pass:
+            scanner_pass = stored_pass
+    except Exception:
+        pass
+
+    # Apply stored scanner_behavior (dry-run toggles) if present.
+    # Stored values ALWAYS win over .env for the four action flags.
+    # If the key is missing entirely, create it as all-false (full dry-run by default).
+    # Live changes via /api/scanner/config call configure_scanner_behavior and persist.
+    try:
+        stored = get_contractors() or {}
+        if not isinstance(stored, dict):
+            stored = {}
+        sb = stored.get("scanner_behavior")
+        if sb is None or not isinstance(sb, dict):
+            # First time or corrupted: default to full dry-run (safe)
+            sb = {"create_deals": False, "create_tasks": False, "post_notes": False, "notify_users": False}
+            stored["scanner_behavior"] = sb
+            try:
+                update_contractors(stored)
+            except Exception:
+                pass
+        if not isinstance(sb, dict):
+            sb = {"create_deals": False, "create_tasks": False, "post_notes": False, "notify_users": False}
+    except Exception:
+        sb = {"create_deals": False, "create_tasks": False, "post_notes": False, "notify_users": False}
+
+    # Effective flags prefer the persisted scanner_behavior (so UI dry-run settings survive restart)
+    eff_create_deals   = bool(sb.get("create_deals",   False))
+    eff_create_tasks   = bool(sb.get("create_tasks",   False))
+    eff_post_notes     = bool(sb.get("post_notes",     False))
+    eff_notify_users   = bool(sb.get("notify_users",   False))
+
+    if sb:
+        try:
+            mail_scanner.configure_scanner_behavior(
+                create_deals=eff_create_deals,
+                create_tasks=eff_create_tasks,
+                post_notes=eff_post_notes,
+                notify_users=eff_notify_users,
+            )
+        except Exception:
+            pass
+
+    if PORTAL_URL and scanner_email and scanner_pass:
         scanner_config = {
             "PORTAL_URL": PORTAL_URL,
-            "SCANNER_CRM_EMAIL": BOT_CRM_EMAIL,
-            "SCANNER_CRM_PASSWORD": BOT_CRM_PASSWORD,
+            "SCANNER_CRM_EMAIL": scanner_email,
+            "SCANNER_CRM_PASSWORD": scanner_pass,
             "SCANNER_ENABLED": SCANNER_ENABLED,
             "SCANNER_POLL_INTERVAL": SCANNER_POLL_INTERVAL,
-            "SCANNER_CREATE_DEALS": SCANNER_CREATE_DEALS,
-            "SCANNER_CREATE_TASKS": SCANNER_CREATE_TASKS,
-            "SCANNER_POST_NOTES": SCANNER_POST_NOTES,
-            "SCANNER_NOTIFY_USERS": SCANNER_NOTIFY_USERS,
+            # Pass the EFFECTIVE (stored-preferred) values so start_scanner's configure() does not clobber dry-run settings
+            "SCANNER_CREATE_DEALS": eff_create_deals,
+            "SCANNER_CREATE_TASKS": eff_create_tasks,
+            "SCANNER_POST_NOTES": eff_post_notes,
+            "SCANNER_NOTIFY_USERS": eff_notify_users,
             "STAGE_NEW_SUPPLEMENT": SCANNER_STAGE_NEW_SUPPLEMENT,
             "STAGE_FLAT_RATE": SCANNER_STAGE_FLAT_RATE,
             "USER_KEN": SCANNER_USER_KEN or "",
@@ -2437,7 +2733,19 @@ def main() -> None:
             "SSL_VERIFY": SSL_VERIFY,
         }
         start_scanner(scanner_config)
-        print(f"Mail scanner: {'enabled' if SCANNER_ENABLED else 'disabled'} (interval: {SCANNER_POLL_INTERVAL}s)")
+        # Re-apply after start to guarantee the running globals match the stored behavior
+        try:
+            mail_scanner.configure_scanner_behavior(
+                create_deals=eff_create_deals,
+                create_tasks=eff_create_tasks,
+                post_notes=eff_post_notes,
+                notify_users=eff_notify_users,
+            )
+        except Exception:
+            pass
+        mode = "DRY RUN (no actions)" if not any([eff_create_deals, eff_create_tasks, eff_post_notes, eff_notify_users]) else "LIVE ACTIONS ENABLED"
+        print(f"Mail scanner: {'enabled' if SCANNER_ENABLED else 'disabled'} (interval: {SCANNER_POLL_INTERVAL}s) — {mode}")
+        print(f"  create_deals={eff_create_deals} create_tasks={eff_create_tasks} post_notes={eff_post_notes} notify_users={eff_notify_users}")
     else:
         print("Mail scanner: not configured (set SCANNER_CRM_EMAIL/PASSWORD or ONLYOFFICE_PORTAL_URL)")
 
