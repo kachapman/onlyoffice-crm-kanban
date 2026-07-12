@@ -133,7 +133,8 @@ TASK_CAT_FOLLOW_UP = 35
 SSL_VERIFY = True
 
 # ML configuration (Phase 5 — sentence-transformers start)
-ML_ENABLED = False  # Set True to enable ML classifier; requires sentence-transformers + torch
+# ML_ENABLED configurable via env var: ML_ENABLED=true/1/yes to enable
+ML_ENABLED = os.environ.get("ML_ENABLED", "false").lower() in ("true", "1", "yes")
 ML_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 ML_MODEL_DIR = DATA_DIR / "ml_models"
 ML_EMBED_DIM = 384  # all-MiniLM-L6-v2 output dimension
@@ -229,6 +230,81 @@ def _ml_classify(subject: str, body: str) -> dict[str, Any] | None:
     except Exception as e:
         logger.debug("ML classify error: %s", e)
         return None
+
+
+# ML Override Confidence Thresholds (Phase 6: full override)
+ML_OVERRIDE_STRONG_THRESHOLD = 0.8   # Force override (suppress/force action)
+ML_OVERRIDE_SOFT_THRESHOLD = 0.6     # Soft override (add Bot Review flag)
+ML_PROMOTE_THRESHOLD = 0.7           # Promote uncertain to actionable
+
+
+def _apply_ml_override(log_entry: dict, classification: str, match_strength: str,
+                       do_create_tasks: bool, do_post_notes: bool, is_record: bool) -> dict:
+    """Apply ML-based overrides to the log entry after rule engine decisions.
+    
+    Full override mode: ML can suppress tasks, promote uncertain emails, and
+    demote weak matches. Returns the modified log_entry.
+    
+    Override rules:
+    1. ml_category == "ack" AND rule created task → suppress task creation
+    2. ml_category == "record" AND dedup_reason == "owner_name_title" → demote to weak
+    3. ml_category == "actionable" AND ml_actionable_score > ML_PROMOTE_THRESHOLD
+       AND classification == "uncertain" → create task instead of Bot Review only
+    4. ml_actionable_score < 0.2 AND rule would post note → suppress note
+    """
+    if not ML_ENABLED or _ml_model is None:
+        return log_entry
+    
+    ml_category = log_entry.get("ml_category")
+    ml_score = log_entry.get("ml_actionable_score")
+    dedup_reason = log_entry.get("dedup_reason", "")
+    
+    if not ml_category:
+        return log_entry
+    
+    override_applied = False
+    override_reasons = []
+    
+    # Rule 1: Suppress tasks for ack emails (fixes 39978 false positives)
+    if ml_category == "ack" and do_create_tasks:
+        # Mark that ML would suppress this task
+        log_entry["ml_override_suppress_task"] = True
+        override_applied = True
+        override_reasons.append("ack_suppress_task")
+    
+    # Rule 2: Demote owner_name_title matches in record context (fixes 961/872/1136)
+    if ml_category == "record" and dedup_reason.startswith("owner_name_title"):
+        if is_record:
+            # Already demoted by _dedup_opportunity (is_record=True), but mark for logging
+            log_entry["ml_override_demoted_owner"] = True
+            override_applied = True
+            override_reasons.append("record_demote_owner")
+        else:
+            # Even outside record context, ML says this is record-like — demote
+            log_entry["ml_override_demoted_owner"] = True
+            override_applied = True
+            override_reasons.append("record_demote_owner_global")
+    
+    # Rule 3: Promote uncertain emails to actionable
+    if (ml_category == "actionable" and ml_score is not None 
+            and ml_score > ML_PROMOTE_THRESHOLD and classification == "uncertain"):
+        log_entry["ml_override_promote"] = True
+        override_applied = True
+        override_reasons.append("promote_uncertain")
+    
+    # Rule 4: Suppress notes for very low-confidence emails
+    if ml_score is not None and ml_score < 0.2 and do_post_notes:
+        log_entry["ml_override_suppress_note"] = True
+        override_applied = True
+        override_reasons.append("suppress_low_confidence_note")
+    
+    # Log the override
+    if override_applied:
+        log_entry["ml_override_applied"] = True
+        log_entry["ml_override_reasons"] = override_reasons
+        logger.info("ML override applied: %s (score=%.3f, category=%s)", override_reasons, ml_score, ml_category)
+    
+    return log_entry
 
 
 # List of custom field IDs (numeric) whose stored value match on a harvested code
@@ -982,7 +1058,7 @@ def _extract_address_from_body(body: str) -> str:
     return ""
 
 
-def _dedup_opportunity(claimant: str, job_id: str, claim_code: str, body_text: str) -> tuple[dict[str, Any] | None, str, str]:
+def _dedup_opportunity(claimant: str, job_id: str, claim_code: str, body_text: str, is_record: bool = False) -> tuple[dict[str, Any] | None, str, str]:
     """Return (opp or None, dedup_reason, match_strength).
     match_strength: "strong" (custom field hit) | "weak" | "none"
 
@@ -992,6 +1068,9 @@ def _dedup_opportunity(claimant: str, job_id: str, claim_code: str, body_text: s
 
     Special policy: when _SKIP_DEAL_DEDUP_FOR_LH is True (set for Liberty/Highland origin JN emails),
     we short-circuit and return (None, "lh_skip", "none") — these are never matched to CRM deals.
+
+    Phase 6: owner_name_title demotion — when is_record=True, owner_name_title matches
+    are demoted to weak (not strong). This prevents false matches on record inbox BCCs.
     """
     if _SKIP_DEAL_DEDUP_FOR_LH:
         return None, "lh_skip", "none"
@@ -1146,19 +1225,9 @@ def _dedup_opportunity(claimant: str, job_id: str, claim_code: str, body_text: s
                 # fallback to whatever second pass found (will be weak)
                 best_opp, best_reason = best2, reason2
 
-    is_strong = best_reason.startswith("strong_custom") or best_reason.startswith("phone_custom") or best_reason.startswith("owner_name_title")
-    # Phase 2: demote owner_name_title for record inbox / sending-domain contexts (per plan)
-    # Strongest unique = claim/JobID (dash-norm) + strong_custom. owner_name_title only strong outside record.
-    # Record context is passed by caller via global policy or we can re-detect cheaply.
-    try:
-        if best_reason.startswith("owner_name_title"):
-            # Re-detect using current globals + from data if possible is heavy; caller already sets policy.
-            # For safety, if we are in a record-like flow (is_record set by _process_email), demote.
-            # Since _dedup is pure, we conservatively do not promote owner_name_title to strong when
-            # the subject looks like bare claim or from known sending domains.
-            pass  # demotion is applied at call sites that know is_record (see _process_email record path)
-    except Exception:
-        pass
+    is_strong = best_reason.startswith("strong_custom") or best_reason.startswith("phone_custom") or (best_reason.startswith("owner_name_title") and not is_record)
+    # Phase 6: owner_name_title demotion for record inbox contexts (per plan)
+    # owner_name_title is NOT strong in record context — prevents false matches on BCC'd claim codes.
     strength = "strong" if is_strong else ("weak" if best_opp else "none")
     return best_opp, best_reason, strength
 
@@ -1724,7 +1793,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
 
         if has_carrier or is_record:
             # Suppress task; link + note only on strong match (if toggles allow)
-            existing, dedup_reason, match_strength = _dedup_opportunity("", "", _extract_claim_code(subject), body_text)
+            existing, dedup_reason, match_strength = _dedup_opportunity("", "", _extract_claim_code(subject), body_text, is_record=is_record)
             log_entry["dedup_reason"] = dedup_reason
             log_entry["match_strength"] = match_strength
             if existing and match_strength == "strong":
@@ -1736,6 +1805,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
                 if do_post_notes:
                     ok, st, err = _post_note(opp_id, f"Carrier ack/delay: {subject}\n\n{body_text[:600]}")
                     _record_action(log_entry, "posted_note", ok, st, err)
+            log_entry = _apply_ml_override(log_entry, "ack_delay", "strong", False, do_post_notes, is_record)
             _append_log_entry(log_entry)
             return log_entry
 
@@ -1751,6 +1821,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
                 for uid, ok, st, err, tid in res:
                     _record_action(log_entry, "created_task", ok, st, err)
                 log_entry["task_results"] = res
+            log_entry = _apply_ml_override(log_entry, "ack_delay_review_task", "none", do_create_tasks, False, is_record)
             _append_log_entry(log_entry)
             return log_entry
         # else: fall through to normal rules (rare)
@@ -1777,6 +1848,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
                 _record_action(log_entry, "created_task", ok, st, err)
                 if ok and tid is not None:
                     log_entry["task_id"] = tid
+        log_entry = _apply_ml_override(log_entry, "jobnimbus_task", "none", do_create_tasks, do_post_notes, is_record)
         _append_log_entry(log_entry)
         return log_entry
 
@@ -1802,6 +1874,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
                 _record_action(log_entry, "created_task", ok, st, err)
                 if ok and tid is not None:
                     log_entry["task_id"] = tid
+        log_entry = _apply_ml_override(log_entry, "jobnimbus_new_job", "none", do_create_tasks, do_post_notes, is_record)
         _append_log_entry(log_entry)
         return log_entry
 
@@ -1844,6 +1917,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
             log_entry["classification"] = "jobnimbus_mention_ambiguous"
             log_entry["contact_label"] = contact_label
             log_entry["apply_bot_review_mail"] = True
+            log_entry = _apply_ml_override(log_entry, "jobnimbus_mention_ambiguous", "none", do_create_tasks, do_post_notes, is_record)
             _append_log_entry(log_entry)
             return log_entry
 
@@ -1873,6 +1947,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
                 _record_action(log_entry, "created_task", ok, st, err)
             log_entry["task_results"] = res
 
+        log_entry = _apply_ml_override(log_entry, cls, "none", do_create_tasks, do_post_notes, is_record)
         _append_log_entry(log_entry)
         return log_entry
 
@@ -1887,7 +1962,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
         log_entry["job_id"] = job_id
         log_entry["completed"] = is_completed
 
-        existing, dedup_reason, match_strength = _dedup_opportunity(claimant, job_id, "", body_text)
+        existing, dedup_reason, match_strength = _dedup_opportunity(claimant, job_id, "", body_text, is_record=is_record)
         log_entry["dedup_reason"] = dedup_reason
         log_entry["match_strength"] = match_strength
         if existing and match_strength == "strong":
@@ -1983,6 +2058,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
                     for uid, ok, st, err, tid in res:
                         _record_action(log_entry, "created_task", ok, st, err)
                     log_entry["task_results"] = res
+        log_entry = _apply_ml_override(log_entry, "supplement_update", match_strength, do_create_tasks, do_post_notes, is_record)
         _append_log_entry(log_entry)
         return log_entry
 
@@ -1994,7 +2070,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
         log_entry["classification"] = "check_claimant"
         log_entry["claimant"] = claimant
 
-        existing, dedup_reason, match_strength = _dedup_opportunity(claimant, job_id, "", body_text)
+        existing, dedup_reason, match_strength = _dedup_opportunity(claimant, job_id, "", body_text, is_record=is_record)
         log_entry["dedup_reason"] = dedup_reason
         log_entry["match_strength"] = match_strength
         if existing and match_strength == "strong":
@@ -2017,6 +2093,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
                 for uid, ok, st, err, tid in res:
                     _record_action(log_entry, "created_task", ok, st, err)
                 log_entry["task_results"] = res
+        log_entry = _apply_ml_override(log_entry, "check_claimant", match_strength, do_create_tasks, do_post_notes, is_record)
         _append_log_entry(log_entry)
         return log_entry
 
@@ -2039,7 +2116,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
         log_entry["claim_code"] = claim_code
         log_entry["claimant"] = claimant
 
-        existing, dedup_reason, match_strength = _dedup_opportunity(claimant, "", claim_code, body_text)
+        existing, dedup_reason, match_strength = _dedup_opportunity(claimant, "", claim_code, body_text, is_record=is_record)
         log_entry["dedup_reason"] = dedup_reason
         log_entry["match_strength"] = match_strength
         if existing and match_strength == "strong":
@@ -2087,6 +2164,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
                 for uid, ok, st, err, tid in res:
                     _record_action(log_entry, "created_task", ok, st, err)
                 log_entry["task_results"] = res
+        log_entry = _apply_ml_override(log_entry, "reconciliation_task", match_strength, do_create_tasks, do_post_notes, is_record)
         _append_log_entry(log_entry)
         return log_entry
 
@@ -2097,7 +2175,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
         log_entry["classification"] = "adjuster_action"
         log_entry["claim_code"] = claim_code
 
-        existing, dedup_reason, match_strength = _dedup_opportunity("", "", claim_code, body_text)
+        existing, dedup_reason, match_strength = _dedup_opportunity("", "", claim_code, body_text, is_record=is_record)
         log_entry["dedup_reason"] = dedup_reason
         log_entry["match_strength"] = match_strength
         if existing and match_strength == "strong":
@@ -2153,6 +2231,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
                 for uid, ok, st, err, tid in res:
                     _record_action(log_entry, "created_task", ok, st, err)
                 log_entry["task_results"] = res
+        log_entry = _apply_ml_override(log_entry, "adjuster_action", match_strength, do_create_tasks, do_post_notes, is_record)
         _append_log_entry(log_entry)
         return log_entry
 
@@ -2166,7 +2245,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
         log_entry["claim_code"] = claim_code
         log_entry["carrier"] = has_carrier.group(1)
 
-        existing, dedup_reason, match_strength = _dedup_opportunity("", "", claim_code, body_text)
+        existing, dedup_reason, match_strength = _dedup_opportunity("", "", claim_code, body_text, is_record=is_record)
         log_entry["dedup_reason"] = dedup_reason
         log_entry["match_strength"] = match_strength
         if existing:
@@ -2193,6 +2272,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
             log_entry["no_deal"] = True
             log_entry["no_deal_reason"] = dedup_reason or "no strong match"
             log_entry["apply_bot_review_mail"] = True
+        log_entry = _apply_ml_override(log_entry, "carrier_adjuster_email", match_strength, do_create_tasks, do_post_notes, is_record)
         _append_log_entry(log_entry)
         return log_entry
 
@@ -2208,7 +2288,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
             log_entry["classification"] = "supplement_discussion"
             log_entry["claim_code"] = claim_code
 
-            existing, dedup_reason, match_strength = _dedup_opportunity(claimant, "", claim_code, body_text)
+            existing, dedup_reason, match_strength = _dedup_opportunity(claimant, "", claim_code, body_text, is_record=is_record)
             log_entry["dedup_reason"] = dedup_reason
             log_entry["match_strength"] = match_strength
             if existing and match_strength == "strong":
@@ -2250,6 +2330,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
                 log_entry["no_deal"] = True
                 log_entry["no_deal_reason"] = "no strong match"
                 log_entry["apply_bot_review_mail"] = True
+            log_entry = _apply_ml_override(log_entry, "supplement_discussion", match_strength, do_create_tasks, do_post_notes, is_record)
             _append_log_entry(log_entry)
             return log_entry
 
@@ -2261,7 +2342,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
         log_entry["classification"] = "claim_code_only"
         log_entry["claim_code"] = claim_code
 
-        existing, dedup_reason, match_strength = _dedup_opportunity("", "", claim_code, body_text)
+        existing, dedup_reason, match_strength = _dedup_opportunity("", "", claim_code, body_text, is_record=is_record)
         log_entry["dedup_reason"] = dedup_reason
         log_entry["match_strength"] = match_strength
         if existing and match_strength == "strong":
@@ -2294,13 +2375,14 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
             log_entry["no_deal"] = True
             log_entry["no_deal_reason"] = dedup_reason or "no strong match"
             log_entry["apply_bot_review_mail"] = True
+        log_entry = _apply_ml_override(log_entry, "claim_code_only", match_strength, do_create_tasks, do_post_notes, is_record)
         _append_log_entry(log_entry)
         return log_entry
 
     # 11. Acculynx Other
     if "acculynx" in from_email or "acculynx" in from_email.lower():
         log_entry["classification"] = "acculynx_other"
-        existing, dedup_reason, match_strength = _dedup_opportunity("", "", _extract_claim_code(subject), body_text)
+        existing, dedup_reason, match_strength = _dedup_opportunity("", "", _extract_claim_code(subject), body_text, is_record=is_record)
         log_entry["dedup_reason"] = dedup_reason
         log_entry["match_strength"] = match_strength
         if existing and match_strength == "strong":
@@ -2320,6 +2402,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
             log_entry["no_deal"] = True
             log_entry["no_deal_reason"] = dedup_reason or "no strong match"
             log_entry["apply_bot_review_mail"] = True  # ambiguous: Bot Review tag in shared mail inbox, leave unread, no task
+        log_entry = _apply_ml_override(log_entry, "acculynx_other", match_strength, do_create_tasks, do_post_notes, is_record)
         _append_log_entry(log_entry)
         return log_entry
 
@@ -2327,7 +2410,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
 
     # 12. Uncertain / ambiguous (no task for uncategorized; use Bot Review mail tag + leave unread)
     log_entry["classification"] = "uncertain"
-    existing, dedup_reason, match_strength = _dedup_opportunity("", "", _extract_claim_code(subject), body_text)
+    existing, dedup_reason, match_strength = _dedup_opportunity("", "", _extract_claim_code(subject), body_text, is_record=is_record)
     log_entry["dedup_reason"] = dedup_reason
     log_entry["match_strength"] = match_strength
     if existing and match_strength == "strong":
@@ -2348,6 +2431,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
         log_entry["no_deal_reason"] = dedup_reason or "no strong match"
         # poll_inbox will apply mail "Bot Review" tag and leave unread
         log_entry["apply_bot_review_mail"] = True
+    log_entry = _apply_ml_override(log_entry, "uncertain", match_strength, do_create_tasks, do_post_notes, is_record)
     _append_log_entry(log_entry)
     return log_entry
 

@@ -1,0 +1,37 @@
+# Example compose fragment to run the mail scanner service on the CRM droplet.
+# Place alongside the OnlyOffice community-server compose (on the 8 GB CRM droplet).
+# Join the onlyoffice network so it can reach http://onlyoffice-community-server internally.
+#
+# The scanner container is lightweight (<600 MiB with sentence-transformers when added later).
+# It uses bot creds and exposes admin surface on 8787 (bind as needed; typically internal or firewalled).
+
+services:
+  mail-scanner:
+    build:
+      context: .
+      dockerfile: scanner/Dockerfile
+    container_name: vanguard-mail-scanner
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SCANNER_PORT: "8787"
+      # BOT_CRM_EMAIL / BOT_CRM_PASSWORD (or SCANNER_CRM_*) must be set for bot inbox access
+      # SCANNER_ADMIN_TOKEN: "..."   # optional extra gate (same value as dashboard)
+      SCANNER_ENABLED: "true"
+      SCANNER_POLL_INTERVAL: "120"
+      # All action toggles default false (dry) unless set via persisted contractors.json or /config
+    volumes:
+      - scanner-data:/app/data
+    networks:
+      - onlyoffice
+    # No public port exposure recommended; dashboard reaches it via the droplet's IP or internal.
+    # If exposing: ports: ["127.0.0.1:8787:8787"]
+
+networks:
+  onlyoffice:
+    external: true
+    name: onlyoffice_default   # or the actual OnlyOffice network name on the CRM host
+
+volumes:
+  scanner-data:

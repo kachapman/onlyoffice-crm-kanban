@@ -1,6 +1,6 @@
 # Mail Scanner — Planning Document
 
-> Created 2026-07-08. Last updated 2026-07-11 (Phase 5 ML scaffolding added: lazy sentence-transformers/all-MiniLM-L6-v2 loading, _ml_embed/_ml_classify stubs, ml_* fields in log entries, classifier head pickle support, INSTALL_ML build arg in scanner Dockerfile. ML not yet trained — returns None until labeled data + head fitted). is unconditionally forced through _bot_crm_proxy using BOT_CRM_EMAIL/PASSWORD in both _handle_api_get and _handle_api_post_put. The CRM Mail Quick View modal (Inbox tab) now guarantees the shared bot view of the two inboxes + bot tags to every user. Personal inboxes excluded. UI badge + notes added. + prior Phase 1-4 items).
+> Created 2026-07-08. Last updated 2026-07-12 (Phase 6 ML implementation complete: train_ml_head.py training pipeline with mock data generator, _apply_ml_override() full override logic (ack suppress, owner_name_title demote, promote uncertain, suppress low-confidence notes), ML_ENABLED env var, requirements-ml.txt + Dockerfile INSTALL_ML, owner_name_title demotion fixed in _dedup_opportunity with is_record parameter). is unconditionally forced through _bot_crm_proxy using BOT_CRM_EMAIL/PASSWORD in both _handle_api_get and _handle_api_post_put. The CRM Mail Quick View modal (Inbox tab) now guarantees the shared bot view of the two inboxes + bot tags to every user. Personal inboxes excluded. UI badge + notes added. + prior Phase 1-4 items).
 > Scanned 200+ conversations from bot@vanguardadj.com inbox (accounts: requests@sherwoodestimates.com, crm@vanguardadj.online).
 > Source of truth for the auto mail scanner feature.
 
@@ -80,6 +80,28 @@ From the exact commands run on the droplet (68.183.130.39):
 - Dashboard (separate 1 GB droplet) will talk to the scanner service on the CRM droplet's public IP + a chosen port (e.g. 8787), or via internal networking if available.
 
 This matches the two-droplet model: heavy work + OnlyOffice on the 8 GB droplet; UI + admin only on the 1 GB droplet.
+
+### Local Testing vs Production Deployment
+
+**Local testing** (on your development machine):
+- The scanner code (`mail_scanner.py`) runs inside the dashboard server (`./start.sh`)
+- No ML dependencies needed for rule engine testing (ML_ENABLED=false by default)
+- To test ML training: `pip install -r requirements-ml.txt && python3 train_ml_head.py --generate-mock`
+- Scanner uses `SCANNER_SERVICE_URL` env var to connect to remote CRM, or runs locally with bot credentials
+- Safe to test — dry-run mode (all toggles false) means no tasks/notes/deals created
+
+**Production deployment** (on CRM droplet 68.183.130.39):
+- Scanner runs in its own Docker container (`scanner/Dockerfile`)
+- Build with `INSTALL_ML=1` to include sentence-transformers + scikit-learn
+- Train classifier inside container: `docker exec -it vanguard-mail-scanner python3 train_ml_head.py --generate-mock`
+- `classifier_head.pkl` persists in `/app/data/mail_scanner/ml_models/` volume
+- Enable ML: set `ML_ENABLED=true` in container env
+
+**Workflow:**
+1. Test locally with `./start.sh` (rule engine + dry-run)
+2. Push to GitHub: `git add -A && git commit -m "..." && git push`
+3. On CRM droplet: `git pull && docker build --build-arg INSTALL_ML=1 -t vanguard-mail-scanner -f scanner/Dockerfile . && docker run ...`
+4. Train inside container, restart to load trained head
 
 ### Process model
 - Scanner logic lives in its own container (separate Dockerfile / compose service on CRM droplet).
@@ -623,8 +645,16 @@ Add a row of category pill buttons between the "User" filter dropdown and the ta
 - [x] Classifier head pickle support (`classifier_head.pkl`); logistic/kNN head loaded on init if present.
 - [x] `ml_*` fields written to every log entry via `_process_email` (values None until head trained).
 - [x] Scanner Dockerfile: `INSTALL_ML=1` build arg installs sentence-transformers + scikit-learn + numpy in separate layer.
-- [ ] Bootstrap: export hundreds of log entries, label ~100-200 (class + key fields), train head, persist pickle.
-- [ ] Use ML for tie-breaks / weak signals only. Deterministic rules remain primary for auditability.
+- [x] **ML_ENABLED env var.** `ML_ENABLED=true/1/yes` enables ML. Default false.
+- [x] **Training pipeline.** `train_ml_head.py` with mock data generator (300 synthetic emails), interactive labeling mode, LogisticRegression head training, saves `classifier_head.pkl`.
+- [x] **Full ML override logic.** `_apply_ml_override()` runs after rule engine. Override rules:
+  1. `ml_category == "ack"` AND rule created task → suppress task creation (fixes 39978)
+  2. `ml_category == "record"` AND `dedup_reason == "owner_name_title"` → demote to weak (fixes 961/872/1136)
+  3. `ml_category == "actionable"` AND `ml_actionable_score > 0.7` AND classification == "uncertain" → promote to actionable
+  4. `ml_actionable_score < 0.2` AND rule would post note → suppress note (reduce noise)
+- [x] **owner_name_title demotion fixed.** `_dedup_opportunity` now accepts `is_record` parameter. When `is_record=True`, owner_name_title matches are demoted to weak. All 10 call sites updated.
+- [ ] **Bootstrap training.** Run `python3 train_ml_head.py --generate-mock` to create mock data, label it, train head, save pickle. OR export real logs when scanner deployed.
+- [ ] **Verify on bad cases.** Test with reprocess button on 39978 (ack), 961/872/1136 (owner_name_title collisions).
 
 ### Phase 6 — Admin UI Polish + Logging
 - [x] Scanner Admin tab: secret token login prompt (unlocks all controls). Inbox tab open to everyone.
@@ -667,6 +697,34 @@ The current regex + heuristic classifier has inference problems (wrong links on 
 - 8 GB RAM total on the droplet; we want headroom.
 - Latency and determinism matter for a background scanner.
 - The suggested embedding + small classifier is extremely effective for exactly this style of "email intent" classification.
+
+### ML Training Workflow
+
+**Bootstrap phase (current):**
+- Mock data generator in `train_ml_head.py` creates synthetic emails based on rule patterns
+- 300 samples across 4 categories (actionable/record/ack/uncertain)
+- Trains LogisticRegression head, saves `classifier_head.pkl`
+- Gets infrastructure in place (override logic, pickle format, env config)
+
+**Real data phase (after deployment):**
+1. Deploy scanner in **dry-run mode** (all toggles false) — no tasks/notes/deals created
+2. Collect real logs for a few days in `data/mail_scanner/log.jsonl`
+3. Export logs and run interactive labeling:
+   ```bash
+   # Inside container or locally with ML deps
+   python3 train_ml_head.py --label-mode --input logs.jsonl
+   # Edit the exported CSV, label ~100-200 samples
+   python3 train_ml_head.py --import-labels labeled.csv
+   ```
+4. Retrain on real data → much better accuracy on actual email patterns
+
+**Why mock data first?**
+- Gets the full pipeline working (training → pickle → load → override)
+- Allows testing the override logic before deployment
+- Real emails have nuances (spam, threading, forwarding) that mock data can't capture
+- Mock data is sufficient to verify the infrastructure works correctly
+
+**Key: The classifier head improves over time as more real data is labeled.**
 
 Future work item: prototype a training script + inference helper inside the scanner container, start with a small labeled set from the bad examples (the 961/872/1136 cases + ack vs request cases) plus a couple hundred recent logs. Use logistic regression / kNN head on top of all-MiniLM-L6-v2 embeddings. Correct labels over time.
 

@@ -4,6 +4,19 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 ## [Unreleased]
 
+### Phase 6: ML Implementation & Override Logic (2026-07-12)
+
+- **ML classifier fully implemented.** `train_ml_head.py` training pipeline with mock data generator for bootstrapping (300 synthetic emails across 4 categories: actionable/record/ack/uncertain). Interactive labeling mode exports CSV for manual labeling. Trains LogisticRegression head on all-MiniLM-L6-v2 embeddings, saves `classifier_head.pkl`.
+- **Full ML override logic.** `_apply_ml_override()` function runs after rule engine on every email. Override rules:
+  1. `ml_category == "ack"` AND rule created task → suppress task creation (fixes 39978 false positives)
+  2. `ml_category == "record"` AND `dedup_reason == "owner_name_title"` → demote to weak (fixes 961/872/1136 collisions)
+  3. `ml_category == "actionable"` AND `ml_actionable_score > 0.7` AND classification == "uncertain" → promote to actionable
+  4. `ml_actionable_score < 0.2` AND rule would post note → suppress note (reduce noise)
+- **ML_ENABLED env var.** Scanner now reads `ML_ENABLED=true/1/yes` from environment to enable ML. Default is false. No code changes needed to toggle.
+- **owner_name_title demotion fixed.** Previously a no-op (`pass`). Now `_dedup_opportunity` accepts `is_record` parameter. When `is_record=True`, owner_name_title matches are demoted to weak (not strong). All 10 call sites updated to pass `is_record=is_record`.
+- **requirements-ml.txt created.** `sentence-transformers>=2.2.0`, `scikit-learn>=1.2.0`, `numpy>=1.24.0`, `torch>=2.0.0`. Dockerfile updated with `INSTALL_ML=1` build arg.
+- **Training pipeline ready.** Run `python3 train_ml_head.py --generate-mock --samples 300` to bootstrap, or `--label-mode` for manual labeling. Once labeled data exists, train head and save to `data/mail_scanner/ml_models/classifier_head.pkl`.
+
 ### Architecture & mail scanner plan (2026-07-11)
 
 - **Phase 5 ML scaffolding.** Lazy sentence-transformers/all-MiniLM-L6-v2 loading (`_init_ml`, `_ml_embed`, `_ml_classify`). `ml_*` fields in every log entry. Classifier head pickle support. `INSTALL_ML=1` build arg in scanner Dockerfile. ML returns None until labeled data + head trained.

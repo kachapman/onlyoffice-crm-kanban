@@ -1,5 +1,38 @@
 # Known issues
 
+## ISSUE-007 — Tasks tile "All users" view does not show all users' tasks
+
+**Status:** Open
+
+### Symptoms
+- When the tasks tile dropdown is set to "All users", not all open tasks assigned to other users (Rebeca, Claudiu, etc.) are visible.
+- The user can see everyone's tasks in the native CRM task list.
+- Tasks created by the scanner for Rebeca/Claudiu (e.g. uncertain or carrier review tasks) do not appear in the dashboard "All" view even when they exist in CRM.
+- Selecting a specific user in the dropdown may also be inconsistent.
+
+### Background
+- The dashboard tasks tile fetches via `/api/2.0/crm/task/filter?startIndex=0&count=200&isClosed=false` (with optional `responsibleid`).
+- `populateTasksUserFilter()` builds the user list from `state.portalUsers` plus responsibles seen in the current `state.tasks`.
+- `renderTasksByUser()` does client-side filtering when a specific user is selected.
+- When "All" (empty value) is chosen, no `responsibleid` is sent, and the full returned set is shown.
+
+### Suspected causes
+- CRM `/task/filter` without `responsibleid` may not return every open task for all users (scope, permissions, or API behavior).
+- `state.tasks` may be filtered or incomplete compared to what the native CRM shows.
+- The dropdown only offers users that are already in the fetched task set or portalUsers, so some assignees may be missing from the UI.
+- Pagination or count limits may drop tasks belonging to other users.
+
+### Workaround
+- Use the native CRM task list to see all users' tasks.
+- Use the dropdown to filter to a known user when possible.
+
+### Next steps
+- Investigate the actual response of `/task/filter` (no responsibleid) vs per-user calls.
+- Consider fetching per-user tasks and unioning them for the "All" view, or documenting that the tile is intentionally limited.
+- Ensure the user dropdown always includes all portal users (not just those appearing in the current task slice).
+
+---
+
 ## ISSUE-006 — WebKit / Apple cache-busting attempt (July 4) — expensive disaster, ignored user feedback
 
 **Status:** ❌ Fully scrapped and removed 2026-07-05
@@ -446,3 +479,76 @@ When building employee-mode deal detail for the Telegram bot, we need the full t
 |------|------|
 | `server.py` | `_extract_mail_message_id()`, `_fetch_full_mail_body()`, `_extract_event_author()` |
 | `telegram_bot.py` | `_html_to_text()`, `_extract_forward_info()`, `_clean_reply_attribution()`, `_truncate_html()`, `_strip_html_tags()`, `_format_mail_event()` |
+
+---
+
+## ISSUE-008 — Mail scanner: duplicate tasks/links on resends, preview expand/delete for linked mail, +1d deadline, cleaned bodies, truthful logging
+
+**Status:** In progress. Core code + docs landed in this session. Verification + prod seed still needed.
+
+### Symptoms (before fixes)
+- Resends of the same email content arrived as *new* conversation IDs → scanner created duplicate tasks/links/notes (5× observed on claim codes like 0825006406).
+- Only conv `id` was stored in `processed_ids.json`; no date or content fingerprint.
+- Scanner-linked mail in opp preview showed "Linked email no longer available..." on expand.
+- No × delete button appeared on mail-linked history items (only plain notes).
+- Tasks defaulted to +7 days (policy is creation + 1 day ET).
+- JN descriptions contained raw forwarded headers and JobNimbus automation blocks.
+- Logs did not explicitly mark "no deal" cases for carrier/weak/uncertain paths.
+
+### Changes made (this session)
+**mail_scanner.py**
+- `_load/_save_processed_state` now persists both `ids` and `sigs`.
+- `_poll_inbox` computes timestamp + content signature: claim|from|coarse-date|bodyhash using `receivedDate`/`chainDate`/`date` + claim code + from + short body. Skips if seen before (even with new conv id).
+- `_create_task` deadline = now + 1 day (ET via zoneinfo "America/New_York").
+- New `_clean_jn_body()` strips "Forwarded Message", Subject/From/Date lines, "Automation (Contact) via JobNimbus", etc. Appends `Mail: ${PORTAL}/addons/mail/Default.aspx#conversation/{id}`.
+- JN rules 01/02/03 now use cleaned body + link.
+- `no_deal:true` + `no_deal_reason` set on every weak/no-strong path (supplement, carrier, adjuster, reconciliation, discussion, claim_code_only, acculynx_other, uncertain).
+- All actions still return (ok, status, err); truthful `actions_taken` / `errors[]` / `task_results[]`.
+- Friendly names, contact_label, match_strength, dedup_reason already present.
+
+**public/app.js**
+- `fetchMailMessage` now tries conversation fallback: `/api/2.0/mail/conversation/{id}.json?loadAll=false` + first message when direct `/messages/{id}` fails (scanner stores convId on link).
+- `isDeletableNote` relaxed so × delete works for mail-linked history items in preview.
+
+**tmp_force_reprocess.py**
+- Now prints `no_deal` / `no_deal_reason` in LOG_ENTRY.
+
+**Docs**
+- CHANGELOG.md: new "Scanner hardening (this session)" bullets under Unreleased.
+- AGENTS.md: last-session summary line added.
+- docs/MAIL_SCANNER_PLAN.md: persistence table, dispatch matrix, API reference, Phase 1 checklist marked complete for the new items.
+- ISSUES.md: this ISSUE-008 section (full context for resume).
+
+### Open items / what to verify on resume
+1. Clear or delete `data/mail_scanner/processed_ids.json` locally.
+2. Send/forward test emails (strong match + weak + JN mention + carrier).
+3. Run scanner or `python3 tmp_force_reprocess.py`; confirm:
+   - Exactly one task + one link per unique content (no 5×).
+   - Deadline is creation+1d ET.
+   - JN task bodies are clean + contain the mail deep link.
+   - Logs show `no_deal`, `match_strength`, `task_results`, `contact_label`, errors surfaced correctly.
+   - Preview expand works for scanner-linked mail + × delete present.
+4. Mark-read still happens (200).
+5. For production go-live: ensure processed_ids.json is absent on the droplet before the commit that enables the seed. Uncomment the seed call in `_scanner_loop()` only on the go-live commit.
+6. If any duplicates still slip through: consider tightening the date window in the sig or storing a rolling set of recent body hashes per claim.
+
+### Key files / functions for next session
+- mail_scanner.py: `_poll_inbox` (timestamp+sig gate), `_load/_save_processed_state`, `_parse_conv_timestamp`, `_conv_signature`, `_clean_jn_body`, `_create_task` (deadline), rule sites that set `no_deal`, `_record_action`.
+- public/app.js: `fetchMailMessage` (conv fallback), `renderHistoryEventItem` (deletable mail), admin scanner log renderer.
+- tmp_force_reprocess.py (verification harness).
+- data/mail_scanner/processed_ids.json (will contain "sigs").
+- docs/MAIL_SCANNER_PLAN.md, CHANGELOG.md, AGENTS.md, ISSUES.md (this section).
+
+### Commands to resume exactly here
+```bash
+cd ~/crm-kanban
+git status --short && git diff --stat
+git log --oneline -3
+# edit .env if needed
+./start.sh
+# or targeted reprocess
+python3 tmp_force_reprocess.py
+tail -f data/mail_scanner/log.jsonl | jq -c 'select(.classification) | {ts:.timestamp, cls:.classification, match:.match_strength, no_deal:.no_deal, reason:.no_deal_reason, actions:.actions_taken, errs:.errors}'
+```
+
+This issue captures the exact state so a fresh window can resume without re-exploration.

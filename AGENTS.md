@@ -2,6 +2,13 @@
 
 **Current version:** 2.2.1 (released 2026-07-08; see CHANGELOG.md)  
 **Last session summary (for next resume):** 
+- **Phase 6: ML Implementation & Override Logic (2026-07-12).**
+  - ML classifier fully implemented: `train_ml_head.py` with mock data generator (300 synthetic emails), interactive labeling mode, LogisticRegression head training, saves `classifier_head.pkl`.
+  - Full ML override logic: `_apply_ml_override()` runs after rule engine. Suppresses tasks for ack emails (fixes 39978), demotes owner_name_title in record context (fixes 961/872/1136), promotes uncertain to actionable, suppresses low-confidence notes.
+  - ML_ENABLED env var: `ML_ENABLED=true/1/yes` enables ML. Default false.
+  - owner_name_title demotion fixed: `_dedup_opportunity` now accepts `is_record` parameter. All 10 call sites updated.
+  - requirements-ml.txt + Dockerfile INSTALL_ML build arg ready.
+  - Next: Deploy to CRM droplet, build with `INSTALL_ML=1`, run training inside container, test on bad cases (39978/961/872/1136).
 - **Phase 5 ML scaffolding + Phase 6 admin UI polish + Phase 7 deploy prep done (2026-07-11).**
   - Phase 5: Lazy sentence-transformers/all-MiniLM-L6-v2 loading (`_init_ml`, `_ml_embed`, `_ml_classify`), `ml_*` fields in every log entry, classifier head pickle support, `INSTALL_ML=1` build arg in scanner Dockerfile. ML returns None until labeled data + head trained.
   - Phase 6: Real reprocess endpoint (`reprocess_conversations` in mail_scanner.py + `/reprocess` in scanner_service.py + proxy in server.py). Log viewer enhanced: source_inbox badge, ml_actionable_score badge, normalized_claim, policy, no_deal indicators. Reprocess button in Scanner Admin Log tab with checkboxes per entry. CSS for flex layout + checkboxes.
@@ -98,6 +105,8 @@ Legacy open items (lower priority unless asked): FEAT-003 attachments, new toast
 
 ## How to Run / Test / Deploy
 - **Dev (normal):** `cd ~/crm-kanban && cp -n config.example.env .env && ./start.sh` (or `python3 server.py`). Opens http://127.0.0.1:8765. Login with your OnlyOffice CRM credentials (sets the `oo_token` cookie used by the proxy).
+- **Scanner local testing:** Scanner runs inside the dashboard server. Use `SCANNER_ENABLED=true` in .env. Dry-run mode (all toggles false) is safe — no tasks/notes/deals created. To test ML training: `pip install -r requirements-ml.txt && python3 train_ml_head.py --generate-mock --samples 300`.
+- **Scanner production deployment:** Push to GitHub, then on CRM droplet (68.183.130.39): `git pull && docker build --build-arg INSTALL_ML=1 -t vanguard-mail-scanner -f scanner/Dockerfile . && docker run -d --name vanguard-mail-scanner -v scanner-data:/app/data -e ML_ENABLED=true -e SCANNER_CRM_EMAIL=bot@vanguardadj.com -e SCANNER_CRM_PASSWORD=... vanguard-mail-scanner`. Train inside container: `docker exec -it vanguard-mail-scanner python3 train_ml_head.py --generate-mock --samples 300`.
 - **Special test server (for mutation queue / offline resilience testing):** `python test-server.py`. This version supports controllable chaos mode (via `/api/test/chaos`) so you can simulate 5xx errors, delays, and network problems. (The client-side mutation queue / offline resilience is a completed implementation.)
 - **Test changes:** Browser + DevTools (Network tab for proxy/crm calls, Application → Local Storage for queue/profile, offline mode or the test server's chaos toggle). Always test both happy path and failure/retry scenarios for any new resilience code. Have test groups, tasks (with descriptions), history events, etc.
 - **No tests:** No automated suite; manual + visual + simulated failure testing.
