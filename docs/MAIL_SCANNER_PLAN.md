@@ -1,6 +1,6 @@
 # Mail Scanner — Planning Document
 
-> Created 2026-07-08. Last updated 2026-07-11 (bot-cred enforcement for dashboard mail modal complete + pushed: ALL /api/2.0/mail* traffic (GET+mutations for conversations, messages, accounts, mark, move, link, tag, etc.) is unconditionally forced through _bot_crm_proxy using BOT_CRM_EMAIL/PASSWORD in both _handle_api_get and _handle_api_post_put. The CRM Mail Quick View modal (Inbox tab) now guarantees the shared bot view of the two inboxes + bot tags to every user. Personal inboxes excluded. UI badge + notes added. + prior Phase 1-4 items).
+> Created 2026-07-08. Last updated 2026-07-11 (Phase 5 ML scaffolding added: lazy sentence-transformers/all-MiniLM-L6-v2 loading, _ml_embed/_ml_classify stubs, ml_* fields in log entries, classifier head pickle support, INSTALL_ML build arg in scanner Dockerfile. ML not yet trained — returns None until labeled data + head fitted). is unconditionally forced through _bot_crm_proxy using BOT_CRM_EMAIL/PASSWORD in both _handle_api_get and _handle_api_post_put. The CRM Mail Quick View modal (Inbox tab) now guarantees the shared bot view of the two inboxes + bot tags to every user. Personal inboxes excluded. UI badge + notes added. + prior Phase 1-4 items).
 > Scanned 200+ conversations from bot@vanguardadj.com inbox (accounts: requests@sherwoodestimates.com, crm@vanguardadj.online).
 > Source of truth for the auto mail scanner feature.
 
@@ -618,11 +618,13 @@ Add a row of category pill buttons between the "User" filter dropdown and the ta
 - Next (later): move full scanner loop + ML into the container; dashboard remains UI + proxy only.
 
 ### Phase 5 — ML (sentence-transformers start)
-- all-MiniLM-L6-v2 + logistic/kNN head inside scanner container (<500 MB).
-- Embed (subject + most-recent clean body).
-- Output as feature: `ml_actionable_score`, `ml_category` (actionable/record/ack/uncertain).
-- Use for tie-breaks and weak signals only. Deterministic rules remain primary.
-- Bootstrap: classify hundreds of recent emails (dry), label ~100-200 (class + key fields), train, log `ml_*` on every entry, iterate with corrections.
+- [x] Lazy import + init of sentence-transformers/all-MiniLM-L6-v2 (gated by ML_ENABLED flag; graceful fallback when deps missing).
+- [x] `_ml_embed(text)` and `_ml_classify(subject, body)` stubs: embed subject+clean body; return `ml_actionable_score`, `ml_category` (actionable/record/ack/uncertain), truncated embedding for log.
+- [x] Classifier head pickle support (`classifier_head.pkl`); logistic/kNN head loaded on init if present.
+- [x] `ml_*` fields written to every log entry via `_process_email` (values None until head trained).
+- [x] Scanner Dockerfile: `INSTALL_ML=1` build arg installs sentence-transformers + scikit-learn + numpy in separate layer.
+- [ ] Bootstrap: export hundreds of log entries, label ~100-200 (class + key fields), train head, persist pickle.
+- [ ] Use ML for tie-breaks / weak signals only. Deterministic rules remain primary for auditability.
 
 ### Phase 6 — Admin UI Polish + Logging
 - Scanner Admin tab: secret token login prompt (unlocks all controls). Inbox tab open to everyone.
