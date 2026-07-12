@@ -17746,6 +17746,10 @@ function _scannerShowSection(showId) {
     const el = document.getElementById(id);
     if (el) el.style.display = id === showId ? "" : "none";
   }
+  // Update active tab button
+  document.querySelectorAll(".scanner-admin-tab-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.section === showId);
+  });
 }
 
 async function _renderScannerAdminStatus() {
@@ -18081,29 +18085,48 @@ async function _renderScannerAdminRules() {
       const selected = rules[ruleKey] || [];
       html += `<div class="scanner-rule-row">
         <span class="scanner-rule-label" title="${escapeHtml(ruleKey)}">${escapeHtml(label)}</span>
-        <div class="scanner-rule-users">`;
+        <div class="scanner-rule-controls">
+          <select class="scanner-rule-select" data-rule="${escapeHtml(ruleKey)}" multiple size="4">`;
       for (const su of selectableUsers) {
-        const checked = selected.includes(su.key) ? "checked" : "";
-        html += `<span class="scanner-rule-user">
-          <input type="checkbox" data-rule="${escapeHtml(ruleKey)}" data-user="${escapeHtml(su.key)}" ${checked} id="rule-${escapeHtml(ruleKey)}-${escapeHtml(su.key)}" />
-          <label for="rule-${escapeHtml(ruleKey)}-${escapeHtml(su.key)}">${escapeHtml(su.label)}</label>
-        </span>`;
+        const sel = selected.includes(su.key) ? "selected" : "";
+        html += `<option value="${escapeHtml(su.key)}" ${sel}>${escapeHtml(su.label)}</option>`;
       }
-      html += `</div></div>`;
+      html += `</select>
+          <div class="scanner-rule-selected" data-rule-chips="${escapeHtml(ruleKey)}">`;
+      for (const su of selectableUsers) {
+        if (selected.includes(su.key)) {
+          html += `<span class="scanner-rule-chip">${escapeHtml(su.label)}</span>`;
+        }
+      }
+      html += `</div></div></div>`;
     }
     html += `</div>
       <button type="button" id="scanner-rules-save-btn" class="btn btn-secondary btn-sm scanner-rules-save">Save Assignee Rules</button>
       <span id="scanner-rules-save-status" style="margin-left:0.5rem;font-size:0.8rem;color:var(--muted);"></span>`;
     el.innerHTML = html;
 
+    // Sync chips with select changes
+    el.querySelectorAll(".scanner-rule-select").forEach((sel) => {
+      sel.addEventListener("change", () => {
+        const ruleKey = sel.dataset.rule;
+        const chipsEl = el.querySelector(`[data-rule-chips="${ruleKey}"]`);
+        if (!chipsEl) return;
+        chipsEl.innerHTML = "";
+        for (const opt of sel.selectedOptions) {
+          const chip = document.createElement("span");
+          chip.className = "scanner-rule-chip";
+          chip.textContent = opt.textContent;
+          chipsEl.appendChild(chip);
+        }
+      });
+    });
+
     $("#scanner-rules-save-btn")?.addEventListener("click", async () => {
       const newRules = {};
-      const chk = el.querySelectorAll('input[type="checkbox"][data-rule]');
-      for (const cb of chk) {
-        const rk = cb.dataset.rule;
-        if (!newRules[rk]) newRules[rk] = [];
-        if (cb.checked) newRules[rk].push(cb.dataset.user);
-      }
+      el.querySelectorAll(".scanner-rule-select").forEach((sel) => {
+        const rk = sel.dataset.rule;
+        newRules[rk] = Array.from(sel.selectedOptions).map((o) => o.value);
+      });
       try {
         cfg.assignee_rules = newRules;
         const saveRes = await fetch("/api/scanner/contractors", {
@@ -18183,34 +18206,28 @@ async function _renderScannerAdminIdentity() {
           <button type="button" id="scanner-id-save" class="btn btn-secondary btn-sm">Save</button>
         </div>
         <div id="scanner-id-status" style="margin-top:.4rem;font-size:.8rem;color:var(--muted);"></div>
-        <div id="scanner-id-restart" style="display:none;margin-top:.3rem;font-size:.8rem;color:#f59e0b;">
-          Credentials saved. Restart required: run <code>./start.sh</code> (or restart the service) for the new identity to take effect.
-        </div>
       </div>
     `;
     const saveBtn = $("#scanner-id-save");
     const stat = $("#scanner-id-status");
-    const restart = $("#scanner-id-restart");
     if (saveBtn) saveBtn.addEventListener("click", async () => {
       const email = ($("#scanner-id-email")?.value || "").trim();
       const password = $("#scanner-id-pass")?.value || "";
+      if (!email) { if (stat) { stat.textContent = "Email is required"; stat.style.color = "red"; } return; }
       try {
-        const payload = { ...(cfg || {}) };
-        payload.scanner_identity = { email, password };
-        const putRes = await fetch("/api/scanner/contractors", {
+        const putRes = await fetch("/api/scanner/credentials", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           credentials: "same-origin",
-          body: JSON.stringify(payload),
+          body: JSON.stringify({ email, password }),
         });
         if (putRes.ok) {
-          if (stat) { stat.textContent = "Saved."; stat.style.color = "var(--accent)"; }
-          if (restart) restart.style.display = "";
-          // Clear fields after save
+          if (stat) { stat.textContent = "Credentials saved and active — no restart needed."; stat.style.color = "var(--accent)"; }
           const ei = $("#scanner-id-email"); if (ei) ei.value = "";
           const pi = $("#scanner-id-pass"); if (pi) pi.value = "";
         } else {
-          if (stat) { stat.textContent = "Save failed"; stat.style.color = "red"; }
+          const err = await putRes.json().catch(() => ({}));
+          if (stat) { stat.textContent = err.error || "Save failed"; stat.style.color = "red"; }
         }
       } catch {
         if (stat) { stat.textContent = "Error saving"; stat.style.color = "red"; }

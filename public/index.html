@@ -446,13 +446,13 @@
       <div id="mail-tab-scanner-admin" class="mail-tab-pane" style="display:none;">
         <div class="mail-toolbar">
           <span style="font-size:0.85rem;color:var(--accent);font-weight:600;">Auto Mail Scanner</span>
-          <span style="margin-left:auto;font-size:0.75rem;color:var(--muted);">
-            <span id="scanner-admin-toggle">Status</span>
-            <span id="scanner-admin-log-btn" class="clickable" style="cursor:pointer;margin-left:0.5rem;text-decoration:underline;">Log</span>
-            <span id="scanner-admin-rules-btn" class="clickable" style="cursor:pointer;margin-left:0.5rem;text-decoration:underline;">Assignee Rules</span>
-            <span id="scanner-admin-contractors-btn" class="clickable" style="cursor:pointer;margin-left:0.5rem;text-decoration:underline;">Contractors</span>
-            <span id="scanner-admin-identity-btn" class="clickable" style="cursor:pointer;margin-left:0.5rem;text-decoration:underline;">Scanner Identity</span>
-            <span id="scanner-admin-behavior-btn" class="clickable" style="cursor:pointer;margin-left:0.5rem;text-decoration:underline;">Behavior</span>
+          <span style="margin-left:auto;display:flex;gap:0.35rem;flex-wrap:wrap;">
+            <button type="button" id="scanner-admin-toggle" class="scanner-admin-tab-btn active" data-section="scanner-admin-status">Status</button>
+            <button type="button" id="scanner-admin-log-btn" class="scanner-admin-tab-btn" data-section="scanner-admin-log">Log</button>
+            <button type="button" id="scanner-admin-rules-btn" class="scanner-admin-tab-btn" data-section="scanner-admin-rules">Assignee Rules</button>
+            <button type="button" id="scanner-admin-contractors-btn" class="scanner-admin-tab-btn" data-section="scanner-admin-contractors">Contractors</button>
+            <button type="button" id="scanner-admin-identity-btn" class="scanner-admin-tab-btn" data-section="scanner-admin-identity">Scanner Identity</button>
+            <button type="button" id="scanner-admin-behavior-btn" class="scanner-admin-tab-btn" data-section="scanner-admin-behavior">Behavior</button>
           </span>
         </div>
         <div class="mail-scanner-admin-body">

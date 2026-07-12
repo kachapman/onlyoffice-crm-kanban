@@ -164,6 +164,35 @@ class ScannerHandler(BaseHTTPRequestHandler):
             _json_response(self, 200, {"ok": True, "changed": changed})
             return
 
+        if path == "/credentials":
+            if not _require_admin(self)[0]:
+                return
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON"})
+                return
+            email = (payload.get("email") or "").strip()
+            password = payload.get("password") or ""
+            if not email:
+                _json_response(self, 400, {"error": "email required"})
+                return
+            # Live update — no restart needed
+            mail_scanner.configure(SCANNER_CRM_EMAIL=email, SCANNER_CRM_PASSWORD=password)
+            # Clear cached CRM token so next poll re-authenticates with new creds
+            mail_scanner._crm_token = ""
+            mail_scanner._crm_token_expires = 0
+            # Persist to contractors.json
+            cfg = mail_scanner.get_contractors() or {}
+            if not isinstance(cfg, dict):
+                cfg = {}
+            cfg["scanner_identity"] = {"email": email, "password": password}
+            cfg["SCANNER_CRM_EMAIL"] = email
+            cfg["SCANNER_CRM_PASSWORD"] = password
+            mail_scanner.update_contractors(cfg)
+            _json_response(self, 200, {"ok": True})
+            return
+
         _json_response(self, 404, {"error": "Not found"})
 
     def do_POST(self):

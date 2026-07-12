@@ -2577,6 +2577,60 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"ok": True, "changed": changed})
             return
 
+        # Live credential update — no restart required
+        if api_path == "/api/scanner/credentials" and method == "PUT":
+            auth = _require_auth(self)
+            if not auth:
+                return
+            portal, token, _user_id = auth
+            if not self._is_admin(portal, token):
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            body = _read_body(self)
+            # Extra secret token gate for scanner admin
+            if SCANNER_ADMIN_TOKEN:
+                supplied = self.headers.get("X-Scanner-Admin-Token", "") or ""
+                try:
+                    body_preview = json.loads(body or b"{}")
+                    supplied = supplied or (body_preview.get("admin_token") or "")
+                except Exception:
+                    pass
+                if supplied != SCANNER_ADMIN_TOKEN:
+                    _json_response(self, 403, {"error": "Scanner admin token required"})
+                    return
+            try:
+                payload = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON body"})
+                return
+            email = (payload.get("email") or "").strip()
+            password = payload.get("password") or ""
+            if not email:
+                _json_response(self, 400, {"error": "email required"})
+                return
+            # Standalone mode: forward to remote scanner service
+            fwd = _forward_scanner_request(self, "/credentials", method="PUT", body=body)
+            if fwd is not None:
+                status, data = fwd
+                _json_response(self, status, data)
+                return
+            # Embedded mode: apply directly
+            try:
+                mail_scanner.configure(SCANNER_CRM_EMAIL=email, SCANNER_CRM_PASSWORD=password)
+                mail_scanner._crm_token = ""
+                mail_scanner._crm_token_expires = 0
+                cfg = get_contractors() or {}
+                if not isinstance(cfg, dict):
+                    cfg = {}
+                cfg["scanner_identity"] = {"email": email, "password": password}
+                cfg["SCANNER_CRM_EMAIL"] = email
+                cfg["SCANNER_CRM_PASSWORD"] = password
+                update_contractors(cfg)
+                _json_response(self, 200, {"ok": True})
+            except Exception as e:
+                _json_response(self, 500, {"error": str(e)})
+            return
+
         if api_path == "/api/scanner/config" and method == "GET":
             # Return current effective behavior (sanitized view)
             try:
