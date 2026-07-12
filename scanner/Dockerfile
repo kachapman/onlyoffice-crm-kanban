@@ -8,13 +8,18 @@ RUN useradd --create-home --uid 10001 appuser
 COPY mail_scanner.py scanner/scanner_service.py ./
 COPY VERSION CHANGELOG.md ./
 
+# ML training script + requirements
+COPY train_ml_head.py requirements-ml.txt ./
+
 # Optional ML dependencies (sentence-transformers + torch)
 # Install in a separate layer so the base image stays small when ML is disabled.
 # Set INSTALL_ML=1 at build time to include them.
+# Uses CPU-only torch to avoid pulling nvidia/CUDA packages.
 ARG INSTALL_ML=0
 RUN if [ "$INSTALL_ML" = "1" ]; then \
+      pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
       pip install --no-cache-dir sentence-transformers scikit-learn numpy && \
-      echo "ML dependencies installed"; \
+      echo "ML dependencies installed (CPU-only torch)"; \
     else \
       echo "ML dependencies skipped (INSTALL_ML=0)"; \
     fi

@@ -17,6 +17,7 @@ USER appuser
 
 COPY requirements-ml.txt ./
 RUN if [ "$INSTALL_ML" = "1" ]; then \
+      pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
       pip install --no-cache-dir -r requirements-ml.txt; \
     fi
 
