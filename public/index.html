@@ -410,10 +410,19 @@
           <button type="button" id="mail-mark-unread" class="btn btn-secondary btn-small" disabled>Mark unread</button>
           <button type="button" id="mail-delete" class="btn btn-secondary btn-small" disabled title="Delete selected conversations">Delete</button>
           <button type="button" id="mail-clear-selection" class="btn btn-ghost btn-small" disabled>Clear selection</button>
-          <button type="button" id="mail-mark-all-read" class="btn btn-secondary btn-small">Mark all loaded as read</button>
-           <button type="button" id="mail-refresh" class="btn btn-secondary btn-small">Refresh</button>
-           <span id="mail-today-count" class="mail-today-count"></span>
-           <span class="mail-bot-badge" title="All dashboard users see the same bot-managed inboxes + tags">bot inbox</span>
+          <div class="mail-tag-dropdown-wrap">
+            <button type="button" id="mail-tags-btn" class="btn btn-secondary btn-small" disabled>Add Tags ▾</button>
+            <div id="mail-tags-dropdown" class="mail-tags-dropdown hidden"></div>
+          </div>
+           <button type="button" id="mail-mark-all-read" class="btn btn-secondary btn-small">Mark all loaded as read</button>
+            <button type="button" id="mail-refresh" class="btn btn-secondary btn-small">Refresh</button>
+            <span id="mail-today-count" class="mail-today-count"></span>
+            <span class="mail-bot-badge" title="All dashboard users see the same bot-managed inboxes + tags">bot inbox</span>
+            <span class="mail-inbox-filter-group">
+              <button type="button" class="mail-inbox-filter-btn active" data-inbox-filter="all">All</button>
+              <button type="button" class="mail-inbox-filter-btn" data-inbox-filter="crm">CRM</button>
+              <button type="button" class="mail-inbox-filter-btn" data-inbox-filter="req">REQ</button>
+            </span>
         </div>
 
         <div class="mail-main-area">

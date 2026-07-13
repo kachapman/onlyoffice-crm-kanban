@@ -118,6 +118,19 @@ class ScannerHandler(BaseHTTPRequestHandler):
             _json_response(self, 200, {"entries": entries})
             return
 
+        if path == "/feedback":
+            try:
+                limit = 200
+                ls = (qs.get("limit") or [""])[0]
+                if ls.isdigit():
+                    limit = int(ls)
+                entries = mail_scanner.get_feedback_entries(limit)
+            except Exception as e:
+                _json_response(self, 500, {"error": str(e)})
+                return
+            _json_response(self, 200, {"entries": entries})
+            return
+
         _json_response(self, 404, {"error": "Not found"})
 
     def do_PUT(self):
@@ -224,6 +237,43 @@ class ScannerHandler(BaseHTTPRequestHandler):
                 _json_response(self, 500, {"error": str(e)})
                 return
             _json_response(self, 200, {"results": results})
+            return
+
+        if path == "/feedback":
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON"})
+                return
+            try:
+                result = mail_scanner.store_user_feedback(payload)
+            except ValueError as e:
+                _json_response(self, 400, {"error": str(e)})
+                return
+            except Exception as e:
+                _json_response(self, 500, {"error": str(e)})
+                return
+            _json_response(self, 200, result)
+            return
+
+        if path == "/retrain":
+            ok, body = _require_admin(self)
+            if not ok:
+                return
+            try:
+                payload = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON"})
+                return
+            try:
+                result = mail_scanner.retrain_classifier_head(
+                    mock_samples=int(payload.get("samples", 300)),
+                    use_feedback=bool(payload.get("use_feedback", True)),
+                )
+            except Exception as e:
+                _json_response(self, 500, {"error": str(e)})
+                return
+            _json_response(self, 200 if result.get("ok") else 500, result)
             return
 
         _json_response(self, 404, {"error": "Not found"})

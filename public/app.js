@@ -13694,6 +13694,9 @@ let mailState = {
   pageSize: 50,
   search: '',
   selected: new Set(),
+  availableTags: [],   // [{id, name}] cached from /api/2.0/mail/tags.json
+  scannerLogMap: new Map(), // conversation_id → { source_inbox, classification, actions_taken, linked_opp_id, ... }
+  inboxFilter: 'all',  // 'all' | 'crm' | 'req'
 };
 
 // Dashboard-side read/unread overrides for the mail inbox list.
@@ -13777,6 +13780,142 @@ function getMailTags(m) {
   }).map(s => s.trim()).filter(Boolean);
 }
 
+// Mail tag API helpers (add/remove tags on conversations via bot-proxied CRM API)
+async function fetchMailTags() {
+  if (mailState.availableTags.length) return mailState.availableTags;
+  try {
+    const data = unwrap(await api('/api/2.0/mail/tags.json'));
+    mailState.availableTags = data.map(t => ({ id: t.id || t.ID || t.Id, name: t.name || t.Name || t.title || t.Title || '' })).filter(t => t.id);
+    return mailState.availableTags;
+  } catch (e) {
+    console.warn('[mail-inbox] fetchMailTags failed:', e);
+    return [];
+  }
+}
+
+async function addMailTag(convId, tagId) {
+  const params = new URLSearchParams();
+  params.append('messages[]', String(convId));
+  const ts = Date.now();
+  await api(`/api/2.0/mail/conversations/tag/${tagId}/set.json?__=${ts}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+    body: params.toString()
+  });
+}
+
+async function removeMailTag(convId, tagId) {
+  const params = new URLSearchParams();
+  params.append('messages[]', String(convId));
+  const ts = Date.now();
+  // Try unset endpoint first; fall back to set with removal semantics
+  try {
+    await api(`/api/2.0/mail/conversations/tag/${tagId}/unset.json?__=${ts}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+      body: params.toString()
+    });
+  } catch (e1) {
+    try {
+      await api(`/api/2.0/mail/conversations/tag/${tagId}/unset?__=${ts}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+        body: params.toString()
+      });
+    } catch (e2) {
+      console.warn('[mail-inbox] removeMailTag: both unset endpoints failed, trying messages variant');
+      await api(`/api/2.0/mail/messages/tag/${tagId}/unset.json?__=${ts}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+        body: params.toString()
+      });
+    }
+  }
+}
+
+async function submitMailFeedback(convId, verdict, opts = {}) {
+  const payload = {
+    conversation_id: String(convId),
+    user_verdict: verdict,
+  };
+  if (opts.correction) payload.user_correction = opts.correction;
+  if (opts.correctClassification) payload.correct_classification = opts.correctClassification;
+  if (opts.correctOppId) payload.correct_opp_id = opts.correctOppId;
+  if (opts.correctOppTitle) payload.correct_opp_title = opts.correctOppTitle;
+  if (opts.notes) payload.notes = opts.notes;
+  return await api('/api/scanner/feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+}
+
+// ── Inbox type detection + suggested actions ──
+
+const _CLASSIFICATION_LABELS = {
+  ack_delay: "ack/delay",
+  jobnimbus_task: "JN task",
+  jobnimbus_new_job: "JN new job",
+  jobnimbus_mention_est: "JN mention (est)",
+  jobnimbus_mention: "JN mention",
+  jobnimbus_mention_ambiguous: "JN ambiguous",
+  supplement_update: "supplement update",
+  check_claimant: "claimant check",
+  reconciliation_task: "reconciliation",
+  adjuster_action: "adjuster action",
+  carrier_adjuster_email: "carrier email",
+  supplement_discussion: "supplement discussion",
+  claim_code_only: "claim code",
+  acculynx_other: "acculynx other",
+  uncertain: "uncertain",
+};
+
+const _SUGGESTED_ACTION_MAP = {
+  // Record inbox: what the user should do manually (scanner can't due to policy gate)
+  ack_delay: null, // just link, no follow-up needed
+  jobnimbus_task: "task needed",
+  jobnimbus_new_job: "task needed",
+  jobnimbus_mention_est: "task needed",
+  jobnimbus_mention: "task needed",
+  jobnimbus_mention_ambiguous: "review needed",
+  supplement_update: "task needed",
+  check_claimant: "task needed",
+  reconciliation_task: "reconcile",
+  adjuster_action: "task + notify customer",
+  carrier_adjuster_email: null, // link only
+  supplement_discussion: "task needed",
+  claim_code_only: null, // link only
+  acculynx_other: "review needed",
+  uncertain: "review needed",
+};
+
+/** Get inbox type info for a mail message from scanner log cross-reference. */
+function getMailInboxInfo(msg) {
+  const id = String(msg?.id || msg?.ID || "");
+  if (!id) return null;
+  const logEntry = mailState.scannerLogMap.get(id);
+  if (!logEntry) return null;
+  const isRecord = logEntry.source_inbox === "record";
+  const isAction = logEntry.source_inbox === "action";
+  const channel = isRecord ? "crm" : isAction ? "req" : "unknown";
+  const classification = logEntry.classification || null;
+  const classLabel = classification ? (_CLASSIFICATION_LABELS[classification] || classification) : null;
+  const actionsTaken = Array.isArray(logEntry.actions_taken) ? logEntry.actions_taken : [];
+  // Suggested action: what the user should do manually (only meaningful for record inbox where tasks are suppressed)
+  const suggested = isRecord && classification ? (_SUGGESTED_ACTION_MAP[classification] || null) : null;
+  // Format actions taken as short labels
+  const actionLabels = actionsTaken.map(a => {
+    if (a === "linked_email") return "linked";
+    if (a === "posted_note") return "note";
+    if (a === "created_task") return "task";
+    if (a === "added_tag" || a === "added_tags") return "tag";
+    if (a === "marked_read") return "read";
+    if (a === "tagged_bot_review") return "Bot Review";
+    return a.replace(/_/g, " ");
+  });
+  return { channel, classLabel, actionLabels, suggested };
+}
+
 function bindMailInboxButton() {
   const btn = $("#mail-inbox-btn");
   if (!btn || btn.dataset.bound) return;
@@ -13800,15 +13939,21 @@ async function openMailInboxModal() {
   modal.classList.remove("hidden");
   loadMailDashboardReadIds();
   resetQuickLinkSidebar();
-  mailState = { accounts: [], messages: [], pageSize: 50, search: '', selected: new Set() };
+  const prevTags = mailState.availableTags || [];
+  const prevLogMap = mailState.scannerLogMap || new Map();
+  const prevFilter = mailState.inboxFilter || 'all';
+  mailState = { accounts: [], messages: [], pageSize: 50, search: '', selected: new Set(), availableTags: prevTags, scannerLogMap: prevLogMap, inboxFilter: prevFilter };
   $("#mail-search-input").value = "";
   // Note: the server forces all /api/2.0/mail* (GET + mutations) through bot credentials.
   // Everyone sees the same shared bot view of the two inboxes + bot mail tags.
+  fetchMailTags().catch(() => {}); // warm cache in background
   await loadMailMessagesForModal();
   attachMailModalListeners();
   _appendMailInboxTabListeners();
   // Reset to Inbox tab every open
   _switchMailInboxTab("inbox");
+  // Ensure tag dropdown is closed
+  const td = $("#mail-tags-dropdown"); if (td) td.classList.add("hidden");
 }
 
 function attachMailModalListeners() {
@@ -14067,6 +14212,36 @@ function attachMailModalListeners() {
       toggleBtn.textContent = collapsed ? "◀" : "▶";
     });
   }
+
+  // mail tag dropdown
+  const tagsBtn = $("#mail-tags-btn");
+  const tagsDropdown = $("#mail-tags-dropdown");
+  if (tagsBtn && tagsDropdown) {
+    tagsBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (tagsDropdown.classList.contains("hidden")) {
+        await renderMailTagDropdown();
+        tagsDropdown.classList.remove("hidden");
+      } else {
+        tagsDropdown.classList.add("hidden");
+      }
+    });
+    document.addEventListener("click", () => tagsDropdown.classList.add("hidden"));
+    tagsDropdown.addEventListener("click", e => e.stopPropagation());
+  }
+
+  // Inbox filter buttons (All | CRM | REQ)
+  const filterBtns = modal.querySelectorAll(".mail-inbox-filter-btn");
+  filterBtns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const filter = btn.dataset.inboxFilter || "all";
+      mailState.inboxFilter = filter;
+      filterBtns.forEach(b => b.classList.toggle("active", b.dataset.inboxFilter === filter));
+      renderMailList(mailState.messages);
+    });
+  });
+  // Set initial active state
+  filterBtns.forEach(b => b.classList.toggle("active", b.dataset.inboxFilter === (mailState.inboxFilter || "all")));
 }
 
 async function loadMailAccountsForModal() {
@@ -14108,11 +14283,24 @@ async function loadMailMessagesForModal() {
   if (searchVal) q += `&search=${encodeURIComponent(searchVal)}`;
 
   try {
-    const data = unwrap(await api(`/api/2.0/mail/conversations.json?${q}`));
+    // Fetch conversations + scanner log in parallel
+    const [data, logData] = await Promise.all([
+      api(`/api/2.0/mail/conversations.json?${q}`).then(unwrap),
+      fetch("/api/scanner/log?limit=500", { credentials: "same-origin" }).then(r => r.json()).catch(() => ({ entries: [] })),
+    ]);
     const items = Array.isArray(data) ? data : (data?.conversations ?? data?.items ?? []);
     if (items.length) {
       console.debug('[mail-inbox] conversation keys:', Object.keys(items[0]).join(', '));
     }
+
+    // Build scanner log map: conversation_id → log entry (most recent per conv)
+    const logMap = new Map();
+    for (const entry of (logData.entries || [])) {
+      const cid = String(entry.conversation_id || "");
+      if (!cid) continue;
+      if (!logMap.has(cid)) logMap.set(cid, entry);
+    }
+    mailState.scannerLogMap = logMap;
 
     // Apply read status
     items.forEach(m => {
@@ -14147,6 +14335,22 @@ function renderMailList(msgs) {
     return;
   }
 
+  // Apply inbox filter (All | CRM | REQ)
+  const filter = mailState.inboxFilter || "all";
+  let filtered = msgs;
+  if (filter === "crm" || filter === "req") {
+    filtered = msgs.filter(m => {
+      const id = String(m.id || m.ID);
+      const info = mailState.scannerLogMap.get(id);
+      if (!info) return false; // not in scanner log → hide when filtering
+      return filter === "crm" ? info.source_inbox === "record" : info.source_inbox === "action";
+    });
+    if (!filtered.length) {
+      list.innerHTML = `<div class="mail-empty">No ${filter.toUpperCase()} inbox emails found.</div>`;
+      return;
+    }
+  }
+
   // header
   const header = document.createElement("div");
   header.className = "mail-row mail-header";
@@ -14161,29 +14365,80 @@ function renderMailList(msgs) {
 
   const cbAll = header.querySelector("#mail-cb-all");
   if (cbAll) {
-    cbAll.checked = msgs.length > 0 && msgs.every(m => mailState.selected.has(String(m.id || m.ID)));
+    cbAll.checked = filtered.length > 0 && filtered.every(m => mailState.selected.has(String(m.id || m.ID)));
     cbAll.addEventListener("change", () => {
-      msgs.forEach(m => {
+      filtered.forEach(m => {
         const id = String(m.id || m.ID);
         if (cbAll.checked) mailState.selected.add(id);
         else mailState.selected.delete(id);
       });
-      renderMailList(msgs); // re-render to sync cbs
+      renderMailList(msgs); // re-render to sync cbs (pass original msgs, not filtered)
       updateMailSelectedInfo();
     });
   }
 
-  msgs.forEach(m => {
+  filtered.forEach(m => {
     const id = String(m.id || m.ID);
     const from = (typeof m.from === "string" ? m.from : (m.from && (m.from.email || m.from.name)) || m.fromEmail || "").toString();
     const subj = (m.subject || m.Subject || "(no subject)").toString();
     const date = m.date || m.receivedDate || m.Date || "";
     const dateStr = date ? new Date(date).toLocaleDateString() + " " + new Date(date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : "";
     const tags = getMailTags(m);
+    const hasBotReview = tags.some(t => /bot.?review/i.test(t));
     const tagChips = tags.length ? tags.map(t => {
-      const cls = /bot.?review/i.test(t) ? "mail-tag-chip bot-review" : "mail-tag-chip";
-      return `<span class="${cls}">${escapeHtml(t)}</span>`;
+      // Resolve tag ID → name using cache; CRM sometimes returns only the numeric id in conversations list
+      const tagObj = mailState.availableTags.find(at => at.name.toLowerCase() === t.toLowerCase() || String(at.id) === t);
+      const displayName = tagObj ? tagObj.name : t;
+      const tagId = tagObj ? tagObj.id : t;
+      const isBotReview = /bot.?review/i.test(displayName);
+      const cls = isBotReview ? "mail-tag-chip bot-review" : "mail-tag-chip";
+      return `<span class="${cls}" data-tag-id="${tagId}">${escapeHtml(displayName)}<button type="button" class="mail-tag-remove" title="Remove tag">×</button></span>`;
     }).join("") : "";
+
+    // Feedback controls: show on ALL rows (not just Bot Review)
+    const inboxInfo = getMailInboxInfo(m);
+    const ruleOptions = Object.entries(_CLASSIFICATION_LABELS).map(([val, label]) =>
+      `<option value="${val}">${escapeHtml(label)}</option>`
+    ).join("");
+    const feedbackControls = `
+      <span class="mail-feedback-controls" data-feedback-id="${escapeHtml(id)}">
+        <button type="button" class="mail-feedback-btn mail-feedback-correct" title="Bot decision is correct">✓ Correct</button>
+        <button type="button" class="mail-feedback-btn mail-feedback-wrong" title="Bot decision is wrong">✗ Wrong</button>
+      </span>
+      <div class="mail-feedback-form hidden" data-feedback-form-id="${escapeHtml(id)}">
+        <div class="mail-feedback-row">
+          <label class="mail-feedback-label">What was wrong?</label>
+          <select class="mail-feedback-wrong-type">
+            <option value="">Select issue...</option>
+            <option value="wrong_rule">Wrong classification</option>
+            <option value="wrong_deal">Wrong deal / link target</option>
+            <option value="should_notify">Should notify customer</option>
+            <option value="both_wrong">Both rule and deal wrong</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div class="mail-feedback-row mail-feedback-rule-row hidden">
+          <label class="mail-feedback-label">Correct rule</label>
+          <select class="mail-feedback-correct-rule">
+            <option value="">Select correct rule...</option>
+            ${ruleOptions}
+          </select>
+        </div>
+        <div class="mail-feedback-row mail-feedback-deal-row hidden">
+          <label class="mail-feedback-label">Correct deal</label>
+          <input type="text" class="mail-feedback-deal-search" placeholder="Search deal by name or claim code..." autocomplete="off" />
+          <div class="mail-feedback-deal-results"></div>
+        </div>
+        <div class="mail-feedback-row">
+          <label class="mail-feedback-label">Notes (optional)</label>
+          <input type="text" class="mail-feedback-notes" placeholder="Additional context..." />
+        </div>
+        <div class="mail-feedback-actions">
+          <button type="button" class="mail-feedback-submit">Submit</button>
+          <button type="button" class="mail-feedback-cancel">Cancel</button>
+        </div>
+      </div>
+    `;
 
     const item = document.createElement("div");
     item.className = "mail-item";
@@ -14199,11 +14454,24 @@ function renderMailList(msgs) {
     const isRead = getMailMessageIsRead(m) || mailDashboardReadIds.has(id);
     if (isRead) row.classList.add('mail-row-read');
 
+    // Inbox type badge (channel + actions + suggested action)
+    const inboxInfo = getMailInboxInfo(m);
+    let inboxBadge = "";
+    if (inboxInfo) {
+      const channelCls = inboxInfo.channel === "crm" ? "crm" : inboxInfo.channel === "req" ? "req" : "unknown";
+      const actionText = inboxInfo.actionLabels.length ? inboxInfo.actionLabels.join(" + ") : "";
+      const suggestedText = inboxInfo.suggested ? ` <span class="badge-suggested">${escapeHtml(inboxInfo.suggested)}</span>` : "";
+      inboxBadge = `<div class="mail-inbox-badge ${channelCls}" title="${escapeHtml((inboxInfo.classLabel || "") + (actionText ? " — " + actionText : ""))}">
+        <span class="badge-channel">${escapeHtml(inboxInfo.channel.toUpperCase())}</span>${actionText ? `<span class="badge-actions">${escapeHtml(actionText)}</span>` : ""}${suggestedText}
+      </div>`;
+    }
+
     row.innerHTML = `
       <input type="checkbox" class="mail-cb" data-id="${escapeHtml(id)}" ${mailState.selected.has(id) ? "checked" : ""} />
       <div class="mail-from" title="${escapeHtml(from)}">${escapeHtml(from).slice(0,28)}</div>
+      ${inboxBadge}
       <div class="mail-subject" title="${escapeHtml(subj)}">${escapeHtml(subj).slice(0,80)}</div>
-      <div class="mail-tags">${tagChips}</div>
+      <div class="mail-tags">${tagChips}${feedbackControls}</div>
       <div class="mail-date">${escapeHtml(dateStr)}</div>
     `;
 
@@ -14226,7 +14494,7 @@ function renderMailList(msgs) {
     });
 
     row.addEventListener("click", (e) => {
-      if (e.target.tagName === "INPUT" || e.target === expBtn) return;
+      if (e.target.tagName === "INPUT" || e.target === expBtn || e.target.classList.contains("mail-tag-remove") || e.target.classList.contains("mail-feedback-btn") || e.target.classList.contains("mail-feedback-submit") || e.target.classList.contains("mail-feedback-cancel") || e.target.closest(".mail-feedback-form")) return;
       // toggle selection on row click
       if (mailState.selected.has(id)) {
         mailState.selected.delete(id);
@@ -14239,6 +14507,145 @@ function renderMailList(msgs) {
       }
       updateMailSelectedInfo();
     });
+
+    // Tag × remove buttons
+    row.querySelectorAll(".mail-tag-remove").forEach(xBtn => {
+      xBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const chip = xBtn.closest(".mail-tag-chip");
+        const tagId = chip?.dataset?.tagId;
+        const tagName = chip?.textContent?.replace(/×$/, "").trim();
+        if (!tagId && !tagName) return;
+        xBtn.disabled = true;
+        try {
+          if (tagId) {
+            await removeMailTag(id, tagId);
+          } else {
+            showToast("Cannot remove: tag ID unknown. Refresh tags first.", true);
+            return;
+          }
+          await loadMailMessagesForModal();
+        } catch (err) {
+          showToast("Failed to remove tag: " + (err.message || err), true);
+        }
+      });
+    });
+
+    // Bot feedback buttons (all rows)
+    const correctBtn = row.querySelector(".mail-feedback-correct");
+    const wrongBtn = row.querySelector(".mail-feedback-wrong");
+    const feedbackForm = row.querySelector(".mail-feedback-form");
+    if (correctBtn) {
+      correctBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        correctBtn.disabled = true;
+        if (wrongBtn) wrongBtn.disabled = true;
+        try {
+          await submitMailFeedback(id, "correct");
+          showToast("Feedback saved: bot decision correct");
+          correctBtn.textContent = "✓ Reviewed";
+        } catch (err) {
+          showToast("Failed to save feedback: " + (err.message || err), true);
+          correctBtn.disabled = false;
+          if (wrongBtn) wrongBtn.disabled = false;
+        }
+      });
+    }
+    if (wrongBtn) {
+      wrongBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (feedbackForm) feedbackForm.classList.remove("hidden");
+      });
+    }
+    if (feedbackForm) {
+      const wrongType = feedbackForm.querySelector(".mail-feedback-wrong-type");
+      const ruleRow = feedbackForm.querySelector(".mail-feedback-rule-row");
+      const dealRow = feedbackForm.querySelector(".mail-feedback-deal-row");
+      const ruleSelect = feedbackForm.querySelector(".mail-feedback-correct-rule");
+      const dealSearch = feedbackForm.querySelector(".mail-feedback-deal-search");
+      const dealResults = feedbackForm.querySelector(".mail-feedback-deal-results");
+      const notesInput = feedbackForm.querySelector(".mail-feedback-notes");
+      const submitBtn = feedbackForm.querySelector(".mail-feedback-submit");
+      const cancelBtn = feedbackForm.querySelector(".mail-feedback-cancel");
+      let selectedDealId = null;
+      let selectedDealTitle = null;
+      let dealSearchTimer = null;
+
+      // Show/hide rule and deal rows based on wrong type
+      wrongType?.addEventListener("change", () => {
+        const v = wrongType.value;
+        const showRule = v === "wrong_rule" || v === "both_wrong";
+        const showDeal = v === "wrong_deal" || v === "both_wrong";
+        ruleRow?.classList.toggle("hidden", !showRule);
+        dealRow?.classList.toggle("hidden", !showDeal);
+        if (v === "should_notify" || v === "other") {
+          ruleRow?.classList.add("hidden");
+          dealRow?.classList.add("hidden");
+        }
+      });
+
+      // Deal search type-ahead
+      dealSearch?.addEventListener("input", () => {
+        clearTimeout(dealSearchTimer);
+        selectedDealId = null;
+        selectedDealTitle = null;
+        const q = dealSearch.value.trim();
+        if (q.length < 2) { dealResults.innerHTML = ""; return; }
+        dealSearchTimer = setTimeout(async () => {
+          try {
+            const results = await searchOpportunitiesByTitle(q, 8);
+            dealResults.innerHTML = results.map(r =>
+              `<div class="mail-feedback-deal-option" data-deal-id="${r.id}" data-deal-title="${escapeHtml(r.title)}">${escapeHtml(r.title)}</div>`
+            ).join("");
+            dealResults.querySelectorAll(".mail-feedback-deal-option").forEach(opt => {
+              opt.addEventListener("click", () => {
+                selectedDealId = opt.dataset.dealId;
+                selectedDealTitle = opt.dataset.dealTitle;
+                dealSearch.value = selectedDealTitle;
+                dealResults.innerHTML = "";
+              });
+            });
+          } catch { dealResults.innerHTML = ""; }
+        }, 250);
+      });
+
+      submitBtn?.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const wrongVal = wrongType?.value;
+        if (!wrongVal) { showToast("Please select what was wrong", true); return; }
+        submitBtn.disabled = true;
+        try {
+          const opts = {};
+          if (wrongVal === "wrong_rule" || wrongVal === "both_wrong") {
+            opts.correctClassification = ruleSelect?.value || undefined;
+            opts.correction = ruleSelect?.value || "wrong_rule";
+          }
+          if (wrongVal === "wrong_deal" || wrongVal === "both_wrong") {
+            opts.correctOppId = selectedDealId || undefined;
+            opts.correctOppTitle = selectedDealTitle || undefined;
+            opts.correction = opts.correction || "wrong_deal";
+          }
+          if (wrongVal === "should_notify") opts.correction = "should_notify";
+          if (wrongVal === "other") opts.correction = "other";
+          opts.notes = notesInput?.value || undefined;
+          await submitMailFeedback(id, "wrong", opts);
+          showToast("Feedback saved: bot decision wrong");
+          feedbackForm.innerHTML = '<span class="mail-feedback-reviewed">Reviewed (wrong)</span>';
+          feedbackForm.classList.remove("hidden");
+        } catch (err) {
+          showToast("Failed to save feedback: " + (err.message || err), true);
+          submitBtn.disabled = false;
+        }
+      });
+      cancelBtn?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        feedbackForm.classList.add("hidden");
+        if (wrongType) wrongType.value = "";
+        ruleRow?.classList.add("hidden");
+        dealRow?.classList.add("hidden");
+        if (notesInput) notesInput.value = "";
+      });
+    }
 
     // Note: attachments display handled inside renderMailEmbedPanel (expanded view)
 
@@ -14288,16 +14695,74 @@ function updateMailSelectedInfo() {
   const markUnreadBtn = $("#mail-mark-unread");
   const delBtn = $("#mail-delete");
   const clearSelBtn = $("#mail-clear-selection");
+  const tagsBtn = $("#mail-tags-btn");
   if (markReadBtn) markReadBtn.disabled = !hasSel;
   if (markUnreadBtn) markUnreadBtn.disabled = !hasSel;
   if (delBtn) delBtn.disabled = !hasSel;
   if (clearSelBtn) clearSelBtn.disabled = !hasSel;
+  if (tagsBtn) tagsBtn.disabled = !hasSel;
 
   const info = $("#mail-selected-info");
   const linkBtn = $("#mail-link-btn");
   if (!info) return;
   info.textContent = n ? `${n} selected` : "";
   if (linkBtn) linkBtn.disabled = n === 0 || !$("#mail-deal-results")?.dataset?.selectedDealId;
+}
+
+async function renderMailTagDropdown() {
+  const dropdown = $("#mail-tags-dropdown");
+  if (!dropdown) return;
+  const tags = await fetchMailTags();
+  if (!tags.length) {
+    dropdown.innerHTML = '<div class="mail-tags-dropdown-empty">No tags available</div>';
+    return;
+  }
+  // Determine which tags are on ALL selected conversations
+  const selectedIds = Array.from(mailState.selected);
+  const msgs = mailState.messages || [];
+  const selectedMsgs = msgs.filter(m => selectedIds.includes(String(m.id || m.ID)));
+  const tagCounts = {};
+  tags.forEach(t => { tagCounts[t.id] = 0; });
+  selectedMsgs.forEach(m => {
+    const msgTags = getMailTags(m);
+    tags.forEach(t => {
+      if (msgTags.some(mt => mt.toLowerCase() === t.name.toLowerCase() || String(t.id) === mt)) tagCounts[t.id]++;
+    });
+  });
+  const allSelected = selectedMsgs.length;
+  dropdown.innerHTML = tags.map(t => {
+    const count = tagCounts[t.id] || 0;
+    const allHave = allSelected > 0 && count === allSelected;
+    const someHave = count > 0 && !allHave;
+    const cls = /bot.?review/i.test(t.name) ? "mail-tag-dropdown-item bot-review" : "mail-tag-dropdown-item";
+    return `<label class="${cls}">
+      <input type="checkbox" data-tag-id="${t.id}" ${allHave ? "checked" : ""} ${someHave ? "data-some='1'" : ""} />
+      <span>${escapeHtml(t.name)}</span>
+      ${someHave ? `<span class="mail-tag-partial">${count}/${allSelected}</span>` : ""}
+    </label>`;
+  }).join("");
+
+  // Bind checkbox changes
+  dropdown.querySelectorAll("input[type=checkbox]").forEach(cb => {
+    cb.addEventListener("change", async () => {
+      const tagId = cb.dataset.tagId;
+      const ids = Array.from(mailState.selected);
+      cb.disabled = true;
+      try {
+        if (cb.checked) {
+          for (const id of ids) { await addMailTag(id, tagId).catch(e => console.warn('[mail-inbox] addMailTag failed:', e)); }
+        } else {
+          for (const id of ids) { await removeMailTag(id, tagId).catch(e => console.warn('[mail-inbox] removeMailTag failed:', e)); }
+        }
+        mailState.selected.clear();
+        updateMailSelectedInfo();
+        await loadMailMessagesForModal();
+        await renderMailTagDropdown();
+      } finally {
+        cb.disabled = false;
+      }
+    });
+  });
 }
 
 async function markMailMessageRead(messageId) {
@@ -17761,6 +18226,10 @@ async function _renderScannerAdminStatus() {
     const acct = s.scanner_account_hint ? `title="Current scanner account: ${escapeHtml(s.scanner_account_hint)}"` : "";
     const strongF = (s.strong_custom_field_ids || []).join(", ") || "11,26,4 (default)";
     const dry = !(s.create_deals || s.create_tasks || s.post_notes || s.notify_users);
+    const mlSummary = s.ml_summary || {};
+    const mlStatus = s.ml_model_exists
+      ? `Loaded (${mlSummary.num_samples || "?"} samples, ${mlSummary.test_accuracy !== undefined ? (mlSummary.test_accuracy * 100).toFixed(1) + "% acc" : "no eval"})`
+      : "Not trained";
     el.innerHTML = `
       <div class="scanner-status-display">
         ${dry ? '<div style="background:#fee2e2;color:#991b1b;padding:.25rem .5rem;margin-bottom:.5rem;border-radius:4px;font-weight:600;">DRY RUN — no tasks, notes, links, tags or notifications will be created.</div>' : ''}
@@ -17774,8 +18243,175 @@ async function _renderScannerAdminStatus() {
         <span class="label">Strong fields (ids)</span><span class="value">${escapeHtml(strongF)}</span>
         <span class="label">Portal</span><span class="value">${escapeHtml(s.portal_url)}</span>
         <span class="label">Scanner account</span><span class="value" ${acct}>shared (hidden)</span>
+        <span class="label">Feedback entries</span><span class="value">${s.feedback_count || 0}</span>
+        <span class="label">ML head</span><span class="value">${escapeHtml(mlStatus)}</span>
       </div>
+      <div class="scanner-status-actions" style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap;">
+        <button type="button" id="scanner-admin-retrain-btn" class="btn btn-secondary btn-sm" style="background:#1e3a8a;border-color:#3b82f6;color:#dbeafe;" ${(s.feedback_count || 0) < 1 ? 'disabled title="Need at least 1 feedback entry to retrain with feedback"' : ''}>Retrain ML Head</button>
+        <span id="scanner-retrain-status" style="font-size:0.8rem;color:var(--muted);align-self:center;"></span>
+      </div>
+      <details class="scanner-rules-legend" style="margin-top:1rem;">
+        <summary style="cursor:pointer;font-weight:600;font-size:0.85rem;color:var(--text);padding:0.25rem 0;">Classification Rules — what each rule matches and does</summary>
+        <div style="margin-top:0.5rem;font-size:0.78rem;line-height:1.45;overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;min-width:600px;">
+            <thead>
+              <tr style="border-bottom:2px solid var(--border);text-align:left;">
+                <th style="padding:4px 6px;font-weight:600;">Rule</th>
+                <th style="padding:4px 6px;font-weight:600;">Matches</th>
+                <th style="padding:4px 6px;font-weight:600;">Actions</th>
+                <th style="padding:4px 6px;font-weight:600;">Record inbox</th>
+                <th style="padding:4px 6px;font-weight:600;">Assignee</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:4px 6px;font-weight:600;">ack_delay</td>
+                <td style="padding:4px 6px;">Ack/delay/OOO/receipt from carrier</td>
+                <td style="padding:4px 6px;">Link + note</td>
+                <td style="padding:4px 6px;color:var(--muted);">Same</td>
+                <td style="padding:4px 6px;color:var(--muted);">—</td>
+              </tr>
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:4px 6px;font-weight:600;">jobnimbus_task</td>
+                <td style="padding:4px 6px;">"New task assigned in JobNimbus"</td>
+                <td style="padding:4px 6px;">Create task</td>
+                <td style="padding:4px 6px;color:var(--muted);">Task suppressed</td>
+                <td style="padding:4px 6px;">Ken</td>
+              </tr>
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:4px 6px;font-weight:600;">jobnimbus_new_job</td>
+                <td style="padding:4px 6px;">"X assigned you a new job"</td>
+                <td style="padding:4px 6px;">Create task</td>
+                <td style="padding:4px 6px;color:var(--muted);">Task suppressed</td>
+                <td style="padding:4px 6px;">Ken</td>
+              </tr>
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:4px 6px;font-weight:600;">jobnimbus_mention_est</td>
+                <td style="padding:4px 6px;">JN mention + estimate language (Liberty/Highland)</td>
+                <td style="padding:4px 6px;">Create task</td>
+                <td style="padding:4px 6px;color:var(--muted);">Task suppressed</td>
+                <td style="padding:4px 6px;">Ken</td>
+              </tr>
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:4px 6px;font-weight:600;">jobnimbus_mention</td>
+                <td style="padding:4px 6px;">JN mention (generic)</td>
+                <td style="padding:4px 6px;">Create task</td>
+                <td style="padding:4px 6px;color:var(--muted);">Task suppressed</td>
+                <td style="padding:4px 6px;">Rebeca</td>
+              </tr>
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:4px 6px;font-weight:600;">jobnimbus_mention_ambiguous</td>
+                <td style="padding:4px 6px;">JN mention (LH, no estimate signal)</td>
+                <td style="padding:4px 6px;">Bot Review mail tag, no task</td>
+                <td style="padding:4px 6px;color:var(--muted);">Tag suppressed</td>
+                <td style="padding:4px 6px;color:var(--muted);">Bot Review</td>
+              </tr>
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:4px 6px;font-weight:600;">supplement_update</td>
+                <td style="padding:4px 6px;">"Job Supplement Notification" (Acculynx)</td>
+                <td style="padding:4px 6px;">Link + note (+ task if active)</td>
+                <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
+                <td style="padding:4px 6px;">Ken + Claudiu</td>
+              </tr>
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:4px 6px;font-weight:600;">check_claimant</td>
+                <td style="padding:4px 6px;">"Job Notification: &lt;code&gt;" (Acculynx)</td>
+                <td style="padding:4px 6px;">Link + note (strong) / task (new potential)</td>
+                <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
+                <td style="padding:4px 6px;">Rebeca + Claudiu</td>
+              </tr>
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:4px 6px;font-weight:600;">reconciliation_task</td>
+                <td style="padding:4px 6px;">"reconcil" or carrier estimate revision</td>
+                <td style="padding:4px 6px;">Link + note + task + tag</td>
+                <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
+                <td style="padding:4px 6px;">Ken + Claudiu</td>
+              </tr>
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:4px 6px;font-weight:600;">adjuster_action</td>
+                <td style="padding:4px 6px;">"adjuster wants/requested/said..."</td>
+                <td style="padding:4px 6px;">Link + note + task + tags</td>
+                <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
+                <td style="padding:4px 6px;">Ken + Claudiu</td>
+              </tr>
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:4px 6px;font-weight:600;">carrier_adjuster_email</td>
+                <td style="padding:4px 6px;">Known carrier domain (Allstate, State Farm, etc.)</td>
+                <td style="padding:4px 6px;">Link + opp tag + note (strong)</td>
+                <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
+                <td style="padding:4px 6px;">Rebeca</td>
+              </tr>
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:4px 6px;font-weight:600;">supplement_discussion</td>
+                <td style="padding:4px 6px;">"supplement" in body + contractor sender</td>
+                <td style="padding:4px 6px;">Link + note (+ task if request language)</td>
+                <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
+                <td style="padding:4px 6px;">Ken + Claudiu</td>
+              </tr>
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:4px 6px;font-weight:600;">claim_code_only</td>
+                <td style="padding:4px 6px;">Bare claim code subject (BCC record)</td>
+                <td style="padding:4px 6px;">Link + note</td>
+                <td style="padding:4px 6px;color:var(--muted);">Link + note (cat 39, most-recent body)</td>
+                <td style="padding:4px 6px;color:var(--muted);">—</td>
+              </tr>
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:4px 6px;font-weight:600;">acculynx_other</td>
+                <td style="padding:4px 6px;">Acculynx domain, other patterns</td>
+                <td style="padding:4px 6px;">Link + opp tag + note</td>
+                <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
+                <td style="padding:4px 6px;">Rebeca + Claudiu</td>
+              </tr>
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:4px 6px;font-weight:600;">uncertain</td>
+                <td style="padding:4px 6px;">Fallback — no other rule matched</td>
+                <td style="padding:4px 6px;">Link + opp tag + note</td>
+                <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
+                <td style="padding:4px 6px;">Rebeca</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style="margin-top:0.5rem;color:var(--muted);font-size:0.75rem;">
+            <strong>Record inbox policy:</strong> For crm@vanguardadj.online emails, tasks, notifications, deal creation, and Bot Review mail tags are all suppressed. Only linking and notes are active. This is the "record link only" policy.
+          </div>
+        </div>
+      </details>
     `;
+    const retrainBtn = $("#scanner-admin-retrain-btn");
+    const retrainStatus = $("#scanner-retrain-status");
+    if (retrainBtn) {
+      retrainBtn.addEventListener("click", async () => {
+        retrainBtn.disabled = true;
+        if (retrainStatus) retrainStatus.textContent = "Training… (this may take a few minutes)";
+        try {
+          const token = (typeof window !== "undefined" && window.__SCANNER_ADMIN_TOKEN) || "";
+          const headers = { "Content-Type": "application/json" };
+          if (token) headers["X-Scanner-Admin-Token"] = token;
+          const r = await fetch("/api/scanner/retrain", {
+            method: "POST",
+            credentials: "same-origin",
+            headers,
+            body: JSON.stringify({ samples: 300, use_feedback: true })
+          });
+          const data = await r.json();
+          if (data.ok) {
+            const summary = data.summary || {};
+            const acc = summary.test_accuracy !== undefined ? (summary.test_accuracy * 100).toFixed(1) + "%" : "N/A";
+            showToast(`ML head retrained: ${summary.num_samples || "?"} samples, ${acc} accuracy`);
+            if (retrainStatus) retrainStatus.textContent = `Retrained: ${summary.num_samples || "?"} samples, ${acc} accuracy`;
+            await _renderScannerAdminStatus();
+          } else {
+            showToast("Retrain failed: " + (data.error || "unknown"), true);
+            if (retrainStatus) retrainStatus.textContent = "Failed: " + (data.error || "unknown");
+          }
+        } catch (e) {
+          showToast("Retrain request failed: " + (e.message || e), true);
+          if (retrainStatus) retrainStatus.textContent = "Request failed";
+        } finally {
+          retrainBtn.disabled = false;
+        }
+      });
+    }
   } catch {
     el.innerHTML = '<div class="scanner-empty">Failed to load status.</div>';
   }
@@ -17946,6 +18582,23 @@ async function _renderScannerAdminLog() {
         actDiv.textContent = txt;
         contentWrap.appendChild(actDiv);
 
+        // Show skipped actions (record inbox policy suppressions)
+        if (e.skipped_actions && Array.isArray(e.skipped_actions) && e.skipped_actions.length) {
+          const skipDiv = document.createElement("div");
+          skipDiv.className = "log-actions";
+          skipDiv.style.color = "var(--muted)";
+          skipDiv.style.fontSize = "0.78rem";
+          const skipLabels = e.skipped_actions.map(s => {
+            if (s === "task:record_policy") return "task: record inbox policy";
+            if (s === "notify:record_policy") return "notify: record inbox policy";
+            if (s === "deal:record_policy") return "deal: record inbox policy";
+            if (s === "bot_review:record_policy") return "Bot Review: record inbox policy";
+            return s.replace(/_/g, " ");
+          });
+          skipDiv.textContent = "(skipped: " + skipLabels.join(", ") + ")";
+          contentWrap.appendChild(skipDiv);
+        }
+
         // failures
         if (e.errors && Array.isArray(e.errors) && e.errors.length) {
           const errDiv = document.createElement("div");
@@ -17967,7 +18620,13 @@ async function _renderScannerAdminLog() {
       } else if (e.classification) {
         const actDiv = document.createElement("div");
         actDiv.className = "log-actions";
-        actDiv.textContent = "No action (classification only)";
+        if (e.linked_opp_id) {
+          actDiv.textContent = `→ linked email to opp ${e.linked_opp_id}${e.linked_opp_title ? " ("+e.linked_opp_title.slice(0,40)+")" : ""}`;
+        } else if (e.apply_bot_review_mail) {
+          actDiv.textContent = "→ flagged for review (Bot Review)";
+        } else {
+          actDiv.textContent = "No action (classification only)";
+        }
         contentWrap.appendChild(actDiv);
       }
       div.appendChild(contentWrap);

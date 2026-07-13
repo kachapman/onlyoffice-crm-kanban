@@ -254,6 +254,71 @@ def load_jsonl_logs(input_path: str) -> list[dict]:
     return samples
 
 
+# User feedback corrections → ML categories
+CORRECTION_TO_ML_CATEGORY = {
+    "actionable": "actionable",
+    "ack_suppress": "ack",
+    "owner_name_title": "record",
+    "note_only": "record",
+    "wrong_rule": None,  # handled via correct_classification field
+    "wrong_deal": None,  # linking error, not a classification change
+    "should_notify": "actionable",  # adjuster update → needs action
+}
+
+
+def load_feedback_entries(feedback_path: Optional[str] = None) -> list[dict]:
+    """Load user feedback entries and convert to labeled training samples.
+
+    - verdict == 'correct' → reinforce the bot's original classification
+    - verdict == 'wrong' + correct_classification → use the user's rule as label (preferred)
+    - verdict == 'wrong' + user_correction → fall back to correction-based category
+    """
+    if feedback_path is None:
+        feedback_path = str(PROJECT_ROOT / "data" / "mail_scanner" / "feedback.jsonl")
+    samples = []
+    if not os.path.exists(feedback_path):
+        return samples
+    with open(feedback_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            verdict = (entry.get("user_verdict") or "").lower()
+            if verdict not in ("correct", "wrong"):
+                continue
+            subject = entry.get("subject") or ""
+            body = (entry.get("email_text") or "")[:1500]
+            if not subject and not body:
+                continue
+            category = None
+            if verdict == "correct":
+                classification = entry.get("classification")
+                if classification in RULE_TO_ML_CATEGORY:
+                    category = RULE_TO_ML_CATEGORY[classification]
+            else:  # wrong
+                # Prefer correct_classification (the rule the user says should have matched)
+                correct_class = entry.get("correct_classification")
+                if correct_class and correct_class in RULE_TO_ML_CATEGORY:
+                    category = RULE_TO_ML_CATEGORY[correct_class]
+                else:
+                    # Fall back to user_correction-based category
+                    correction = (entry.get("user_correction") or "").lower()
+                    category = CORRECTION_TO_ML_CATEGORY.get(correction)
+            if category:
+                samples.append({
+                    "subject": subject,
+                    "body": body,
+                    "category": category,
+                    "source": "feedback",
+                    "conversation_id": entry.get("conversation_id"),
+                })
+    return samples
+
+
 def export_for_labeling(samples: list[dict], output_path: str):
     """Export samples to CSV for manual labeling."""
     with open(output_path, "w") as f:
@@ -370,6 +435,10 @@ def main():
                         help="Export CSV for manual labeling")
     parser.add_argument("--import-labels", help="Import labeled CSV file")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--feedback", action="store_true",
+                        help="Include data/mail_scanner/feedback.jsonl as labeled training data")
+    parser.add_argument("--mock-and-feedback", action="store_true",
+                        help="Combine generated mock data with feedback entries")
     args = parser.parse_args()
 
     ML_MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -391,19 +460,30 @@ def main():
             samples = load_jsonl_logs(args.input)
         csv_path = str(ML_MODEL_DIR / "training_data_for_labeling.csv")
         export_for_labeling(samples, csv_path)
-    elif args.generate_mock or args.input:
+    elif args.generate_mock or args.input or args.feedback or args.mock_and_feedback:
         # Generate or load data and train
-        if args.generate_mock:
-            samples = generate_mock_data(args.samples, args.seed)
-            print(f"Generated {len(samples)} mock samples")
-        else:
-            samples = load_jsonl_logs(args.input)
-            print(f"Loaded {len(samples)} samples from logs")
+        samples = []
+        if args.generate_mock or args.mock_and_feedback:
+            mock_samples = generate_mock_data(args.samples, args.seed)
+            print(f"Generated {len(mock_samples)} mock samples")
+            samples.extend(mock_samples)
+        if args.input:
+            log_samples = load_jsonl_logs(args.input)
+            print(f"Loaded {len(log_samples)} samples from logs")
+            samples.extend(log_samples)
+        if args.feedback or args.mock_and_feedback:
+            feedback_samples = load_feedback_entries()
+            print(f"Loaded {len(feedback_samples)} samples from feedback")
+            samples.extend(feedback_samples)
 
         if len(samples) < 50:
             print("Warning: Very few samples. Results may be poor. Consider --generate-mock with more samples.")
 
-        train_head(samples, args.output)
+        if samples:
+            train_head(samples, args.output)
+        else:
+            print("No training samples available.")
+            sys.exit(1)
     else:
         parser.print_help()
         print("\nExamples:")
@@ -411,6 +491,8 @@ def main():
         print("  python3 train_ml_head.py --generate-mock --samples 300")
         print("\n  # Train from exported logs")
         print("  python3 train_ml_head.py --input scanner_logs.jsonl")
+        print("\n  # Train from feedback + mock data")
+        print("  python3 train_ml_head.py --mock-and-feedback --samples 300")
         print("\n  # Export for manual labeling")
         print("  python3 train_ml_head.py --label-mode --input logs.jsonl")
 

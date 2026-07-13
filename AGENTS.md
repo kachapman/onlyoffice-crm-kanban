@@ -2,30 +2,28 @@
 
 **Current version:** 2.2.1 (released 2026-07-08; see CHANGELOG.md)  
 **Last session summary (for next resume):** 
-- **Phase 6: ML Implementation & Override Logic (2026-07-12).**
-  - ML classifier fully implemented: `train_ml_head.py` with mock data generator (300 synthetic emails), interactive labeling mode, LogisticRegression head training, saves `classifier_head.pkl`.
-  - Full ML override logic: `_apply_ml_override()` runs after rule engine. Suppresses tasks for ack emails (fixes 39978), demotes owner_name_title in record context (fixes 961/872/1136), promotes uncertain to actionable, suppresses low-confidence notes.
-  - ML_ENABLED env var: `ML_ENABLED=true/1/yes` enables ML. Default false.
-  - owner_name_title demotion fixed: `_dedup_opportunity` now accepts `is_record` parameter. All 10 call sites updated.
-  - requirements-ml.txt + Dockerfile INSTALL_ML build arg ready.
-  - Next: Deploy to CRM droplet, build with `INSTALL_ML=1`, run training inside container, test on bad cases (39978/961/872/1136).
-- **Phase 5 ML scaffolding + Phase 6 admin UI polish + Phase 7 deploy prep done (2026-07-11).**
-  - Phase 5: Lazy sentence-transformers/all-MiniLM-L6-v2 loading (`_init_ml`, `_ml_embed`, `_ml_classify`), `ml_*` fields in every log entry, classifier head pickle support, `INSTALL_ML=1` build arg in scanner Dockerfile. ML returns None until labeled data + head trained.
-  - Phase 6: Real reprocess endpoint (`reprocess_conversations` in mail_scanner.py + `/reprocess` in scanner_service.py + proxy in server.py). Log viewer enhanced: source_inbox badge, ml_actionable_score badge, normalized_claim, policy, no_deal indicators. Reprocess button in Scanner Admin Log tab with checkboxes per entry. CSS for flex layout + checkboxes.
-  - Phase 7: Deploy prep — scanner service Dockerfile supports INSTALL_ML, docs updated.
-  - All on `email_scanner` only. No main commits.
-  - Next: full verification on bad cases (39978/961/872/1136) with reprocess button, ML bootstrap training, deploy to CRM droplet.
-- **Phase 2 hygiene + ack/delay complete; Phase 3 tag mirroring + Phase 4 scanner service scaffold + bot-inbox hardening done (2026-07-11).**
-  - All create_task sites now use `_task_title_with_claim(claim, base, customer, requester)` (claim — base — customer (requester?)). Ack/delay review task also follows the pattern. Desc = most-recent sanitized request + deep link.
-  - Ack/delay/OOO policy: early block in `_process_email`. Carrier/record: suppress tasks (link/note on strong only). Contractor forwards: create "Notify customer of delay — claim — customer" review task.
-  - Docs: Phase 2 hygiene marked done; Phase 3 tag mirroring marked done.
-  - Mail tag mirroring in CRM Mail Quick View (Inbox tab): `getMailTags(m)` tolerant reader, `.mail-tags` column + `.mail-tag-chip` (Bot Review highlighted) in `renderMailList`, CSS for chips + header.
-  - Scanner service scaffold: `scanner/scanner_service.py` (status/config/log/reprocess), `scanner/Dockerfile`, `scanner/docker-compose.scanner.example.yml`. Dashboard now forwards `/api/scanner/*` to `SCANNER_SERVICE_URL` (with token passthrough) and falls back to local thread.
-  - Logging: every log entry gets `normalized_claim` (auto-filled via `_norm_claim` on append); `source_inbox` + `toggles` already present; `log_entry["claim_code"]` set at all sites.
-  - Hygiene pass: fixed a stray indentation in "claim_code_only" block.
-  - **Dashboard CRM Mail Quick View (Inbox tab) + all /api/2.0/mail* traffic now unconditionally uses bot credentials.** Every GET/PUT/POST/DELETE under `/api/2.0/mail*` (conversations, messages, accounts, mark, move, link, tag, etc.) from the dashboard is forced through `_bot_crm_proxy` using `BOT_CRM_EMAIL`/`BOT_CRM_PASSWORD`. All users see the same two inboxes + bot mail tags. Personal inboxes are excluded from this modal. Server enforcement in `_handle_api_get` + `_handle_api_post_put`.
+- **Phase 8: Tag/Feedback Learning System (2026-07-12).**
+  - Mail tag add/remove UI in CRM Mail Quick View (Inbox tab): `fetchMailTags`, `addMailTag`, `removeMailTag`, tag dropdown button renamed to "Add Tags" with checkboxes + partial-state indicators, per-row tag chips now amber/larger with × remove.
+  - Bot feedback loop: flagged emails (Bot Review / ML override / no candidate) auto-recorded in `data/mail_scanner/feedback.jsonl` as candidates. Users see "✓ Correct" / "✗ Wrong" buttons on Bot Review emails; wrong opens correction selector (actionable/ack_suppress/owner_name_title/note_only/other). `POST /api/scanner/feedback` stores verdict; `GET /api/scanner/feedback` lists entries.
+  - Learning pipeline: `train_ml_head.py` gains `--feedback` and `--mock-and-feedback` modes, `load_feedback_entries()` converts verdicts/corrections to labeled ML samples. `retrain_classifier_head()` in `mail_scanner.py` runs training as subprocess. `POST /api/scanner/retrain` endpoint + Scanner Admin "Retrain ML Head" button with feedback-count gating and accuracy display.
+  - **Linking policy change:** scanner now guarantees every email is linked to the best opportunity (even weak matches) or flagged with Bot Review for human routing. Added `_ensure_linked_or_flagged()` wrapper around `_process_email_core()`, explicit `_link_email_to_opportunity()` calls in `supplement_discussion`, and weak-match linking for record-inbox ack/delay. Log UI updated to show "linked email" / "flagged for review" instead of "No action".
+  - **Phase 8b: Enhanced Feedback + Inbox Differentiation (2026-07-13).**
+    - Rules legend in Scanner Admin Status tab: collapsible `<details>` listing all 15 classification rules with matches, actions, record inbox behavior, and assignees.
+    - Inbox differentiation: source channel badges (`CRM`/`REQ`) on each mail row showing classification, actions taken, and amber suggested action (e.g., "task needed") for record inbox emails where tasks are suppressed.
+    - Inbox filter buttons: `All | CRM | REQ` in toolbar to filter by source channel.
+    - Feedback on ALL rows: removed `hasBotReview` gate. Every email gets ✓/✗ buttons.
+    - Structured correction form: "What was wrong?" dropdown (wrong classification/wrong deal/should notify customer/both/other), "Correct rule" dropdown, "Correct deal" type-ahead search, notes field.
+    - Backend: `store_user_feedback()` accepts `correct_classification`, `correct_opp_id`, `correct_opp_title`. `record_feedback_candidate()` stores `linked_opp_id`, `linked_opp_title`, `source_inbox`.
+    - Training: `load_feedback_entries()` uses `correct_classification` to relabel samples (preferred over `user_correction`).
+    - Skipped actions in log: record inbox policy suppressions shown as `(skipped: task: record inbox policy, ...)` in Scanner Admin log.
+  - Backend endpoints added to `scanner/scanner_service.py` and `server.py` with local fallback + remote proxy.
+  - Files changed: `mail_scanner.py`, `train_ml_head.py`, `scanner/scanner_service.py`, `server.py`, `public/app.js`, `public/index.html`, `public/styles.css`.
+  - Tested: Python syntax, feedback store, candidate recording, retrain in `.venv-ml` (50 samples → 100% accuracy).
+  - Next: Browser test in local dashboard, commit/push, redeploy scanner container on CRM droplet, verify tag add/remove + feedback + retrain + guaranteed linking end-to-end on live bad cases.
+- **Phase 6: ML Implementation & Override Logic (2026-07-12).** (see CHANGELOG)
+- **Phase 5 ML scaffolding + Phase 6 admin UI polish + Phase 7 deploy prep done (2026-07-11).** (see CHANGELOG)
+- **Phase 2 hygiene + ack/delay complete; Phase 3 tag mirroring + Phase 4 scanner service scaffold + bot-inbox hardening done (2026-07-11).** (see CHANGELOG)
 - All on `email_scanner` only. No main commits.
-- Next (per plan): ML container work, full verification on bad cases (39978/961/872/1136), admin UI polish, deploy.
 - Git snapshot below.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)

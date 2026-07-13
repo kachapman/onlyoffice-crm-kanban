@@ -7,6 +7,8 @@ import json
 import logging
 import os
 import re
+import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -31,6 +33,7 @@ PROCESSED_IDS_FILE = DATA_DIR / "processed_ids.json"
 LOG_FILE = DATA_DIR / "log.jsonl"
 CONTRACTORS_FILE = DATA_DIR / "contractors.json"
 CACHED_TAGS_FILE = DATA_DIR / "cached_tags.json"
+FEEDBACK_FILE = DATA_DIR / "feedback.jsonl"
 
 DEFAULT_CONTRACTORS = {
     "contractors": [
@@ -721,6 +724,165 @@ def _append_log_entry(entry: dict[str, Any]) -> None:
             f.write(json.dumps(entry) + "\n")
     except OSError as e:
         logger.error("Failed to write log entry: %s", e)
+    # Track emails that may need human review/feedback for retraining.
+    _maybe_record_feedback_candidate(entry)
+
+
+def _maybe_record_feedback_candidate(entry: dict[str, Any]) -> None:
+    if not isinstance(entry, dict):
+        return
+    flagged = bool(entry.get("apply_bot_review_mail")) or bool(entry.get("ml_override_applied"))
+    if not flagged:
+        return
+    try:
+        record_feedback_candidate(entry)
+    except Exception as e:
+        logger.warning("Failed to record feedback candidate: %s", e)
+
+
+def _append_feedback_entry(entry: dict[str, Any]) -> None:
+    """Append a feedback record to feedback.jsonl."""
+    try:
+        entry.setdefault("timestamp", _now_et_iso())
+        with open(FEEDBACK_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError as e:
+        logger.error("Failed to write feedback entry: %s", e)
+
+
+def record_feedback_candidate(log_entry: dict[str, Any]) -> None:
+    """Record an email that the bot had trouble with so a user can later confirm/correct it.
+
+    Called whenever the bot applies a Bot Review mail tag or an ML override changes the
+    planned action.  The candidate stores the bot's decision + email text so it can be
+    used as a labeled training example once a user reviews it.
+    """
+    if not isinstance(log_entry, dict):
+        return
+    cid = log_entry.get("conversation_id") or log_entry.get("crm_message_id")
+    if not cid:
+        return
+    # Avoid duplicate candidates for the same conversation within the same run.
+    # We do this by checking if a candidate for this conversation already exists.
+    existing = get_feedback_entries(limit=1000)
+    for e in existing:
+        if str(e.get("conversation_id")) == str(cid) and e.get("user_verdict") is None:
+            return
+    candidate = {
+        "conversation_id": cid,
+        "message_id": log_entry.get("crm_message_id"),
+        "subject": log_entry.get("subject"),
+        "from": log_entry.get("from"),
+        "classification": log_entry.get("classification"),
+        "match_strength": log_entry.get("match_strength"),
+        "bot_action": log_entry.get("actions_taken") or log_entry.get("action_taken"),
+        "linked_opp_id": log_entry.get("linked_opp_id"),
+        "linked_opp_title": log_entry.get("linked_opp_title"),
+        "ml_override_applied": bool(log_entry.get("ml_override_applied")),
+        "ml_override_reasons": log_entry.get("ml_override_reasons") or [],
+        "ml_actionable_score": log_entry.get("ml_actionable_score"),
+        "ml_ack_score": log_entry.get("ml_ack_score"),
+        "source_inbox": log_entry.get("source_inbox"),
+        "email_text": (log_entry.get("sanitized_text") or log_entry.get("email_text") or "")[:2000],
+        "user_verdict": None,
+        "user_correction": None,
+        "correct_classification": None,
+        "correct_opp_id": None,
+        "correct_opp_title": None,
+        "reviewed_at": None,
+    }
+    _append_feedback_entry(candidate)
+
+
+def store_user_feedback(payload: dict[str, Any]) -> dict[str, Any]:
+    """Store a user correction for a bot decision.
+
+    payload keys:
+      - conversation_id (required)
+      - user_verdict: "correct" or "wrong"
+      - user_correction: optional class label chosen by the user
+      - correct_classification: optional — the rule the user says should have matched
+      - correct_opp_id: optional — the deal ID the user says it should link to
+      - correct_opp_title: optional — title of the correct deal (for display)
+      - notes: optional free-form reviewer notes
+    """
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be a dict")
+    cid = payload.get("conversation_id")
+    if not cid:
+        raise ValueError("conversation_id required")
+    verdict = (payload.get("user_verdict") or "").lower()
+    if verdict not in ("correct", "wrong"):
+        raise ValueError("user_verdict must be 'correct' or 'wrong'")
+    # Update existing candidate if present; otherwise append a new record.
+    updated = False
+    entries: list[dict[str, Any]] = []
+    if FEEDBACK_FILE.exists():
+        try:
+            with open(FEEDBACK_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if str(entry.get("conversation_id")) == str(cid) and entry.get("user_verdict") is None:
+                        entry["user_verdict"] = verdict
+                        entry["user_correction"] = payload.get("user_correction")
+                        entry["correct_classification"] = payload.get("correct_classification")
+                        entry["correct_opp_id"] = payload.get("correct_opp_id")
+                        entry["correct_opp_title"] = payload.get("correct_opp_title")
+                        entry["reviewer_notes"] = payload.get("notes")
+                        entry["reviewed_at"] = _now_et_iso()
+                        updated = True
+                    entries.append(entry)
+        except OSError as e:
+            logger.error("Failed to read feedback file: %s", e)
+    if not updated:
+        entries.append({
+            "conversation_id": cid,
+            "message_id": payload.get("message_id"),
+            "subject": payload.get("subject"),
+            "from": payload.get("from"),
+            "classification": payload.get("classification"),
+            "user_verdict": verdict,
+            "user_correction": payload.get("user_correction"),
+            "correct_classification": payload.get("correct_classification"),
+            "correct_opp_id": payload.get("correct_opp_id"),
+            "correct_opp_title": payload.get("correct_opp_title"),
+            "reviewer_notes": payload.get("notes"),
+            "reviewed_at": _now_et_iso(),
+        })
+    try:
+        with open(FEEDBACK_FILE, "w", encoding="utf-8") as f:
+            for entry in entries:
+                f.write(json.dumps(entry) + "\n")
+    except OSError as e:
+        logger.error("Failed to write feedback file: %s", e)
+        raise
+    return {"ok": True, "updated": updated}
+
+
+def get_feedback_entries(limit: int = 200) -> list[dict[str, Any]]:
+    """Return recent feedback entries, newest first."""
+    entries: list[dict[str, Any]] = []
+    if FEEDBACK_FILE.exists():
+        try:
+            with open(FEEDBACK_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+        except OSError as e:
+            logger.error("Failed to read feedback file: %s", e)
+    entries.reverse()
+    return entries[:limit]
 
 
 def _now_et_iso() -> str:
@@ -1683,7 +1845,7 @@ def _notify_users_for(rule_name: str) -> list[str] | None:
     return uuids if uuids else None
 
 
-def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, conv: dict[str, Any] | None = None) -> dict[str, Any] | None:
+def _process_email_core(msg: dict[str, Any], conversation_id: int, _depth: int = 0, conv: dict[str, Any] | None = None) -> dict[str, Any] | None:
     subject = (msg.get("subject") or "").strip()
     from_email = (msg.get("from") or msg.get("sender") or "").strip().lower()
     intro = _email_intro_text(msg)
@@ -1742,6 +1904,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
         do_bot_mail_tag = False
         # do_link and do_post_notes remain as configured (link-only default; post only for Email note on strong)
         log_entry["policy"] = "record_link_only"
+        log_entry["skipped_actions"] = ["task:record_policy", "notify:record_policy", "deal:record_policy", "bot_review:record_policy"]
 
     # Reset per-email policy flag
     global _SKIP_DEAL_DEDUP_FOR_LH
@@ -1796,13 +1959,14 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
             existing, dedup_reason, match_strength = _dedup_opportunity("", "", _extract_claim_code(subject), body_text, is_record=is_record)
             log_entry["dedup_reason"] = dedup_reason
             log_entry["match_strength"] = match_strength
-            if existing and match_strength == "strong":
+            if existing:
                 opp_id = int(existing.get("id") or existing.get("ID", 0))
                 log_entry["linked_opp_id"] = opp_id
+                log_entry["linked_opp_title"] = existing.get("title") or existing.get("Title") or ""
                 if do_link:
                     ok, st, err = _link_email_to_opportunity(conversation_id, opp_id)
                     _record_action(log_entry, "linked_email", ok, st, err)
-                if do_post_notes:
+                if match_strength == "strong" and do_post_notes:
                     ok, st, err = _post_note(opp_id, f"Carrier ack/delay: {subject}\n\n{body_text[:600]}")
                     _record_action(log_entry, "posted_note", ok, st, err)
             log_entry = _apply_ml_override(log_entry, "ack_delay", "strong", False, do_post_notes, is_record)
@@ -2295,6 +2459,9 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
                 opp_id = int(existing.get("id") or existing.get("ID", 0))
                 log_entry["linked_opp_id"] = opp_id
                 log_entry["linked_opp_title"] = existing.get("title") or existing.get("Title") or ""
+                if do_link:
+                    ok, st, err = _link_email_to_opportunity(conversation_id, opp_id)
+                    _record_action(log_entry, "linked_email", ok, st, err)
                 if do_post_notes:
                     ok, st, err = _post_note(opp_id, f"Supplement discussion: {body_text[:2000]}")
                     _record_action(log_entry, "posted_note", ok, st, err)
@@ -2313,6 +2480,9 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
                 opp_id = int(existing.get("id") or existing.get("ID", 0))
                 log_entry["linked_opp_id"] = opp_id
                 log_entry["linked_opp_title"] = existing.get("title") or existing.get("Title") or ""
+                if do_link:
+                    ok, st, err = _link_email_to_opportunity(conversation_id, opp_id)
+                    _record_action(log_entry, "linked_email", ok, st, err)
                 if do_post_notes:
                     ok, st, err = _post_note(opp_id, f"Supplement discussion: {body_text[:2000]}")
                     _record_action(log_entry, "posted_note", ok, st, err)
@@ -2369,7 +2539,7 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
         elif _depth < 1:
             msg_full = _fetch_message(conversation_id)
             if msg_full:
-                return _process_email(msg_full, conversation_id, _depth + 1)
+                return _process_email_core(msg_full, conversation_id, _depth + 1)
         else:
             # No strong match and no further depth: Bot Review mail tag + leave unread
             log_entry["no_deal"] = True
@@ -2434,6 +2604,51 @@ def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, c
     log_entry = _apply_ml_override(log_entry, "uncertain", match_strength, do_create_tasks, do_post_notes, is_record)
     _append_log_entry(log_entry)
     return log_entry
+
+
+def _ensure_linked_or_flagged(log_entry: dict[str, Any] | None, conversation_id: int) -> dict[str, Any] | None:
+    """Guarantee every processed email is either linked to an opportunity or flagged for human review.
+
+    Primary purpose of the scanner is to attach emails to deals. If the core classifier did not
+    already link the email, fall back to the best dedup candidate (even weak) and link. Only if
+    absolutely no candidate exists do we apply the Bot Review mail tag so a user can manually
+    route it. This also generates training signal for improving matching.
+    """
+    if not log_entry:
+        return log_entry
+    # Skip if already linked, or if Liberty/Highland skip was requested.
+    if log_entry.get("linked_opp_id"):
+        return log_entry
+    if log_entry.get("dedup_reason") == "lh_skip":
+        return log_entry
+
+    subject = log_entry.get("subject") or ""
+    from_email = log_entry.get("from") or ""
+    body_text = log_entry.get("body_text") or ""
+    claim_code = log_entry.get("claim_code") or ""
+    is_record = (log_entry.get("source_inbox") or "") == "record"
+
+    existing, dedup_reason, match_strength = _dedup_opportunity("", "", claim_code or _extract_claim_code(subject), body_text, is_record=is_record)
+    if existing:
+        opp_id = int(existing.get("id") or existing.get("ID", 0))
+        log_entry["linked_opp_id"] = opp_id
+        log_entry["linked_opp_title"] = existing.get("title") or existing.get("Title") or ""
+        log_entry["dedup_reason"] = dedup_reason
+        log_entry["match_strength"] = match_strength
+        if _is_action_enabled("link_email"):
+            ok, st, err = _link_email_to_opportunity(conversation_id, opp_id)
+            _record_action(log_entry, "linked_email", ok, st, err)
+    else:
+        log_entry["no_deal"] = True
+        log_entry["no_deal_reason"] = dedup_reason or "no candidate opportunity"
+        log_entry["apply_bot_review_mail"] = True
+    return log_entry
+
+
+def _process_email(msg: dict[str, Any], conversation_id: int, _depth: int = 0, conv: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Public entry point: classify an email, then ensure it is linked or flagged."""
+    log_entry = _process_email_core(msg, conversation_id, _depth, conv)
+    return _ensure_linked_or_flagged(log_entry, conversation_id)
 
 
 def _poll_inbox() -> None:
@@ -2597,10 +2812,33 @@ def start_scanner(config: dict[str, Any] | None = None) -> threading.Thread:
     return thread
 
 
+def _feedback_count() -> int:
+    """Return the number of feedback entries on disk."""
+    if not FEEDBACK_FILE.exists():
+        return 0
+    count = 0
+    try:
+        with open(FEEDBACK_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    count += 1
+    except OSError:
+        pass
+    return count
+
+
 def get_scanner_status() -> dict[str, Any]:
     processed = _load_processed_ids()
     cfg = get_contractors() or {}
     at = cfg.get("action_toggles") or {}
+    model_path = ML_MODEL_DIR / "classifier_head.pkl"
+    summary_path = ML_MODEL_DIR / "training_summary.json"
+    summary: dict[str, Any] = {}
+    if summary_path.exists():
+        try:
+            summary = json.loads(summary_path.read_text("utf-8"))
+        except Exception:
+            pass
     return {
         "enabled": SCANNER_ENABLED,
         "poll_interval_s": SCANNER_POLL_INTERVAL,
@@ -2615,6 +2853,10 @@ def get_scanner_status() -> dict[str, Any]:
         "action_toggles": at,
         "total_processed": len(processed),
         "strong_custom_field_ids": _effective_strong_custom_field_ids(),
+        "feedback_count": _feedback_count(),
+        "ml_model_exists": model_path.exists(),
+        "ml_model_path": str(model_path),
+        "ml_summary": summary,
     }
 
 
@@ -2635,6 +2877,50 @@ def get_scanner_log(limit: int = 200) -> list[dict[str, Any]]:
         return list(reversed(entries[-limit:]))
     except OSError:
         return []
+
+
+def retrain_classifier_head(mock_samples: int = 300, use_feedback: bool = True) -> dict[str, Any]:
+    """Retrain the ML classifier head using mock data + user feedback.
+
+    Runs train_ml_head.py in a subprocess so the heavy ML libraries don't block
+    the scanner thread. Returns summary or error info.
+    """
+    script = ROOT / "train_ml_head.py"
+    if not script.exists():
+        return {"ok": False, "error": "train_ml_head.py not found"}
+    cmd = [sys.executable, str(script)]
+    if use_feedback:
+        cmd.append("--mock-and-feedback")
+    else:
+        cmd.append("--generate-mock")
+    cmd.extend(["--samples", str(mock_samples)])
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=600,
+            cwd=str(ROOT),
+        )
+        if result.returncode != 0:
+            return {"ok": False, "error": result.stderr or result.stdout or "training failed"}
+        # Try to load training summary for accuracy
+        summary_path = ML_MODEL_DIR / "training_summary.json"
+        summary: dict[str, Any] = {}
+        if summary_path.exists():
+            try:
+                summary = json.loads(summary_path.read_text("utf-8"))
+            except Exception:
+                pass
+        return {
+            "ok": True,
+            "summary": summary,
+            "output": result.stdout[-2000:],
+        }
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "Training timed out (10 minutes)"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 def reprocess_conversations(conversation_ids: list[int]) -> list[dict[str, Any]]:

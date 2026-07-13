@@ -35,7 +35,9 @@ try:
 except Exception:
     pass
 from user_profile_store import load_user_profile, save_user_profile
-from mail_scanner import start_scanner, get_scanner_status, get_contractors, update_contractors, get_scanner_log
+from mail_scanner import (start_scanner, get_scanner_status, get_contractors, update_contractors,
+                          get_scanner_log, get_feedback_entries, store_user_feedback,
+                          reprocess_conversations, retrain_classifier_head)
 from event_log_store import append_event_log, load_event_log, list_users_with_logs
 from crm_bot_store import (add_mapping, cancel_code, cancel_code_by_value,
                            generate_code, get_mapping_by_chat, get_pending_codes,
@@ -2328,6 +2330,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     limit = int(limit_str)
                 _json_response(self, 200, {"entries": get_scanner_log(limit)})
                 return
+            if api_path == "/api/scanner/feedback":
+                qs = parse_qs(urlparse(self.path).query)
+                limit_str = (qs.get("limit") or [""])[0]
+                q = f"?limit={limit_str}" if limit_str.isdigit() else ""
+                fwd = _forward_scanner_request(self, f"/feedback{q}")
+                if fwd is not None:
+                    code, data = fwd
+                    _json_response(self, code, data)
+                    return
+                limit = 200
+                if limit_str.isdigit():
+                    limit = int(limit_str)
+                _json_response(self, 200, {"entries": get_feedback_entries(limit)})
+                return
             if api_path == "/api/scanner/config":
                 fwd = _forward_scanner_request(self, "/config")
                 if fwd is not None:
@@ -2715,11 +2731,77 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 400, {"error": "ids must be integers"})
                 return
             try:
-                results = mail_scanner.reprocess_conversations(int_ids)
+                results = reprocess_conversations(int_ids)
             except Exception as e:
                 _json_response(self, 500, {"error": str(e)})
                 return
             _json_response(self, 200, {"results": results})
+            return
+
+        # Scanner feedback submission (POST) — any authenticated dashboard user can submit
+        if api_path == "/api/scanner/feedback" and method == "POST":
+            auth = _require_auth(self)
+            if not auth:
+                return
+            body = _read_body(self)
+            fwd = _forward_scanner_request(self, "/feedback", "POST", body or b"{}")
+            if fwd is not None:
+                code, data = fwd
+                _json_response(self, code, data)
+                return
+            try:
+                payload = json.loads(body or b"{}")
+                result = store_user_feedback(payload)
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON body"})
+                return
+            except ValueError as e:
+                _json_response(self, 400, {"error": str(e)})
+                return
+            except Exception as e:
+                _json_response(self, 500, {"error": str(e)})
+                return
+            _json_response(self, 200, result)
+            return
+
+        # Scanner classifier retrain (POST) — admin only
+        if api_path == "/api/scanner/retrain" and method == "POST":
+            auth = _require_auth(self)
+            if not auth:
+                return
+            portal, token, _user_id = auth
+            if not self._is_admin(portal, token):
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            body = _read_body(self)
+            if SCANNER_ADMIN_TOKEN:
+                supplied = self.headers.get("X-Scanner-Admin-Token", "") or ""
+                try:
+                    body_preview = json.loads(body or b"{}")
+                    supplied = supplied or (body_preview.get("admin_token") or "")
+                except Exception:
+                    pass
+                if supplied != SCANNER_ADMIN_TOKEN:
+                    _json_response(self, 403, {"error": "Scanner admin token required"})
+                    return
+            fwd = _forward_scanner_request(self, "/retrain", "POST", body or b"{}")
+            if fwd is not None:
+                code, data = fwd
+                _json_response(self, code, data)
+                return
+            try:
+                payload = json.loads(body or b"{}")
+                result = retrain_classifier_head(
+                    mock_samples=int(payload.get("samples", 300)),
+                    use_feedback=bool(payload.get("use_feedback", True)),
+                )
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON body"})
+                return
+            except Exception as e:
+                _json_response(self, 500, {"error": str(e)})
+                return
+            _json_response(self, 200 if result.get("ok") else 500, result)
             return
 
         route = self._api_route()

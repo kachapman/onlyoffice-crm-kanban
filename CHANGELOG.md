@@ -4,6 +4,32 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 ## [Unreleased]
 
+### Phase 8: Tag/Feedback Learning System (2026-07-12)
+
+- **Mail tag add/remove UI in CRM Mail Quick View (Inbox tab).** Users can now add or remove mail tags on selected conversations:
+  - `fetchMailTags()` caches available tags from `/api/2.0/mail/tags.json`.
+  - `addMailTag()` / `removeMailTag()` call the confirmed bot-proxied CRM tag endpoints.
+  - Toolbar "Tags ▾" dropdown shows all tags as checkboxes with partial-state indicators when some selected conversations have the tag.
+  - Per-row tag chips include an × button to remove that tag.
+- **Bot feedback loop.** Emails flagged by the bot (Bot Review mail tag or ML override) are auto-recorded as feedback candidates in `data/mail_scanner/feedback.jsonl`.
+  - Inbox rows with the "Bot Review" tag show "✓ Correct" / "✗ Wrong" buttons.
+  - "Wrong" opens a correction selector: actionable / ack_suppress / owner_name_title / note_only / other.
+  - `POST /api/scanner/feedback` stores the verdict (requires dashboard auth, no scanner admin token).
+  - `GET /api/scanner/feedback` lists entries (with local fallback + remote proxy).
+- **Learning pipeline.**
+  - `train_ml_head.py` gains `--feedback` and `--mock-and-feedback` modes; `load_feedback_entries()` converts verdicts/corrections into labeled ML samples.
+  - `retrain_classifier_head()` in `mail_scanner.py` runs `train_ml_head.py` as a subprocess (avoids blocking the scanner thread).
+  - `POST /api/scanner/retrain` endpoint (admin-only) with local fallback + remote proxy.
+  - Scanner Admin Status tab shows feedback count, current ML head status, and a "Retrain ML Head" button (gated on ≥1 feedback entry); displays sample count and accuracy after retrain.
+- **Guaranteed linking policy.** Scanner now ensures every email is either linked to the best available opportunity (including weak matches) or flagged with a Bot Review mail tag for human routing. Added `_ensure_linked_or_flagged()` wrapper around `_process_email_core()`, explicit `_link_email_to_opportunity()` in `supplement_discussion`, and weak-match linking in record-inbox ack/delay paths. Admin log UI shows "linked email" / "flagged for review" instead of "No action".
+- **Rules legend in Scanner Admin Status tab.** Collapsible `<details>` section listing all 15 classification rules with human-readable descriptions, what they match, typical actions, record inbox behavior, and assignees.
+- **Inbox differentiation (CRM vs REQ).** Mail rows now show a source channel badge (`CRM` or `REQ`) with actions taken and amber suggested action (e.g., "task needed") for record inbox emails where tasks are suppressed by policy. Filter buttons (`All | CRM | REQ`) in the toolbar to filter by source channel.
+- **Feedback on ALL mail rows.** Removed `hasBotReview` gate — every email now shows "✓ Correct" / "✗ Wrong" buttons. Structured correction form with: "What was wrong?" dropdown (wrong classification / wrong deal / should notify customer / both / other), "Correct rule" dropdown (all 15 rules), "Correct deal" type-ahead search (reuses `searchOpportunitiesByTitle()`), and notes field.
+- **Enhanced feedback schema.** `store_user_feedback()` accepts `correct_classification`, `correct_opp_id`, `correct_opp_title`. `record_feedback_candidate()` stores `linked_opp_id`, `linked_opp_title`, `source_inbox` for full context.
+- **Training pipeline relabeling.** `load_feedback_entries()` uses `correct_classification` (preferred over `user_correction`) to relabel samples when the user specifies the correct rule.
+- **Skipped actions in log.** Record inbox policy suppressions shown as `(skipped: task: record inbox policy, ...)` in Scanner Admin log.
+- **Files changed:** `mail_scanner.py`, `train_ml_head.py`, `scanner/scanner_service.py`, `server.py`, `public/app.js`, `public/index.html`, `public/styles.css`.
+
 ### Phase 6: ML Implementation & Override Logic (2026-07-12)
 
 - **ML classifier fully implemented.** `train_ml_head.py` training pipeline with mock data generator for bootstrapping (300 synthetic emails across 4 categories: actionable/record/ack/uncertain). Interactive labeling mode exports CSV for manual labeling. Trains LogisticRegression head on all-MiniLM-L6-v2 embeddings, saves `classifier_head.pkl`.
