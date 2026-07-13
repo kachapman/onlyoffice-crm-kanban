@@ -14455,7 +14455,6 @@ function renderMailList(msgs) {
     if (isRead) row.classList.add('mail-row-read');
 
     // Inbox type badge (channel + actions + suggested action)
-    const inboxInfo = getMailInboxInfo(m);
     let inboxBadge = "";
     if (inboxInfo) {
       const channelCls = inboxInfo.channel === "crm" ? "crm" : inboxInfo.channel === "req" ? "req" : "unknown";
