@@ -838,8 +838,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": "code, chatId, and portal are required"})
             return
         mapping = verify_code(portal, code)
-        if not mapping:
+        if mapping is None:
             _json_response(self, 404, {"error": "Invalid or expired code"})
+            return
+        if isinstance(mapping, str):
+            _json_response(self, 400, {"error": mapping})
             return
         set_verify_chat_id(portal, mapping["contactId"], int(chat_id))
         _json_response(self, 200, mapping)
@@ -1567,22 +1570,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         """Fetch a single mail message for the preview modal.
 
         Uses the same filehandler.ashx endpoint the CRM MailViewer uses,
-        with the bot token (admin access). Falls back to the REST API
-        with the user's own token if the handler fails.
+        with the user's own session token. Linked emails are accessible to
+        all deal users. Falls back to the REST API if the handler fails.
         """
         auth = _require_auth(self)
         if not auth:
             return
-        portal, _user_token, _user_id = auth
+        portal, token, _user_id = auth
 
         # 1. Try filehandler.ashx (the endpoint the CRM MailViewer actually uses)
-        #    Uses bot token (admin access) — user session tokens don't have access.
-        bot_token = self._bot_crm_token(portal)
         handler_url = f"{portal}/Products/CRM/HttpHandlers/filehandler.ashx?action=mailmessage&message_id={mail_id}"
         try:
             req = urllib.request.Request(
                 handler_url,
-                headers={"Accept": "application/json, text/html, */*", "Authorization": bot_token or _user_token},
+                headers={"Accept": "application/json, text/html, */*", "Authorization": token},
                 method="GET",
             )
             with urllib.request.urlopen(req, context=_ssl_context(), timeout=30) as resp:
@@ -1628,25 +1629,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             except (json.JSONDecodeError, TypeError):
                 pass
 
-        # 3. Try REST API with bot token (admin access may have broader permissions).
-        if bot_token:
-            bot_url = f"{portal}/api/2.0/mail/messages/{mail_id}"
-            try:
-                req = urllib.request.Request(
-                    bot_url,
-                    headers={"Accept": "application/json", "Authorization": bot_token},
-                    method="GET",
-                )
-                with urllib.request.urlopen(req, context=_ssl_context(), timeout=30) as resp:
-                    raw = resp.read()
-                    data = json.loads(raw.decode("utf-8", errors="replace"))
-                    if isinstance(data, dict):
-                        _json_response(self, 200, data)
-                        return
-            except Exception:
-                pass
-
-        # 4. All failed — return 404 so the client shows the fallback message.
+        # 3. Both failed — return 404 so the client shows the fallback message.
         _json_response(self, 404, {"error": "Mail message not found"})
 
     # --------------- Telegram HTML sanitizer (shared) ---------------
@@ -2376,7 +2359,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
 
         # Client-side mail message fetch (uses filehandler.ashx like the CRM MailViewer)
-        m = re.match(r"^/api/mail/message/(\d+)$", api_path)
+        # Client calls api('/api/mail/message/...') which becomes /api/proxy/api/mail/message/...
+        m = re.match(r"^/api/proxy/api/mail/message/(\d+)$", api_path)
         if m:
             self._handle_mail_message_get(int(m.group(1)))
             return

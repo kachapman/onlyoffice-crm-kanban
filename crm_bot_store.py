@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data" / "bot-customers"
 CODE_EXPIRE_HOURS = 48
 CODE_LENGTH = 8
+MAX_CONTACT_MAPPINGS = 10
 
 
 def _safe_segment(value: str, fallback: str = "unknown") -> str:
@@ -55,16 +56,27 @@ def list_mappings(portal: str) -> list[dict[str, Any]]:
 
 def add_mapping(portal: str, chat_id: int, contact_id: int | None, contact_name: str,
                 notes_category_id: int | None, nickname: str = "",
-                employee: bool = False) -> dict[str, Any]:
+                employee: bool = False) -> dict[str, Any] | str:
+    """Add a bot mapping. Returns the mapping dict on success, or an error string on failure."""
     path = _store_path(portal)
     store = _load_file(path)
     mappings = store.get("mappings", [])
 
-    existing_idx = None
+    # Check if this chat already has a mapping (replace in-place)
+    existing_chat_idx = None
     for i, m in enumerate(mappings):
         if m.get("chatId") == chat_id:
-            existing_idx = i
+            existing_chat_idx = i
             break
+
+    # For non-employees: enforce max mappings per contact
+    if not employee and contact_id is not None:
+        contact_count = sum(1 for m in mappings if m.get("contactId") == contact_id)
+        # Count doesn't include the existing chat mapping if it's being replaced
+        if existing_chat_idx is not None and mappings[existing_chat_idx].get("contactId") == contact_id:
+            pass  # Replacing same chat's link, not adding a new one
+        elif contact_count >= MAX_CONTACT_MAPPINGS:
+            return f"Contact already has the maximum of {MAX_CONTACT_MAPPINGS} linked chats"
 
     now = datetime.now(timezone.utc).isoformat()
     entry = {
@@ -78,9 +90,9 @@ def add_mapping(portal: str, chat_id: int, contact_id: int | None, contact_name:
         "updatedAt": now,
     }
 
-    if existing_idx is not None:
-        entry["createdAt"] = mappings[existing_idx].get("createdAt", now)
-        mappings[existing_idx] = entry
+    if existing_chat_idx is not None:
+        entry["createdAt"] = mappings[existing_chat_idx].get("createdAt", now)
+        mappings[existing_chat_idx] = entry
     else:
         mappings.append(entry)
 
@@ -213,8 +225,8 @@ def cancel_code_by_value(portal: str, code: str) -> bool:
     return True
 
 
-def verify_code(portal: str, code: str) -> dict[str, Any] | None:
-    """Find and consume a pending code. Returns the mapping data on success."""
+def verify_code(portal: str, code: str) -> dict[str, Any] | str:
+    """Find and consume a pending code. Returns the mapping dict on success, or an error string."""
     store = _load_file(_store_path(portal))
     codes = store.get("pendingCodes", [])
     now = datetime.now(timezone.utc)
@@ -227,13 +239,17 @@ def verify_code(portal: str, code: str) -> dict[str, Any] | None:
             is_employee = c.get("employee", False)
             contact_id = c.get("contactId")
             mappings = store.get("mappings", [])
-            existing = None
-            for j, m in enumerate(mappings):
-                if is_employee and m.get("chatId") == 0:
-                    continue
-                if m.get("contactId") == contact_id and not is_employee:
-                    existing = j
-                    break
+
+            # For non-employees: enforce max mappings per contact
+            if not is_employee and contact_id is not None:
+                contact_count = sum(1 for m in mappings if m.get("contactId") == contact_id)
+                if contact_count >= MAX_CONTACT_MAPPINGS:
+                    # Put the code back
+                    codes.insert(i, entry)
+                    store["pendingCodes"] = codes
+                    _save_file(_store_path(portal), store)
+                    return f"Contact already has the maximum of {MAX_CONTACT_MAPPINGS} linked chats"
+
             now_iso = now.isoformat()
             mapping = {
                 "chatId": 0,
@@ -245,11 +261,7 @@ def verify_code(portal: str, code: str) -> dict[str, Any] | None:
                 "createdAt": now_iso,
                 "updatedAt": now_iso,
             }
-            if existing is not None:
-                mapping["createdAt"] = mappings[existing].get("createdAt", now_iso)
-                mappings[existing] = mapping
-            else:
-                mappings.append(mapping)
+            mappings.append(mapping)
             store["mappings"] = mappings
             _save_file(_store_path(portal), store)
             return mapping
@@ -257,12 +269,15 @@ def verify_code(portal: str, code: str) -> dict[str, Any] | None:
 
 
 def set_verify_chat_id(portal: str, contact_id: int | None, chat_id: int) -> bool:
-    """Set chatId after initial verify (code flow created mapping with chatId=0)."""
+    """Set chatId after initial verify (code flow created mapping with chatId=0).
+
+    Finds the mapping with chatId=0 for the given contactId (or employee with chatId=0).
+    """
     path = _store_path(portal)
     store = _load_file(path)
     mappings = store.get("mappings", [])
     for m in mappings:
-        if contact_id is not None and m.get("contactId") == contact_id:
+        if contact_id is not None and m.get("contactId") == contact_id and m.get("chatId") == 0:
             m["chatId"] = chat_id
             m["updatedAt"] = datetime.now(timezone.utc).isoformat()
             _save_file(path, store)

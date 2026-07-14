@@ -8,9 +8,10 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 - **Login screen: removed duplicate "Logging in…" text.** The `<p id="login-loading">` element duplicated the button's loading state. Removed the element; button text change is sufficient.
 - **Login screen: updated portal URL to publicadjustermidwest.com.** Subtitle and input field now reference `office.publicadjustermidwest.com` instead of the old `vanguardadj.com` domain.
-- **Email history links in preview modals now load correctly.** The CRM's `/api/2.0/mail/messages/{id}` endpoint was returning 404. Added server-side `/api/mail/message/{id}` endpoint that uses `filehandler.ashx` (the same legacy endpoint the native CRM MailViewer uses) with the bot token (admin access — user session tokens don't have access to this endpoint), falling back to the REST API with the user token, then bot token. Client `fetchMailMessage` now calls this endpoint instead of hitting the CRM directly.
+- **Email history links in preview modals now load correctly.** Fixed regex at `server.py` that matched `/api/mail/message/{id}` but not `/api/proxy/api/mail/message/{id}` (the actual path from the client). Also reverted `_handle_mail_message_get` to use the user's session token for `filehandler.ashx` — linked emails are accessible to all deal users, no bot token needed.
 - **Regex crash in `historyContentIsMailPlaceholder` fixed.** Replaced regex-based escaping with simple string methods (`startsWith`, `endsWith`, `includes`) to avoid regex compilation entirely. The previous regex character class `[.*+?^${}()|[\]\\]` still failed on subjects containing `(` like `(866) 787-8676`.
 - **Starting RCV user field character limit doubled.** `parseCustomFieldTextMaxLength` now returns `size * 2` from the CRM field definition mask, applying to both create and edit deal modals.
+- **Bot linking: contacts can now have up to 10 linked chats.** Previously, linking a new chat to a contact replaced the existing link. Now each contact can have up to 10 simultaneous bot links. `verify_code()` and `add_mapping()` enforce the limit; `set_verify_chat_id()` finds the correct pending mapping (chatId=0).
 
 ### Improvements
 
