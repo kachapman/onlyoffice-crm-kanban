@@ -1377,12 +1377,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         "latestUpdate": events[0] if events else None,
                     }
                     # Extract user fields for bot display
-                    user_fields = _extract_bot_user_fields(opp)
+                    user_fields = self._extract_bot_user_fields(opp)
                     if user_fields:
                         deal_entry["userFields"] = user_fields
                     # Include all tags for employee Project Info
                     if is_employee:
-                        deal_entry["tags"] = _extract_opp_tags(opp)
+                        deal_entry["tags"] = self._extract_opp_tags(opp)
                     if is_employee:
                         deal_entry["events"] = events
                     deals.append(deal_entry)
