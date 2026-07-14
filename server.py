@@ -1028,16 +1028,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     @staticmethod
     def _extract_bot_user_fields(opp: dict) -> dict[str, str]:
-        """Extract specific user fields from opportunity for bot display."""
-        target_fields = {
-            "address": "Address",
-            "customer phone": "Customer Phone",
-            "insurance carrier": "Insurance Carrier",
-            "claim #": "Claim #",
-            "carrier adjuster phone": "Carrier Adjuster Phone",
-        }
+        """Extract ALL user fields from opportunity for bot display."""
         result: dict[str, str] = {}
-        # Check all possible custom field array names
         for list_key in ("customFields", "CustomFields", "customFieldList", "CustomFieldList", "fieldValues", "FieldValues"):
             field_list = opp.get(list_key)
             if not isinstance(field_list, list):
@@ -1045,7 +1037,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             for item in field_list:
                 if not isinstance(item, dict):
                     continue
-                # Get label from various possible keys
                 label = ""
                 for label_key in ("label", "Label", "name", "Name", "title", "Title"):
                     raw = item.get(label_key)
@@ -1054,10 +1045,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         break
                 if not label:
                     continue
-                label_lower = label.lower()
-                if label_lower not in target_fields:
-                    continue
-                # Get value from various possible keys
                 raw_val = None
                 for val_key in ("value", "Value", "fieldValue", "FieldValue"):
                     raw_val = item.get(val_key)
@@ -1069,7 +1056,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     raw_val = raw_val.get("title") or raw_val.get("text") or raw_val.get("value") or raw_val.get("Value") or ""
                 val_str = str(raw_val).strip()
                 if val_str:
-                    result[target_fields[label_lower]] = val_str
+                    result[label] = val_str
         return result
 
     @staticmethod
@@ -1376,6 +1363,36 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         "currency": currency,
                         "latestUpdate": events[0] if events else None,
                     }
+                    # Standard CRM fields for employee Project Info
+                    if is_employee:
+                        desc = str(opp.get("description") or opp.get("Description") or "").strip()
+                        if desc:
+                            deal_entry["description"] = desc
+                        contact = opp.get("contact") or opp.get("Contact") or {}
+                        if isinstance(contact, dict):
+                            cname = str(contact.get("displayName") or contact.get("DisplayName") or contact.get("title") or contact.get("Title") or "").strip()
+                        else:
+                            cname = str(contact).strip() if contact else ""
+                        if cname:
+                            deal_entry["contact"] = cname
+                        resp = opp.get("responsible") or opp.get("Responsible") or {}
+                        if isinstance(resp, dict):
+                            rname = str(resp.get("displayName") or resp.get("DisplayName") or resp.get("title") or resp.get("Title") or "").strip()
+                        else:
+                            rname = str(resp).strip() if resp else ""
+                        if rname:
+                            deal_entry["responsible"] = rname
+                        created = str(opp.get("createOn") or opp.get("created") or opp.get("Created") or "").strip()
+                        if created:
+                            deal_entry["created"] = created
+                        due = str(opp.get("dueDate") or opp.get("DueDate") or "").strip()
+                        if due:
+                            deal_entry["dueDate"] = due
+                        bid = str(opp.get("bidType") or opp.get("BidType") or "").strip()
+                        if bid:
+                            deal_entry["bidType"] = bid
+                        if opp.get("isPrivate") or opp.get("IsPrivate"):
+                            deal_entry["isPrivate"] = True
                     # Extract user fields for bot display
                     user_fields = self._extract_bot_user_fields(opp)
                     if user_fields:

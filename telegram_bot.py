@@ -681,39 +681,46 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
 
 
 def format_project_info(deal: dict) -> str:
-    """Format all deal fields, tags, and stage for employee Project Info view."""
+    """Format all deal fields and user fields for employee Project Info view."""
     lines = [
         f"<b>{_esc(deal.get('title', 'Deal'))}</b> — Project Info",
         "─" * 30,
     ]
-    # Stage
+    # Standard CRM fields
     stage = deal.get("stage", "")
     if stage:
         lines.append(f"<b>Stage:</b> {_esc(stage)}")
-    # Tags
-    tags = deal.get("tags") or []
-    if tags:
-        lines.append(f"<b>Tags:</b> {_esc(', '.join(tags))}")
-    # Amount
     amt = _fmt_money(deal.get("amount", 0), deal.get("currency", ""))
     if amt:
         lines.append(f"<b>Amount:</b> {_esc(amt)}")
-    # User fields — show all with values
+    tags = deal.get("tags") or []
+    if tags:
+        lines.append(f"<b>Tags:</b> {_esc(', '.join(tags))}")
+    desc = deal.get("description", "")
+    if desc:
+        lines.append(f"<b>Description:</b> {_esc(desc)}")
+    contact = deal.get("contact", "")
+    if contact:
+        lines.append(f"<b>Contact:</b> {_esc(contact)}")
+    responsible = deal.get("responsible", "")
+    if responsible:
+        lines.append(f"<b>Responsible:</b> {_esc(responsible)}")
+    created = deal.get("created", "")
+    if created:
+        lines.append(f"<b>Created:</b> {_esc(_fmt_date(created))}")
+    due = deal.get("dueDate", "")
+    if due:
+        lines.append(f"<b>Due Date:</b> {_esc(_fmt_date(due))}")
+    bid = deal.get("bidType", "")
+    if bid:
+        lines.append(f"<b>Bid Type:</b> {_esc(bid)}")
+    if deal.get("isPrivate"):
+        lines.append(f"<b>Private:</b> Yes")
+    # User fields (all non-empty, no header)
     uf = deal.get("userFields") or {}
-    if uf:
-        lines.append("")
-        lines.append("<b>User Fields:</b>")
-        # Show in a consistent order, then any extras
-        ordered_keys = ["Address", "Customer Phone", "Insurance Carrier", "Claim #", "Carrier Adjuster Phone"]
-        shown = set()
-        for key in ordered_keys:
-            val = uf.get(key, "")
-            if val:
-                lines.append(f"  {key}: {_esc(val)}")
-                shown.add(key)
-        for key, val in uf.items():
-            if key not in shown and val:
-                lines.append(f"  {_esc(key)}: {_esc(val)}")
+    for key, val in uf.items():
+        if val:
+            lines.append(f"<b>{_esc(key)}:</b> {_esc(val)}")
     if lines and lines[-1] != "":
         lines.append("")
     lines.append("───────────────")

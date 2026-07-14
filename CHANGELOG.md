@@ -18,7 +18,7 @@ All notable changes to the CRM Kanban dashboard are documented here.
 - **Customer Bot modal: two-column desktop layout.** Modal widens to 960px on desktop (≥900px). Left column: Invite Customer + Existing Mappings. Right column: Broadcast Message + Activity Log. Single column on mobile.
 - **Customer Bot activity log: expandable per-user endpoint details.** Each user row has a toggle button (▶/▼) that expands to show endpoint breakdown. Log also shows First request, Last request, and Active days.
 - **Customer Bot: deal fields in Telegram deal detail.** Customer-linked users now see Address, Customer Phone, Insurance Carrier, Claim #, and Stage below the deal title (one per row, empty values skipped). Employee view unchanged (history notes with existing buttons).
-- **Customer Bot: Project Info button for employees.** Employee deal detail now has three buttons: 📋 Project Info | 📝 Add Note | 🔍 New Search. Project Info shows all deal fields, tags, stage, and amount in a new message.
+- **Customer Bot: Project Info button for employees.** Employee deal detail now has three buttons: 📋 Project Info | 📝 Add Note | 🔍 New Search. Project Info shows all deal fields (Stage, Amount, Tags, Description, Contact, Responsible, Created, Due Date, Bid Type, Private) and all user fields inline — no section header. `_extract_bot_user_fields` now returns ALL custom fields, not just the 5 hardcoded ones. `_handle_bot_deals` now passes additional CRM standard fields (description, contact, responsible, created, dueDate, bidType, isPrivate) in the deal entry.
 
 ### Files changed
 - `public/index.html`, `public/app.js`, `public/styles.css`, `server.py`, `telegram_bot.py`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`
