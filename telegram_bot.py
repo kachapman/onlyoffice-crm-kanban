@@ -606,42 +606,16 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
         _esc(d["title"]),
         "─" * 30,
     ]
-    stage = d.get("stage", "")
-    if stage:
-        lines.append(f"Status: {_esc(stage)}")
-    if amt:
-        lines.append(f"Amount: {_esc(amt)}")
-    if is_employee:
-        events = d.get("events", [])
-        if events:
-            lines.append("")
-            for idx, ev in enumerate(events):
-                if idx > 0:
-                    lines.append("───────────────")
-                cat = ev.get("categoryName") or ""
-                content = ev.get("content", "")
-                created = _fmt_date(ev.get("created", ""))
-                author = str(ev.get("author") or "").strip()
-                cat_lower = cat.lower()
-                is_mail = "mail" in cat_lower or "email" in cat_lower
-                is_customer_update = "customer update" in cat_lower
-                header_parts: list[str] = []
-                if cat:
-                    header_parts.append(f"<b>[{_esc(cat)}]</b>")
-                if created:
-                    header_parts.append(f"<i>{_esc(created)}</i>")
-                header = " — ".join(header_parts) if header_parts else ""
-                # Show author for event types except:
-                # - mail messages (already show From/To lines)
-                # - customer updates (customers should not see employee names)
-                if author and not is_mail and not is_customer_update:
-                    header = f"{header} ({_esc(author)})" if header else f"({_esc(author)})"
-                if header:
-                    lines.append(header)
-                if content:
-                    lines.append(_format_event_body(cat, content, max_len=1200))
-                lines.append("")
-    else:
+    # Customer view: show key user fields below title
+    if not is_employee:
+        uf = d.get("userFields") or {}
+        for field_name in ("Address", "Customer Phone", "Insurance Carrier", "Claim #"):
+            val = uf.get(field_name, "")
+            if val:
+                lines.append(f"{field_name}: {_esc(val)}")
+        stage = d.get("stage", "")
+        if stage:
+            lines.append(f"Stage: {_esc(stage)}")
         update = d.get("latestUpdate")
         if update:
             content = update.get("content", "")
@@ -653,10 +627,97 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
                     header += f" — <i>{_esc(created)}</i>"
                 lines.append(header + ":")
                 lines.append(_sanitize_html(content))
+        if lines and lines[-1] != "":
+            lines.append("")
+        lines.append("───────────────")
+        lines.append("<i>Send another project name to search again.</i>")
+        msg = "\n".join(lines)
+        if len(msg) > 4000:
+            msg = _truncate_html(msg, 4000)
+        return msg
+    # Employee view below
+    stage = d.get("stage", "")
+    if stage:
+        lines.append(f"Status: {_esc(stage)}")
+    if amt:
+        lines.append(f"Amount: {_esc(amt)}")
+    events = d.get("events", [])
+    if events:
+        lines.append("")
+        for idx, ev in enumerate(events):
+            if idx > 0:
+                lines.append("───────────────")
+            cat = ev.get("categoryName") or ""
+            content = ev.get("content", "")
+            created = _fmt_date(ev.get("created", ""))
+            author = str(ev.get("author") or "").strip()
+            cat_lower = cat.lower()
+            is_mail = "mail" in cat_lower or "email" in cat_lower
+            is_customer_update = "customer update" in cat_lower
+            header_parts: list[str] = []
+            if cat:
+                header_parts.append(f"<b>[{_esc(cat)}]</b>")
+            if created:
+                header_parts.append(f"<i>{_esc(created)}</i>")
+            header = " — ".join(header_parts) if header_parts else ""
+            # Show author for event types except:
+            # - mail messages (already show From/To lines)
+            # - customer updates (customers should not see employee names)
+            if author and not is_mail and not is_customer_update:
+                header = f"{header} ({_esc(author)})" if header else f"({_esc(author)})"
+            if header:
+                lines.append(header)
+            if content:
+                lines.append(_format_event_body(cat, content, max_len=1200))
+            lines.append("")
     if lines and lines[-1] != "":
         lines.append("")
     lines.append("───────────────")
     lines.append("<i>Send another project name to search again.</i>")
+    msg = "\n".join(lines)
+    if len(msg) > 4000:
+        msg = _truncate_html(msg, 4000)
+    return msg
+
+
+def format_project_info(deal: dict) -> str:
+    """Format all deal fields, tags, and stage for employee Project Info view."""
+    lines = [
+        f"<b>{_esc(deal.get('title', 'Deal'))}</b> — Project Info",
+        "─" * 30,
+    ]
+    # Stage
+    stage = deal.get("stage", "")
+    if stage:
+        lines.append(f"<b>Stage:</b> {_esc(stage)}")
+    # Tags
+    tags = deal.get("tags") or []
+    if tags:
+        lines.append(f"<b>Tags:</b> {_esc(', '.join(tags))}")
+    # Amount
+    amt = _fmt_money(deal.get("amount", 0), deal.get("currency", ""))
+    if amt:
+        lines.append(f"<b>Amount:</b> {_esc(amt)}")
+    # User fields — show all with values
+    uf = deal.get("userFields") or {}
+    if uf:
+        lines.append("")
+        lines.append("<b>User Fields:</b>")
+        # Show in a consistent order, then any extras
+        ordered_keys = ["Address", "Customer Phone", "Insurance Carrier", "Claim #", "Carrier Adjuster Phone"]
+        shown = set()
+        for key in ordered_keys:
+            val = uf.get(key, "")
+            if val:
+                lines.append(f"  {key}: {_esc(val)}")
+                shown.add(key)
+        for key, val in uf.items():
+            if key not in shown and val:
+                lines.append(f"  {_esc(key)}: {_esc(val)}")
+    if lines and lines[-1] != "":
+        lines.append("")
+    lines.append("───────────────")
+    lines.append("<i>Tap a button below to continue.</i>")
     msg = "\n".join(lines)
     if len(msg) > 4000:
         msg = _truncate_html(msg, 4000)
@@ -697,9 +758,11 @@ def main() -> None:
         return InlineKeyboardMarkup(keyboard) if keyboard else None
 
     def _build_deal_detail_keyboard(deal_id: int, is_employee: bool) -> InlineKeyboardMarkup:
-        row: list[InlineKeyboardButton] = [InlineKeyboardButton("🔍 New Search", callback_data="act:home")]
+        row: list[InlineKeyboardButton] = []
         if is_employee:
+            row.append(InlineKeyboardButton("📋 Project Info", callback_data=f"act:info:{deal_id}"))
             row.append(InlineKeyboardButton("📝 Add Note", callback_data=f"act:note:{deal_id}"))
+        row.append(InlineKeyboardButton("🔍 New Search", callback_data="act:home"))
         return InlineKeyboardMarkup([row])
 
     _PREFERRED_CATEGORY_PATTERNS: list[tuple[re.Pattern, str]] = [
@@ -894,6 +957,25 @@ def main() -> None:
                 "Send the note text you want to add for this project.\n"
                 "You can cancel by sending /cancel."
             )
+            return
+
+        if data.startswith("act:info:"):
+            try:
+                deal_id = int(data[9:])
+            except (ValueError, IndexError):
+                await query.edit_message_text("Invalid selection.")
+                return
+            deals = _last_deals.get(chat_id, [])
+            deal = None
+            for d in deals:
+                if (d.get("id") or d.get("ID")) == deal_id:
+                    deal = d
+                    break
+            if not deal:
+                await query.edit_message_text("This search has expired. Send a new project name.")
+                return
+            msg = format_project_info(deal)
+            await query.message.reply_text(msg, parse_mode="HTML")
             return
 
         if data.startswith("cat:"):

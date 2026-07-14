@@ -7126,6 +7126,34 @@ body {
   overflow-y: auto;
 }
 
+@media (min-width: 900px) {
+  .modal-card-bot-customers {
+    width: min(960px, 92vw);
+  }
+}
+
+.bot-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+@media (min-width: 900px) {
+  .bot-layout {
+    flex-direction: row;
+  }
+  .bot-layout-left {
+    flex: 1;
+    min-width: 0;
+  }
+  .bot-layout-right {
+    flex: 1;
+    min-width: 0;
+    border-left: 1px solid var(--border);
+    padding-left: 1rem;
+  }
+}
+
 .bot-section {
   margin-bottom: 1rem;
 }
@@ -7371,30 +7399,6 @@ body {
   align-self: center;
 }
 
-.bot-usage-panel {
-  margin-top: 0.75rem;
-  padding: 0.75rem 1rem;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  position: relative;
-}
-
-.bot-usage-title {
-  margin: 0 0 0.5rem;
-  font-size: 0.85rem;
-  color: var(--muted);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-.bot-usage-close {
-  position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
-}
-
 .bot-usage-content {
   max-height: 30vh;
   overflow-y: auto;
@@ -7424,6 +7428,33 @@ body {
 
 .bot-usage-table td {
   font-size: 0.82rem;
+}
+
+.bot-usage-row {
+  cursor: default;
+}
+
+.bot-usage-toggle {
+  width: 2rem;
+  text-align: center;
+}
+
+.bot-usage-toggle .btn {
+  font-size: 0.65rem;
+  padding: 0;
+  line-height: 1;
+}
+
+.bot-usage-ep-detail td {
+  font-size: 0.75rem;
+  color: var(--muted);
+  padding: 0.25rem 0.5rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.bot-usage-ep-item {
+  display: inline-block;
+  margin-right: 0.75rem;
 }
 
 .bot-usage-empty {

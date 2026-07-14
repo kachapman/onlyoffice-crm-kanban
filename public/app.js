@@ -9996,7 +9996,7 @@ function parseCustomFieldTextMaxLength(def) {
   try {
     const parsed = typeof raw === "object" ? raw : JSON.parse(String(raw));
     const size = Number(parsed?.size ?? parsed?.Size);
-    return Number.isFinite(size) && size > 0 ? size : null;
+    return Number.isFinite(size) && size > 0 ? size * 2 : null;
   } catch {
     return null;
   }
@@ -14697,7 +14697,7 @@ function historyContentIsMailPlaceholder(raw, subject) {
   if (/^The email \["[^"]+"\] has been received\.?$/i.test(s)) return true;
   const subj = String(subject || "").trim();
   if (subj) {
-    const escaped = subj.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const escaped = subj.replace(/[.*+?^${}()|[\]\\]]/g, "\\$&");
     const re = new RegExp(`^The email \["${escaped}"\] has been received\.?$`, "i");
     if (re.test(s)) return true;
   }
@@ -15472,19 +15472,11 @@ async function fetchMailMessage(messageId) {
   if (!Number.isFinite(id) || id <= 0) throw new Error("Invalid mail message id");
   if (oppPreviewMailCache.has(id)) return oppPreviewMailCache.get(id);
 
-  const paths = [`/api/2.0/mail/messages/${id}`, `/api/2.0/mail/messages/${id}.json`];
-  let lastErr;
-  for (const path of paths) {
-    try {
-      const data = await api(path);
-      const mail = data?.response ?? data?.result ?? data;
-      oppPreviewMailCache.set(id, mail);
-      return mail;
-    } catch (err) {
-      lastErr = err;
-    }
-  }
-  throw lastErr || new Error("Could not load mail message");
+  // Use the server-side endpoint that fetches via filehandler.ashx (same as CRM MailViewer)
+  const data = await api(`/api/mail/message/${id}`);
+  const mail = data?.response ?? data?.result ?? data;
+  oppPreviewMailCache.set(id, mail);
+  return mail;
 }
 
 function normalizeMailMessage(mail) {
@@ -15621,10 +15613,12 @@ function renderHistoryAttachmentsAside(parent, attachments) {
   const aside = document.createElement("aside");
   aside.className = "opp-preview-history-attachments";
   aside.setAttribute("aria-label", "Attachments");
+  const base = (state.portalUrl || "").replace(/\/$/, "");
   for (const file of attachments) {
+    const fid = file.id ?? file.fileId ?? "";
     const a = document.createElement("a");
     a.className = "opp-preview-attachment-link";
-    a.href = file.url || portalFileDownloadUrl(file.id);
+    a.href = fid ? `${base}/Products/Files/DocEditor.aspx?fileid=${encodeURIComponent(fid)}` : (file.url || "#");
     a.target = "_blank";
     a.rel = "noopener noreferrer";
     a.title = file.title;
@@ -17716,6 +17710,7 @@ async function openBotCustomersModal() {
   updateBotCustomersContactSelectedUi();
 
   populateBotBroadcastDropdown();
+  loadBotUsageLog();
   modal.classList.remove("hidden");
 }
 
@@ -18088,7 +18083,6 @@ function bindBotCustomersModal() {
   }
 
   initBotBroadcastSection();
-  initBotUsageLog();
 }
 
 function populateBotBroadcastDropdown() {
@@ -18175,49 +18169,74 @@ function initBotBroadcastSection() {
   });
 }
 
-function initBotUsageLog() {
-  const logBtn = $("#bot-usage-log-btn");
-  const panel = $("#bot-usage-panel");
-  const closeBtn = $("#bot-usage-close-btn");
+async function loadBotUsageLog() {
   const content = $("#bot-usage-content");
-  if (!logBtn || !panel || !closeBtn || !content) return;
-
-  logBtn.addEventListener("click", async () => {
-    if (!panel.classList.contains("hidden")) {
-      panel.classList.add("hidden");
+  if (!content) return;
+  content.innerHTML = '<p class="bot-usage-empty">Loading…</p>';
+  try {
+    const resp = await fetch("/api/bot/usage", { credentials: "same-origin" });
+    const data = await resp.json();
+    const usage = data.usage || [];
+    if (!usage.length) {
+      content.innerHTML = '<p class="bot-usage-empty">No usage data yet.</p>';
       return;
     }
-    panel.classList.remove("hidden");
-    content.innerHTML = '<p class="bot-usage-empty">Loading…</p>';
-    try {
-      const resp = await fetch("/api/bot/usage", { credentials: "same-origin" });
-      const data = await resp.json();
-      const usage = data.usage || [];
-      if (!usage.length) {
-        content.innerHTML = '<p class="bot-usage-empty">No usage data yet.</p>';
-        return;
+    const table = document.createElement("table");
+    table.className = "bot-usage-table";
+    table.innerHTML = '<thead><tr><th>User</th><th>Requests</th><th>First</th><th>Last</th><th>Active</th><th></th></tr></thead>';
+    const tbody = document.createElement("tbody");
+    for (const u of usage) {
+      const uu = u.usage || {};
+      const name = escapeHtml(u.nickname || u.contactName || `User #${u.contactId || u.chatId}`);
+      const total = uu.requests || 0;
+      const first = uu.firstRequest ? new Date(uu.firstRequest) : null;
+      const last = uu.lastRequest ? new Date(uu.lastRequest) : null;
+      const firstStr = first ? first.toLocaleDateString() : "—";
+      const lastStr = last ? last.toLocaleDateString() : "—";
+      let activeStr = "—";
+      if (first && last) {
+        const days = Math.round((last - first) / 86400000);
+        activeStr = days === 0 ? "Today" : `${days + 1}d`;
       }
-      let html = '<table class="bot-usage-table"><thead><tr><th>User</th><th>Chat ID</th><th>Requests</th><th>Endpoints</th><th>Last Request</th></tr></thead><tbody>';
-      for (const u of usage) {
-        const uu = u.usage || {};
-        const name = escapeHtml(u.nickname || u.contactName || `User #${u.contactId || u.chatId}`);
-        const chatId = u.chatId || "—";
-        const total = uu.requests || 0;
-        const eps = uu.endpoints || {};
-        const epStr = Object.entries(eps).map(([k, v]) => `${k}: ${v}`).join(", ") || "—";
-        const last = uu.lastRequest ? new Date(uu.lastRequest).toLocaleString() : "—";
-        html += `<tr><td>${name}</td><td>${chatId}</td><td>${total}</td><td>${escapeHtml(epStr)}</td><td>${escapeHtml(last)}</td></tr>`;
+      const eps = uu.endpoints || {};
+      const epEntries = Object.entries(eps);
+      const row = document.createElement("tr");
+      row.className = "bot-usage-row";
+      row.innerHTML = `<td>${name}</td><td>${total}</td><td>${firstStr}</td><td>${lastStr}</td><td>${activeStr}</td>`;
+      if (epEntries.length) {
+        const toggleTd = document.createElement("td");
+        toggleTd.className = "bot-usage-toggle";
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "btn btn-ghost btn-sm";
+        btn.textContent = "\u25B6";
+        btn.title = "Show endpoints";
+        toggleTd.appendChild(btn);
+        row.appendChild(toggleTd);
+        tbody.appendChild(row);
+        const detailRow = document.createElement("tr");
+        detailRow.className = "bot-usage-ep-detail hidden";
+        const detailTd = document.createElement("td");
+        detailTd.colSpan = 6;
+        detailTd.innerHTML = epEntries.map(([k, v]) => `<span class="bot-usage-ep-item">${escapeHtml(k.replace(/^\//, ""))}: ${v}</span>`).join("");
+        detailRow.appendChild(detailTd);
+        tbody.appendChild(detailRow);
+        btn.addEventListener("click", () => {
+          const hidden = detailRow.classList.toggle("hidden");
+          btn.textContent = hidden ? "\u25B6" : "\u25BC";
+          btn.title = hidden ? "Show endpoints" : "Hide endpoints";
+        });
+      } else {
+        row.innerHTML += "<td></td>";
+        tbody.appendChild(row);
       }
-      html += "</tbody></table>";
-      content.innerHTML = html;
-    } catch (e) {
-      content.innerHTML = '<p class="bot-usage-empty">Failed to load usage data.</p>';
     }
-  });
-
-  closeBtn.addEventListener("click", () => {
-    panel.classList.add("hidden");
-  });
+    table.appendChild(tbody);
+    content.innerHTML = "";
+    content.appendChild(table);
+  } catch (e) {
+    content.innerHTML = '<p class="bot-usage-empty">Failed to load usage data.</p>';
+  }
 }
 
 /* ================================================================================

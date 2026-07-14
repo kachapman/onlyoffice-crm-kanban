@@ -2,6 +2,27 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [2.2.2] — 2026-07-13
+
+### Bug fixes
+
+- **Login screen: removed duplicate "Logging in…" text.** The `<p id="login-loading">` element duplicated the button's loading state. Removed the element; button text change is sufficient.
+- **Login screen: updated portal URL to publicadjustermidwest.com.** Subtitle and input field now reference `office.publicadjustermidwest.com` instead of the old `vanguardadj.com` domain.
+- **Email history links in preview modals now load correctly.** The CRM's `/api/2.0/mail/messages/{id}` endpoint was returning 404. Added server-side `/api/mail/message/{id}` endpoint that uses `filehandler.ashx` (the same legacy endpoint the native CRM MailViewer uses) with the user's session token, falling back to the REST API. Client `fetchMailMessage` now calls this endpoint instead of hitting the CRM directly.
+- **Regex crash in `historyContentIsMailPlaceholder` fixed.** The escaping regex `/[.*+?^${}()|[\]\\]/g` had a malformed character class — `]` was not included, causing `new RegExp()` to throw `Invalid regular expression` when a mail subject contained `]` (e.g. claim numbers). Fixed pattern to `[.*+?^${}()|[\]\\]]`.
+- **Starting RCV user field character limit doubled.** `parseCustomFieldTextMaxLength` now returns `size * 2` from the CRM field definition mask, applying to both create and edit deal modals.
+
+### Improvements
+
+- **File attachment links in email history notes open in Documents module.** `renderHistoryAttachmentsAside` now links to `DocEditor.aspx?fileid=` (same as the Documents tab) instead of `filehandler.ashx?action=download`.
+- **Customer Bot modal: two-column desktop layout.** Modal widens to 960px on desktop (≥900px). Left column: Invite Customer + Existing Mappings. Right column: Broadcast Message + Activity Log. Single column on mobile.
+- **Customer Bot activity log: expandable per-user endpoint details.** Each user row has a toggle button (▶/▼) that expands to show endpoint breakdown. Log also shows First request, Last request, and Active days.
+- **Customer Bot: deal fields in Telegram deal detail.** Customer-linked users now see Address, Customer Phone, Insurance Carrier, Claim #, and Stage below the deal title (one per row, empty values skipped). Employee view unchanged (history notes with existing buttons).
+- **Customer Bot: Project Info button for employees.** Employee deal detail now has three buttons: 📋 Project Info | 📝 Add Note | 🔍 New Search. Project Info shows all deal fields, tags, stage, and amount in a new message.
+
+### Files changed
+- `public/index.html`, `public/app.js`, `public/styles.css`, `server.py`, `telegram_bot.py`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`
+
 ## [2.2.1] — 2026-07-08
 
 ### Bug fixes

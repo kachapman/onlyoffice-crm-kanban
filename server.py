@@ -1026,6 +1026,72 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         )
         return str(author).strip()
 
+    @staticmethod
+    def _extract_bot_user_fields(opp: dict) -> dict[str, str]:
+        """Extract specific user fields from opportunity for bot display."""
+        target_fields = {
+            "address": "Address",
+            "customer phone": "Customer Phone",
+            "insurance carrier": "Insurance Carrier",
+            "claim #": "Claim #",
+            "carrier adjuster phone": "Carrier Adjuster Phone",
+        }
+        result: dict[str, str] = {}
+        # Check all possible custom field array names
+        for list_key in ("customFields", "CustomFields", "customFieldList", "CustomFieldList", "fieldValues", "FieldValues"):
+            field_list = opp.get(list_key)
+            if not isinstance(field_list, list):
+                continue
+            for item in field_list:
+                if not isinstance(item, dict):
+                    continue
+                # Get label from various possible keys
+                label = ""
+                for label_key in ("label", "Label", "name", "Name", "title", "Title"):
+                    raw = item.get(label_key)
+                    if raw and isinstance(raw, str):
+                        label = raw.strip()
+                        break
+                if not label:
+                    continue
+                label_lower = label.lower()
+                if label_lower not in target_fields:
+                    continue
+                # Get value from various possible keys
+                raw_val = None
+                for val_key in ("value", "Value", "fieldValue", "FieldValue"):
+                    raw_val = item.get(val_key)
+                    if raw_val is not None:
+                        break
+                if raw_val is None:
+                    continue
+                if isinstance(raw_val, dict):
+                    raw_val = raw_val.get("title") or raw_val.get("text") or raw_val.get("value") or raw_val.get("Value") or ""
+                val_str = str(raw_val).strip()
+                if val_str:
+                    result[target_fields[label_lower]] = val_str
+        return result
+
+    @staticmethod
+    def _extract_opp_tags(opp: dict) -> list[str]:
+        """Extract tag names from opportunity for bot Project Info display."""
+        tags: list[str] = []
+        for list_key in ("tags", "Tags"):
+            tag_list = opp.get(list_key)
+            if not isinstance(tag_list, list):
+                continue
+            for t in tag_list:
+                if isinstance(t, dict):
+                    name = t.get("title") or t.get("name") or t.get("Title") or t.get("Name") or ""
+                elif isinstance(t, str):
+                    name = t
+                else:
+                    continue
+                name = str(name).strip()
+                if name:
+                    tags.append(name)
+        return tags
+
     def _fetch_full_mail_body(self, portal: str, mail_id: int) -> str | None:
         """Fetch full mail message body from CRM mail API.
 
@@ -1310,6 +1376,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         "currency": currency,
                         "latestUpdate": events[0] if events else None,
                     }
+                    # Extract user fields for bot display
+                    user_fields = _extract_bot_user_fields(opp)
+                    if user_fields:
+                        deal_entry["userFields"] = user_fields
+                    # Include all tags for employee Project Info
+                    if is_employee:
+                        deal_entry["tags"] = _extract_opp_tags(opp)
                     if is_employee:
                         deal_entry["events"] = events
                     deals.append(deal_entry)
@@ -1472,6 +1545,72 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             s = raw_stats.get(chat_id, {})
             enriched.append({**m, "usage": s})
         _json_response(self, 200, {"usage": enriched})
+
+    def _handle_mail_message_get(self, mail_id: int) -> None:
+        """Fetch a single mail message for the preview modal.
+
+        Uses the same filehandler.ashx endpoint the CRM MailViewer uses,
+        with the user's own session token (not the bot token).
+        Falls back to the REST API if the handler fails.
+        """
+        auth = _require_auth(self)
+        if not auth:
+            return
+        portal, token, _user_id = auth
+
+        # 1. Try filehandler.ashx (the endpoint the CRM MailViewer actually uses)
+        handler_url = f"{portal}/Products/CRM/HttpHandlers/filehandler.ashx?action=mailmessage&message_id={mail_id}"
+        try:
+            req = urllib.request.Request(
+                handler_url,
+                headers={"Accept": "application/json, text/html, */*", "Authorization": token},
+                method="GET",
+            )
+            with urllib.request.urlopen(req, context=_ssl_context(), timeout=30) as resp:
+                raw = resp.read()
+                ctype = resp.headers.get_content_type() if resp.headers else ""
+                text = raw.decode("utf-8", errors="replace")
+                self.log_message("MAIL-MSG handler status=%d ctype=%s len=%d", resp.status, ctype, len(text))
+                # Handler may return JSON (with the full mail object) or HTML (just the body).
+                if "application/json" in ctype or text.lstrip().startswith(("{", "[")):
+                    try:
+                        payload = json.loads(text)
+                    except json.JSONDecodeError:
+                        payload = None
+                    if isinstance(payload, dict):
+                        # If the JSON has a 'response' or 'result' wrapper, unwrap it.
+                        mail = payload.get("response") if isinstance(payload.get("response"), dict) else payload
+                        mail = mail.get("result") if isinstance(mail, dict) and isinstance(mail.get("result"), dict) else mail
+                        if isinstance(mail, dict):
+                            _json_response(self, 200, mail)
+                            return
+                # If we got HTML, wrap it in a minimal mail object.
+                if text.strip():
+                    _json_response(self, 200, {
+                        "id": mail_id,
+                        "htmlBody": text,
+                        "textBody": "",
+                    })
+                    return
+        except urllib.error.HTTPError as exc:
+            self.log_message("MAIL-MSG handler HTTPError %s for mail_id=%s", exc.code, mail_id)
+        except Exception as exc:
+            self.log_message("MAIL-MSG handler exception %s for mail_id=%s", exc, mail_id)
+
+        # 2. Fallback: try the REST API directly (may work for some messages).
+        code, raw_data, _ctype = _proxy_request(self, "GET", f"/api/2.0/mail/messages/{mail_id}")
+        self.log_message("MAIL-MSG REST status=%s", code)
+        if 200 <= code < 400:
+            try:
+                data = json.loads(raw_data)
+                if isinstance(data, dict):
+                    _json_response(self, 200, data)
+                    return
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # 3. Both failed — return 404 so the client shows the fallback message.
+        _json_response(self, 404, {"error": "Mail message not found"})
 
     # --------------- Telegram HTML sanitizer (shared) ---------------
 
@@ -2197,6 +2336,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         if api_path == "/api/bot/usage":
             self._handle_bot_usage()
+            return
+
+        # Client-side mail message fetch (uses filehandler.ashx like the CRM MailViewer)
+        m = re.match(r"^/api/mail/message/(\d+)$", api_path)
+        if m:
+            self._handle_mail_message_get(int(m.group(1)))
             return
 
         route = self._api_route()
