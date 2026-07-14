@@ -14693,14 +14693,13 @@ function crmMailReceivedLine(subject) {
 function historyContentIsMailPlaceholder(raw, subject) {
   const s = String(raw || "").trim();
   if (!s) return true;
-  if (/^An email has been received\.?$/i.test(s)) return true;
-  if (/^The email \["[^"]+"\] has been received\.?$/i.test(s)) return true;
+  if (s === "An email has been received." || s === "An email has been received") return true;
+  const prefix = 'The email ["';
+  const suffix = '"] has been received.';
+  const suffixNoDot = '"] has been received';
+  if (s.startsWith(prefix) && (s.endsWith(suffix) || s.endsWith(suffixNoDot))) return true;
   const subj = String(subject || "").trim();
-  if (subj) {
-    const escaped = subj.replace(/[.*+?^${}()|[\]\\]]/g, "\\$&");
-    const re = new RegExp(`^The email \["${escaped}"\] has been received\.?$`, "i");
-    if (re.test(s)) return true;
-  }
+  if (subj && s.includes(subj) && s.includes("has been received")) return true;
   return false;
 }
 
