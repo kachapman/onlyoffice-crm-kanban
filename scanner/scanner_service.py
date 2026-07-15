@@ -61,7 +61,7 @@ def _require_admin(handler: BaseHTTPRequestHandler, cached_body: bytes | None = 
             return True, body
     except Exception:
         pass
-    _json_response(handler, 403, {"error": "Scanner admin token required"})
+    _json_response(handler, 403, {"error": "Scanner admin token required", "admin_token_required": True})
     return False, body
 
 class ScannerHandler(BaseHTTPRequestHandler):
