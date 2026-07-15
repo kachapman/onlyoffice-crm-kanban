@@ -2513,6 +2513,11 @@ body {
   padding: 1.5rem;
 }
 
+/* Confirm dialog must stack above all other modals */
+#confirm-modal {
+  z-index: 2100;
+}
+
 .modal-backdrop {
   position: absolute;
   inset: 0;

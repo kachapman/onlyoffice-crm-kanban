@@ -12,6 +12,7 @@ All notable changes to the CRM Kanban dashboard are documented here.
 - **Regex crash in `historyContentIsMailPlaceholder` fixed.** Replaced regex-based escaping with simple string methods (`startsWith`, `endsWith`, `includes`) to avoid regex compilation entirely. The previous regex character class `[.*+?^${}()|[\]\\]` still failed on subjects containing `(` like `(866) 787-8676`.
 - **Starting RCV user field character limit doubled.** `parseCustomFieldTextMaxLength` now returns `size * 2` from the CRM field definition mask, applying to both create and edit deal modals.
 - **Bot linking: contacts can now have up to 10 linked chats.** Previously, linking a new chat to a contact replaced the existing link. Now each contact can have up to 10 simultaneous bot links. `verify_code()` and `add_mapping()` enforce the limit; `set_verify_chat_id()` finds the correct pending mapping (chatId=0).
+- **Delete note confirm dialog now appears above preview modals.** `#confirm-modal` z-index raised to 2100 so it stacks above the opportunity preview modal (z-index 2000).
 
 ### Improvements
 
