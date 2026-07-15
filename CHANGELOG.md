@@ -13,6 +13,7 @@ All notable changes to the CRM Kanban dashboard are documented here.
 - **Starting RCV user field character limit doubled.** `parseCustomFieldTextMaxLength` now returns `size * 2` from the CRM field definition mask, applying to both create and edit deal modals.
 - **Bot linking: contacts can now have up to 10 linked chats.** Previously, linking a new chat to a contact replaced the existing link. Now each contact can have up to 10 simultaneous bot links. `verify_code()` and `add_mapping()` enforce the limit; `set_verify_chat_id()` finds the correct pending mapping (chatId=0).
 - **Delete note confirm dialog now appears above preview modals.** `#confirm-modal` z-index raised to 2100 so it stacks above the opportunity preview modal (z-index 2000).
+- **Note editor paste: stripped formatting and preserved line breaks.** Added paste event handler on `.note-editor` elements that strips all styling (background-color, fonts, classes) from pasted HTML and converts plain text newlines to `<br>` tags. Prevents pre-highlighted text from appearing in notes and ensures line breaks transfer correctly.
 
 ### Improvements
 

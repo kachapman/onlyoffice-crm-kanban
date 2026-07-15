@@ -9240,6 +9240,76 @@ function plainTextToNoteHtml(text) {
     .join("<br/>");
 }
 
+// Strip formatting from pasted content in note editors.
+// Prevents highlighted/colored text from source and preserves line breaks.
+function initNoteEditorPasteHandlers() {
+  document.addEventListener("paste", (e) => {
+    const target = e.target;
+    if (!target || !target.classList || !target.classList.contains("note-editor")) return;
+    // Only intercept if we can get clipboard data
+    const clipboardData = e.clipboardData || window.clipboardData;
+    if (!clipboardData) return;
+
+    const html = clipboardData.getData("text/html");
+    const text = clipboardData.getData("text/plain");
+
+    e.preventDefault();
+
+    let content;
+    if (html) {
+      // Strip all formatting from HTML: remove tags that carry styles
+      const tmp = document.createElement("div");
+      tmp.innerHTML = html;
+      // Remove all style attributes, class attributes, and <mark>/<span> wrapper tags
+      tmp.querySelectorAll("[style]").forEach((el) => el.removeAttribute("style"));
+      tmp.querySelectorAll("[class]").forEach((el) => el.removeAttribute("class"));
+      // Unwrap <mark> tags (keep text)
+      tmp.querySelectorAll("mark").forEach((el) => {
+        el.replaceWith(...el.childNodes);
+      });
+      // Unwrap <span> tags that were used for highlighting (keep text)
+      tmp.querySelectorAll("span").forEach((el) => {
+        el.replaceWith(...el.childNodes);
+      });
+      // Normalize divs to line breaks
+      let inner = tmp.innerHTML;
+      inner = inner
+        .replace(/<\/div>\s*<div[^>]*>/gi, "<br/>")
+        .replace(/<div[^>]*>/gi, "")
+        .replace(/<\/div>/gi, "");
+      content = inner;
+    } else if (text) {
+      // Plain text: preserve line breaks as <br>
+      content = text
+        .split(/\r?\n/)
+        .map((line) => escapeHtml(line))
+        .join("<br/>");
+    } else {
+      return; // No content, let browser handle it
+    }
+
+    // Insert at cursor position
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount) {
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      const frag = document.createElement("div");
+      frag.innerHTML = content;
+      const lastNode = frag.lastChild;
+      range.insertNode(frag);
+      // Move cursor to end of inserted content
+      if (lastNode) {
+        range.setStartAfter(lastNode);
+        range.setEndAfter(lastNode);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    } else {
+      target.innerHTML += content;
+    }
+  });
+}
+
 function noteContentToHtml(input) {
   let s = String(input || "").trim();
   if (!s) return "";
@@ -19711,6 +19781,7 @@ async function init() {
   bindEventLogModal();
   bindBotCustomersModal();
   initBookmarkSidebar();
+  initNoteEditorPasteHandlers();
 
   $("#new-opportunity-btn")?.addEventListener("click", () => {
     openCreateOpportunityModal().catch((err) => showToast(err.message, true));
