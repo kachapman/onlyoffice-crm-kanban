@@ -3619,6 +3619,7 @@ function buildUserProfilePayload() {
     hiddenFeedKeys: serializeHiddenFeedEntries(),
     feedKeywordFilter: state.feedKeywordFilter || "",
     bookmarkedDeals: state.bookmarkedDeals.map((d) => stripBookmarkedRuntimeFields(d)),
+    minimizedSearchTabs: (minimizedSearchTabs || []).map((t) => ({ oppId: t.oppId, title: t.title })),
   };
 }
 
@@ -3681,6 +3682,27 @@ function applyUserProfile(profile) {
       /* ignore */
     }
   }
+
+  // Minimized search tabs
+  if (Array.isArray(profile.minimizedSearchTabs)) {
+    minimizedSearchTabs = profile.minimizedSearchTabs.map((t) => ({
+      oppId: Number(t.oppId),
+      title: String(t.title || ""),
+    })).filter((t) => Number.isFinite(t.oppId) && t.oppId > 0);
+  } else {
+    try {
+      const raw = localStorage.getItem(SEARCH_MINIMIZED_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          minimizedSearchTabs = parsed.map((t) => ({
+            oppId: Number(t.oppId),
+            title: String(t.title || ""),
+          })).filter((t) => Number.isFinite(t.oppId) && t.oppId > 0);
+        }
+      }
+    } catch { /* ignore */ }
+  }
 }
 
 function persistProfileToLocalStorage() {
@@ -3694,6 +3716,7 @@ function persistProfileToLocalStorage() {
   localStorage.setItem(HIDDEN_FEED_STORAGE_KEY, JSON.stringify(payload.hiddenFeedKeys));
   localStorage.setItem(FEED_KEYWORD_STORAGE_KEY, payload.feedKeywordFilter);
   localStorage.setItem(BOOKMARKED_STORAGE_KEY, JSON.stringify(payload.bookmarkedDeals || []));
+  localStorage.setItem(SEARCH_MINIMIZED_STORAGE_KEY, JSON.stringify(payload.minimizedSearchTabs || []));
 }
 
 function profileHasDashboardData(profile) {
@@ -3880,6 +3903,12 @@ function stripBookmarkedRuntimeFields(entry) {
 function saveBookmarkedDealsToStorage() {
   const slim = state.bookmarkedDeals.map((d) => stripBookmarkedRuntimeFields(d));
   localStorage.setItem(BOOKMARKED_STORAGE_KEY, JSON.stringify(slim));
+  scheduleUserProfileSave();
+}
+
+function saveMinimizedSearchTabsToStorage() {
+  const slim = (minimizedSearchTabs || []).map((t) => ({ oppId: t.oppId, title: t.title }));
+  localStorage.setItem(SEARCH_MINIMIZED_STORAGE_KEY, JSON.stringify(slim));
   scheduleUserProfileSave();
 }
 
@@ -14601,8 +14630,10 @@ const oppPreviewMailCache = new Map();
 let oppPreviewContext = { oppId: null, opp: null, group: null };
 
 /* Search popup state */
-const MAX_SEARCH_PREVIEW_TABS = 5;
+const MAX_SEARCH_PREVIEW_TABS = 10;
 let searchPopupPreviewTabs = new Map(); // oppId -> { title, data, container, button }
+let minimizedSearchTabs = []; // [{ oppId: number, title: string }] — parked tabs, persisted like bookmarks
+const SEARCH_MINIMIZED_STORAGE_KEY = "oo_board_search_minimized_v1";
 
 function createCrmOpenLink(oppId, { className = "crm-open-external", title = "Open in CRM" } = {}) {
   const a = document.createElement("a");
@@ -16620,6 +16651,15 @@ function bindSearchPopupBtn() {
 function openSearchPopupModal() {
   const modal = $("#search-popup-modal");
   if (!modal) return;
+  // If modal is closed, no live tabs exist, and we have parked tabs — restore them
+  if (modal.classList.contains("hidden") && searchPopupPreviewTabs.size === 0 && hasMinimizedSearchTabs()) {
+    restoreMinimizedSearchTabs();
+    modal.classList.remove("hidden");
+    const input = $("#search-popup-input");
+    if (input) { input.focus(); input.select(); }
+    populateSearchTagDropdown();
+    return;
+  }
   modal.classList.remove("hidden");
   activateSearchPopupTab("search");
   const input = $("#search-popup-input");
@@ -16659,6 +16699,70 @@ function closeSearchPopupModal() {
   const results = $("#search-popup-results");
   if (results) results.innerHTML = "";
   hideSearchPopupError();
+  // Also clear parked/minimized tabs (close = discard)
+  clearMinimizedSearchTabs();
+}
+
+/* ── Minimized search tabs (parked tabs, persisted like bookmarks) ─────────── */
+
+function hasMinimizedSearchTabs() {
+  return Array.isArray(minimizedSearchTabs) && minimizedSearchTabs.length > 0;
+}
+
+function clearMinimizedSearchTabs() {
+  minimizedSearchTabs = [];
+  saveMinimizedSearchTabsToStorage();
+  const trigger = $("#search-trigger");
+  if (trigger) trigger.classList.add("trigger-hidden");
+}
+
+function minimizeSearchPopup() {
+  const modal = $("#search-popup-modal");
+  if (!modal) return;
+
+  // Collect current preview tabs
+  const parked = [];
+  for (const [oppId, tab] of searchPopupPreviewTabs) {
+    parked.push({ oppId, title: tab.title || "" });
+  }
+  // Enforce limit: keep at most MAX_SEARCH_PREVIEW_TABS entries (minus 1 for the search tab)
+  minimizedSearchTabs = parked.slice(0, MAX_SEARCH_PREVIEW_TABS);
+
+  // Clear live tabs (remove buttons/containers, clear the Map)
+  for (const oppId of Array.from(searchPopupPreviewTabs.keys())) {
+    closeSearchPreviewTab(oppId);
+  }
+
+  // Save and hide modal
+  saveMinimizedSearchTabsToStorage();
+  modal.classList.add("hidden");
+
+  // Show search trigger unless sidebar is open
+  const sidebar = $("#bookmark-sidebar");
+  const searchTrigger = $("#search-trigger");
+  if (searchTrigger) {
+    if (sidebar && !sidebar.classList.contains("sidebar-hidden")) {
+      searchTrigger.classList.add("trigger-hidden");
+    } else {
+      searchTrigger.classList.remove("trigger-hidden");
+    }
+  }
+}
+
+function restoreMinimizedSearchTabs() {
+  if (!hasMinimizedSearchTabs()) return;
+  const toRestore = [...minimizedSearchTabs];
+  minimizedSearchTabs = [];
+  saveMinimizedSearchTabsToStorage();
+
+  // Recreate each preview tab
+  for (const t of toRestore) {
+    if (Number.isFinite(t.oppId) && t.oppId > 0) {
+      openSearchPreviewTab(t.oppId, t.title);
+    }
+  }
+  // Land on search tab
+  activateSearchPopupTab("search");
 }
 
 function showSearchPopupError(msg) {
@@ -16741,6 +16845,37 @@ function bindSearchPopupModal() {
 
       activateSearchPopupTab(tabId);
     });
+  }
+
+  // Minimize button — save tabs and hide modal
+  $("#search-popup-minimize")?.addEventListener("click", minimizeSearchPopup);
+}
+
+/* ── Search trigger (right-side vertical tab, shown when search is minimized) ─ */
+
+function initSearchTrigger() {
+  const trigger = $("#search-trigger");
+  if (!trigger || trigger.dataset.bound) return;
+  trigger.dataset.bound = "1";
+
+  trigger.addEventListener("click", () => {
+    trigger.classList.add("trigger-hidden");
+    const modal = $("#search-popup-modal");
+    if (!modal) return;
+    // Restore parked tabs if any
+    if (searchPopupPreviewTabs.size === 0 && hasMinimizedSearchTabs()) {
+      restoreMinimizedSearchTabs();
+    }
+    modal.classList.remove("hidden");
+    const input = $("#search-popup-input");
+    if (input) { input.focus(); input.select(); }
+    populateSearchTagDropdown();
+  });
+
+  // Initial visibility: show if parked tabs exist and sidebar is hidden
+  const sidebar = $("#bookmark-sidebar");
+  if (hasMinimizedSearchTabs() && (!sidebar || sidebar.classList.contains("sidebar-hidden"))) {
+    trigger.classList.remove("trigger-hidden");
   }
 }
 
@@ -16898,9 +17033,9 @@ function renderSearchPopupResults(opps, tagFilterLabel = null) {
   exportBar.className = "search-popup-export-bar";
   const exportBtn = document.createElement("button");
   exportBtn.type = "button";
-  exportBtn.className = "btn btn-sm btn-ghost";
-  exportBtn.textContent = "📋 Export CSV";
+  exportBtn.className = "btn btn-sm btn-ghost btn-icon-only";
   exportBtn.title = "Export results to CSV";
+  exportBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M7 16.5a1.5 1.5 0 0 0 -3 0v3a1.5 1.5 0 0 0 3 0"/><path d="M10 20.25c0 .414 .336 .75 .75 .75h1.25a1 1 0 0 0 1 -1v-1a1 1 0 0 0 -1 -1h-1a1 1 0 0 1 -1 -1v-1a1 1 0 0 1 1 -1h1.25a.75 .75 0 0 1 .75 .75"/><path d="M16 15l2 6l2 -6"/></svg>`;
   exportBtn.addEventListener("click", () => exportSearchResultsToCsv(opps));
   exportBar.appendChild(exportBtn);
   results.appendChild(exportBar);
@@ -16943,9 +17078,9 @@ async function openSearchPreviewTab(oppId, titleHint) {
     return;
   }
 
-  // Enforce max 5 tabs (stop at 5, show error if trying to open more)
+  // Enforce max 10 tabs (stop at 10, show error if trying to open more)
   if (searchPopupPreviewTabs.size >= MAX_SEARCH_PREVIEW_TABS) {
-    showSearchPopupError("Maximum 5 preview tabs reached. Close a tab to open another.");
+    showSearchPopupError(`Maximum ${MAX_SEARCH_PREVIEW_TABS} preview tabs reached. Close a tab to open another.`);
     return;
   }
 
@@ -17183,6 +17318,9 @@ function initBookmarkSidebar() {
     trigger.addEventListener("click", () => {
       sidebar.classList.remove("sidebar-hidden");
       trigger.classList.add("trigger-hidden");
+      // Hide search trigger when sidebar opens
+      const searchTrigger = $("#search-trigger");
+      if (searchTrigger) searchTrigger.classList.add("trigger-hidden");
     });
   }
 
@@ -17271,6 +17409,15 @@ function hideBookmarkSidebar() {
     sidebar.classList.add("sidebar-hidden");
   }
   if (trigger) trigger.classList.remove("trigger-hidden");
+  // Show search trigger if parked tabs exist and sidebar is now hidden
+  const searchTrigger = $("#search-trigger");
+  if (searchTrigger) {
+    if (hasMinimizedSearchTabs()) {
+      searchTrigger.classList.remove("trigger-hidden");
+    } else {
+      searchTrigger.classList.add("trigger-hidden");
+    }
+  }
   updateBookmarkBodyClass();
   updateMobileBookmarkPreview();
 }
@@ -19781,6 +19928,7 @@ async function init() {
   bindEventLogModal();
   bindBotCustomersModal();
   initBookmarkSidebar();
+  initSearchTrigger();
   initNoteEditorPasteHandlers();
 
   $("#new-opportunity-btn")?.addEventListener("click", () => {

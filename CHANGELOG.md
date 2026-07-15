@@ -2,6 +2,26 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [2.2.3] — 2026-07-15
+
+### New features
+
+- **Search popup minimize + right-side Search trigger.** The search modal now has a minimize button that parks all open preview tabs. A vertical "Search" tab appears on the right edge above the bookmarks trigger; clicking it (or the header search button) restores the parked tabs and lands on the Search tab. Parked tabs persist in the user profile (server + localStorage fallback). Hidden when the bookmark sidebar is open.
+
+### Improvements
+
+- **Search popup preview tab limit raised from 5 to 10.**
+- **Search results export button is now an icon-only CSV button.** Replaced the "📋 Export CSV" text with the Tabler `file-type-csv` icon.
+
+### Bug fixes
+
+- **Login now works when portal URL is only in the request body.** `_handle_login` previously checked `ONLYOFFICE_PORTAL_URL` env / `X-OnlyOffice-Portal` header before reading `portalUrl` from the login form body, causing local logins to fail when the env var was not set. It now reads the body first and uses `portalUrl` as the primary source.
+- **Delete note confirm dialog now appears above preview modals.** `#confirm-modal` z-index raised to 2100 so it stacks above the opportunity preview modal (z-index 2000).
+- **Note editor paste: stripped formatting and preserved line breaks.** Added paste event handler on `.note-editor` elements that strips all styling (background-color, fonts, classes) from pasted HTML and converts plain text newlines to `<br>` tags. Prevents pre-highlighted text from appearing in notes and ensures line breaks transfer correctly.
+
+### Files changed
+- `public/index.html`, `public/app.js`, `public/styles.css`, `server.py`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`
+
 ## [2.2.2] — 2026-07-13
 
 ### Bug fixes

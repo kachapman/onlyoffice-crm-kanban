@@ -397,7 +397,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         self.send_error(405)
 
     def _handle_login(self) -> None:
-        portal = _portal_base(self)
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+
+        username = payload.get("userName") or payload.get("username")
+        password = payload.get("password")
+        portal = (payload.get("portalUrl") or "").strip().rstrip("/") or _portal_base(self)
         if not portal:
             _json_response(
                 self,
@@ -407,18 +415,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 },
             )
             return
-
-        try:
-            payload = json.loads(_read_body(self) or b"{}")
-        except json.JSONDecodeError:
-            _json_response(self, 400, {"error": "Invalid JSON body"})
-            return
-
-        username = payload.get("userName") or payload.get("username")
-        password = payload.get("password")
-        portal_override = (payload.get("portalUrl") or "").strip().rstrip("/")
-        if portal_override:
-            portal = portal_override
 
         if not username or not password:
             _json_response(self, 400, {"error": "userName and password are required"})

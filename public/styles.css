@@ -334,6 +334,12 @@ body {
   min-height: 2.25rem;
 }
 
+.btn-icon-only-lg {
+  padding: 0.65rem 0.75rem;
+  min-width: 3.25rem;
+  min-height: 3.25rem;
+}
+
 .btn-inline-icon {
   display: block;
   flex-shrink: 0;
@@ -6101,6 +6107,11 @@ body {
   overflow: hidden;
 }
 
+.modal-card-search-popup .modal-actions {
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+}
+
 .search-popup-tabs {
   display: flex;
   gap: 0.35rem;
@@ -6632,6 +6643,56 @@ body {
 }
 
 .bookmark-trigger.trigger-hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%) translateX(10px);
+}
+
+/* ================================================================================
+   Search trigger — right edge, positioned above bookmark trigger
+   ================================================================================ */
+
+.search-trigger {
+  position: fixed;
+  top: calc(33% - 120px);
+  right: 0;
+  transform: translateY(-50%);
+  z-index: 1499;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.7rem 0.4rem;
+  border: 1px solid var(--border);
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.62rem;
+  font-weight: 600;
+  line-height: 1.2;
+  transition: color 0.15s, background 0.15s, opacity 0.2s, transform 0.2s;
+  box-shadow: -2px 0 8px rgba(0,0,0,0.08);
+}
+
+.search-trigger-text {
+  writing-mode: vertical-lr;
+  text-orientation: upright;
+  text-transform: uppercase;
+  letter-spacing: -0.15em;
+  font-size: 0.55rem;
+  font-weight: 700;
+}
+
+.search-trigger:hover,
+.search-trigger:focus-visible {
+  color: var(--accent);
+  background: var(--surface-2);
+  outline: none;
+}
+
+.search-trigger.trigger-hidden {
   opacity: 0;
   pointer-events: none;
   transform: translateY(-50%) translateX(10px);
