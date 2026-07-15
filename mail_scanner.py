@@ -380,6 +380,32 @@ def _get_sending_domains() -> list[str]:
     return out
 
 
+def _extract_email_addresses(val: Any) -> str:
+    """Extract email address strings from various CRM API 'to' field formats."""
+    if not val:
+        return ""
+    parts: list[str] = []
+    if isinstance(val, str):
+        parts.append(val)
+    elif isinstance(val, list):
+        for item in val:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                for k in ("email", "Email", "address", "Address"):
+                    v = item.get(k)
+                    if v:
+                        parts.append(str(v))
+            else:
+                parts.append(str(item))
+    elif isinstance(val, dict):
+        for k in ("email", "Email", "address", "Address"):
+            v = val.get(k)
+            if v:
+                parts.append(str(v))
+    return " ".join(parts)
+
+
 def _detect_mailbox(conv: dict[str, Any] | None, msg: dict[str, Any] | None, from_email: str) -> str:
     """Return 'record' | 'action' | 'unknown'."""
     rec = _get_mailboxes()["record"]
@@ -396,32 +422,40 @@ def _detect_mailbox(conv: dict[str, Any] | None, msg: dict[str, Any] | None, fro
                 return "record"
             if act_mid and act_mid in v:
                 return "action"
-        to_val = src.get("to") or src.get("To") or ""
-        if isinstance(to_val, list):
-            to_val = " ".join(str(x) for x in to_val)
-        to_l = str(to_val).lower()
-        if rec_email and rec_email in to_l:
-            return "record"
-        if act_email and act_email in to_l:
-            return "action"
+        for tk in ("to", "To", "toAddress", "ToAddress", "recipients", "Recipients"):
+            to_raw = src.get(tk)
+            if not to_raw:
+                continue
+            to_l = _extract_email_addresses(to_raw).lower()
+            if rec_email and rec_email in to_l:
+                return "record"
+            if act_email and act_email in to_l:
+                return "action"
 
     # Heuristic from live research: contractor sending domain + to looks carrier-ish or contractor's own estimate addr
     senders = _get_sending_domains()
     frm = (from_email or "").lower()
     is_sender = any(s in frm for s in senders)
     if is_sender:
-        to_val = ""
+        to_parts: list[str] = []
         for src in (conv or {}, msg or {}):
-            tv = src.get("to") or src.get("To") or ""
-            if isinstance(tv, list):
-                tv = " ".join(str(x) for x in tv)
-            to_val += " " + str(tv)
-        to_l = to_val.lower()
+            for tk in ("to", "To", "toAddress", "ToAddress", "recipients", "Recipients"):
+                tv = src.get(tk)
+                if tv:
+                    to_parts.append(_extract_email_addresses(tv))
+        to_l = " ".join(to_parts).lower()
         if any(x in to_l for x in ["@allstate", "@statefarm", "@claims", "estimates@", "baney", "aplus"]):
             return "record"
         subj = ((conv or msg or {}).get("subject") or "").strip()
         if re.match(r"^[A-Za-z0-9\-]{5,30}$", subj):
             return "record"
+
+    # Fallback: if from address matches a known mailbox, classify by that (sent items)
+    frm_l = (from_email or "").lower()
+    if rec_email and rec_email in frm_l:
+        return "record"
+    if act_email and act_email in frm_l:
+        return "action"
 
     return "unknown"
 
@@ -694,7 +728,7 @@ def _save_processed_ids(ids: set[int]) -> None:
 # The seed logic itself is always present; only the call site is what gets toggled.
 def _seed_existing_conversations_as_processed() -> None:
     logger.info("DEPLOYMENT SEED: No processed_ids.json found. Seeding current inbox IDs with NO actions taken.")
-    status, data = _crm_api("GET", "/api/2.0/mail/conversations.json", query="folder=1&page_size=50&sort=date&sortorder=descending")
+    status, data = _crm_api("GET", "/api/2.0/mail/conversations.json", query="folder=1&page_size=100&sort=date&sortorder=descending")
     if status >= 400:
         logger.error("DEPLOYMENT SEED FAILED (status %s). Manual review of processed_ids.json recommended.", status)
         return
@@ -2655,7 +2689,7 @@ def _poll_inbox() -> None:
     # Granular toggles: do not blanket-skip. Record inbox may only do link+Email notes.
     # _process_email and helpers gate the actual mutations.
     # Always newest first and consistent order to avoid seeing "older" items unpredictably
-    status, data = _crm_api("GET", "/api/2.0/mail/conversations.json", query="folder=1&page_size=50&sort=date&sortorder=descending")
+    status, data = _crm_api("GET", "/api/2.0/mail/conversations.json", query="folder=1&page_size=100&sort=date&sortorder=descending")
     if status >= 400:
         logger.error("Failed to fetch inbox (status %s)", status)
         return
@@ -2888,7 +2922,13 @@ def retrain_classifier_head(mock_samples: int = 300, use_feedback: bool = True) 
     script = ROOT / "train_ml_head.py"
     if not script.exists():
         return {"ok": False, "error": "train_ml_head.py not found"}
-    cmd = [sys.executable, str(script)]
+    # Prefer .venv-ml python if it has sentence-transformers installed
+    venv_ml_python = ROOT / ".venv-ml" / "bin" / "python3"
+    if venv_ml_python.exists():
+        py = str(venv_ml_python)
+    else:
+        py = sys.executable
+    cmd = [py, str(script)]
     if use_feedback:
         cmd.append("--mock-and-feedback")
     else:

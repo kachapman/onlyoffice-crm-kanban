@@ -418,11 +418,6 @@
             <button type="button" id="mail-refresh" class="btn btn-secondary btn-small">Refresh</button>
             <span id="mail-today-count" class="mail-today-count"></span>
             <span class="mail-bot-badge" title="All dashboard users see the same bot-managed inboxes + tags">bot inbox</span>
-            <span class="mail-inbox-filter-group">
-              <button type="button" class="mail-inbox-filter-btn active" data-inbox-filter="all">All</button>
-              <button type="button" class="mail-inbox-filter-btn" data-inbox-filter="crm">CRM</button>
-              <button type="button" class="mail-inbox-filter-btn" data-inbox-filter="req">REQ</button>
-            </span>
         </div>
 
         <div class="mail-main-area">
@@ -453,15 +448,13 @@
 
       <!-- Scanner Admin tab -->
       <div id="mail-tab-scanner-admin" class="mail-tab-pane" style="display:none;">
-        <div class="mail-toolbar">
+        <div class="mail-toolbar" style="align-items:center;">
           <span style="font-size:0.85rem;color:var(--accent);font-weight:600;">Auto Mail Scanner</span>
-          <span style="margin-left:auto;display:flex;gap:0.35rem;flex-wrap:wrap;">
+          <span style="display:flex;gap:0.35rem;flex-wrap:wrap;margin-left:0.5rem;">
             <button type="button" id="scanner-admin-toggle" class="scanner-admin-tab-btn active" data-section="scanner-admin-status">Status</button>
             <button type="button" id="scanner-admin-log-btn" class="scanner-admin-tab-btn" data-section="scanner-admin-log">Log</button>
             <button type="button" id="scanner-admin-rules-btn" class="scanner-admin-tab-btn" data-section="scanner-admin-rules">Assignee Rules</button>
             <button type="button" id="scanner-admin-contractors-btn" class="scanner-admin-tab-btn" data-section="scanner-admin-contractors">Contractors</button>
-            <button type="button" id="scanner-admin-identity-btn" class="scanner-admin-tab-btn" data-section="scanner-admin-identity">Scanner Identity</button>
-            <button type="button" id="scanner-admin-behavior-btn" class="scanner-admin-tab-btn" data-section="scanner-admin-behavior">Behavior</button>
           </span>
         </div>
         <div class="mail-scanner-admin-body">
@@ -469,8 +462,6 @@
            <div id="scanner-admin-log" class="scanner-section" style="display:none;"></div>
            <div id="scanner-admin-rules" class="scanner-section" style="display:none;"></div>
            <div id="scanner-admin-contractors" class="scanner-section" style="display:none;"></div>
-           <div id="scanner-admin-identity" class="scanner-section" style="display:none;"></div>
-           <div id="scanner-admin-behavior" class="scanner-section" style="display:none;"></div>
         </div>
       </div>
 

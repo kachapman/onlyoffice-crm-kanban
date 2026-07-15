@@ -5987,10 +5987,77 @@ async function loadHistoryCategories() {
         byId.set(Number(id), {
           id,
           title: cat.title || cat.Title || `Category ${id}`,
+      });
+    }
+
+    // Identity save handler
+    const idSaveBtn = $("#scanner-id-save");
+    const idStat = $("#scanner-id-status");
+    if (idSaveBtn) idSaveBtn.addEventListener("click", async () => {
+      const email = ($("#scanner-id-email")?.value || "").trim();
+      const password = $("#scanner-id-pass")?.value || "";
+      if (!email) { if (idStat) { idStat.textContent = "Email is required"; idStat.style.color = "red"; } return; }
+      try {
+        const putRes = await fetch("/api/scanner/credentials", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ email, password }),
         });
+        if (putRes.ok) {
+          if (idStat) { idStat.textContent = "Credentials saved and active — no restart needed."; idStat.style.color = "var(--accent)"; }
+          const ei = $("#scanner-id-email"); if (ei) ei.value = "";
+          const pi = $("#scanner-id-pass"); if (pi) pi.value = "";
+        } else {
+          const err = await putRes.json().catch(() => ({}));
+          if (idStat) { idStat.textContent = err.error || "Save failed"; idStat.style.color = "red"; }
+        }
+      } catch {
+        if (idStat) { idStat.textContent = "Error saving"; idStat.style.color = "red"; }
       }
-      state.historyCategories = [...byId.values()];
-    } catch {
+    });
+
+    // Behavior save handler
+    const sbSaveBtn = $("#sb-save");
+    const sbStat = $("#sb-status");
+    const sbHint = $("#sb-hint");
+    if (sbSaveBtn) sbSaveBtn.addEventListener("click", async () => {
+      const payload = {
+        create_deals: !!$("#sb-deals")?.checked,
+        create_tasks: !!$("#sb-tasks")?.checked,
+        post_notes: !!$("#sb-post")?.checked,
+        notify_users: !!$("#sb-notify")?.checked,
+        action_toggles: {
+          link_email: !!$("#sb-link")?.checked,
+          post_notes: !!$("#sb-post")?.checked,
+          create_tasks: !!$("#sb-tasks")?.checked,
+          create_deals: !!$("#sb-deals")?.checked,
+          notify_users: !!$("#sb-notify")?.checked,
+          mark_read: !!$("#sb-mark")?.checked,
+          apply_bot_review_mail_tag: !!$("#sb-bot-tag")?.checked,
+        }
+      };
+      try {
+        const headers = { "Content-Type": "application/json" };
+        if (window.__SCANNER_ADMIN_TOKEN) headers["X-Scanner-Admin-Token"] = window.__SCANNER_ADMIN_TOKEN;
+        const putRes = await fetch("/api/scanner/config", {
+          method: "PUT",
+          headers,
+          credentials: "same-origin",
+          body: JSON.stringify(payload),
+        });
+        if (putRes.ok) {
+          if (sbStat) { sbStat.textContent = "Saved."; sbStat.style.color = "var(--accent)"; }
+          if (sbHint) sbHint.style.display = "";
+          try { await _renderScannerAdminStatus(); } catch {}
+        } else {
+          if (sbStat) { sbStat.textContent = "Save failed"; sbStat.style.color = "red"; }
+        }
+      } catch {
+        if (sbStat) { sbStat.textContent = "Error saving"; sbStat.style.color = "red"; }
+      }
+    });
+  } catch {
       /* no categories */
     }
   }
@@ -13691,12 +13758,11 @@ let mailState = {
   messages: [],
   pages: {},           // cache: { 1: {items, nextCursor, prevCursor}, ... }
   page: 1,
-  pageSize: 50,
+  pageSize: 100,
   search: '',
   selected: new Set(),
   availableTags: [],   // [{id, name}] cached from /api/2.0/mail/tags.json
   scannerLogMap: new Map(), // conversation_id → { source_inbox, classification, actions_taken, linked_opp_id, ... }
-  inboxFilter: 'all',  // 'all' | 'crm' | 'req'
 };
 
 // Dashboard-side read/unread overrides for the mail inbox list.
@@ -13843,11 +13909,20 @@ async function submitMailFeedback(convId, verdict, opts = {}) {
   if (opts.correctOppId) payload.correct_opp_id = opts.correctOppId;
   if (opts.correctOppTitle) payload.correct_opp_title = opts.correctOppTitle;
   if (opts.notes) payload.notes = opts.notes;
-  return await api('/api/scanner/feedback', {
+  // Use direct fetch (not api()) — scanner endpoints live on the dashboard server, not the CRM proxy
+  const res = await fetch('/api/scanner/feedback', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
     body: JSON.stringify(payload)
   });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error || data.message || `HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  return data;
 }
 
 // ── Inbox type detection + suggested actions ──
@@ -13889,33 +13964,6 @@ const _SUGGESTED_ACTION_MAP = {
   uncertain: "review needed",
 };
 
-/** Get inbox type info for a mail message from scanner log cross-reference. */
-function getMailInboxInfo(msg) {
-  const id = String(msg?.id || msg?.ID || "");
-  if (!id) return null;
-  const logEntry = mailState.scannerLogMap.get(id);
-  if (!logEntry) return null;
-  const isRecord = logEntry.source_inbox === "record";
-  const isAction = logEntry.source_inbox === "action";
-  const channel = isRecord ? "crm" : isAction ? "req" : "unknown";
-  const classification = logEntry.classification || null;
-  const classLabel = classification ? (_CLASSIFICATION_LABELS[classification] || classification) : null;
-  const actionsTaken = Array.isArray(logEntry.actions_taken) ? logEntry.actions_taken : [];
-  // Suggested action: what the user should do manually (only meaningful for record inbox where tasks are suppressed)
-  const suggested = isRecord && classification ? (_SUGGESTED_ACTION_MAP[classification] || null) : null;
-  // Format actions taken as short labels
-  const actionLabels = actionsTaken.map(a => {
-    if (a === "linked_email") return "linked";
-    if (a === "posted_note") return "note";
-    if (a === "created_task") return "task";
-    if (a === "added_tag" || a === "added_tags") return "tag";
-    if (a === "marked_read") return "read";
-    if (a === "tagged_bot_review") return "Bot Review";
-    return a.replace(/_/g, " ");
-  });
-  return { channel, classLabel, actionLabels, suggested };
-}
-
 function bindMailInboxButton() {
   const btn = $("#mail-inbox-btn");
   if (!btn || btn.dataset.bound) return;
@@ -13941,8 +13989,7 @@ async function openMailInboxModal() {
   resetQuickLinkSidebar();
   const prevTags = mailState.availableTags || [];
   const prevLogMap = mailState.scannerLogMap || new Map();
-  const prevFilter = mailState.inboxFilter || 'all';
-  mailState = { accounts: [], messages: [], pageSize: 50, search: '', selected: new Set(), availableTags: prevTags, scannerLogMap: prevLogMap, inboxFilter: prevFilter };
+  mailState = { accounts: [], messages: [], pageSize: 100, search: '', selected: new Set(), availableTags: prevTags, scannerLogMap: prevLogMap };
   $("#mail-search-input").value = "";
   // Note: the server forces all /api/2.0/mail* (GET + mutations) through bot credentials.
   // Everyone sees the same shared bot view of the two inboxes + bot mail tags.
@@ -14229,19 +14276,6 @@ function attachMailModalListeners() {
     document.addEventListener("click", () => tagsDropdown.classList.add("hidden"));
     tagsDropdown.addEventListener("click", e => e.stopPropagation());
   }
-
-  // Inbox filter buttons (All | CRM | REQ)
-  const filterBtns = modal.querySelectorAll(".mail-inbox-filter-btn");
-  filterBtns.forEach(btn => {
-    btn.addEventListener("click", () => {
-      const filter = btn.dataset.inboxFilter || "all";
-      mailState.inboxFilter = filter;
-      filterBtns.forEach(b => b.classList.toggle("active", b.dataset.inboxFilter === filter));
-      renderMailList(mailState.messages);
-    });
-  });
-  // Set initial active state
-  filterBtns.forEach(b => b.classList.toggle("active", b.dataset.inboxFilter === (mailState.inboxFilter || "all")));
 }
 
 async function loadMailAccountsForModal() {
@@ -14279,7 +14313,7 @@ async function loadMailMessagesForModal() {
   // (BOT_CRM_EMAIL / BOT_CRM_PASSWORD). This makes the CRM Mail Quick View show the exact same
   // two inboxes + bot mail tags to every dashboard user. Personal inboxes are excluded.
   const searchVal = ($("#mail-search-input")?.value || "").trim();
-  let q = `folder=1&page_size=50&sort=date&sortorder=descending`;
+  let q = `folder=1&page_size=100&sort=date&sortorder=descending`;
   if (searchVal) q += `&search=${encodeURIComponent(searchVal)}`;
 
   try {
@@ -14335,22 +14369,6 @@ function renderMailList(msgs) {
     return;
   }
 
-  // Apply inbox filter (All | CRM | REQ)
-  const filter = mailState.inboxFilter || "all";
-  let filtered = msgs;
-  if (filter === "crm" || filter === "req") {
-    filtered = msgs.filter(m => {
-      const id = String(m.id || m.ID);
-      const info = mailState.scannerLogMap.get(id);
-      if (!info) return false; // not in scanner log → hide when filtering
-      return filter === "crm" ? info.source_inbox === "record" : info.source_inbox === "action";
-    });
-    if (!filtered.length) {
-      list.innerHTML = `<div class="mail-empty">No ${filter.toUpperCase()} inbox emails found.</div>`;
-      return;
-    }
-  }
-
   // header
   const header = document.createElement("div");
   header.className = "mail-row mail-header";
@@ -14359,25 +14377,25 @@ function renderMailList(msgs) {
     <div class="mail-from"><strong>From</strong></div>
     <div class="mail-subject"><strong>Subject</strong></div>
     <div class="mail-tags"><strong>Tags</strong></div>
-    <div class="mail-date"><strong>Date</strong></div>
+    <div class="mail-actions"><strong>Actions</strong></div>
   `;
   list.appendChild(header);
 
   const cbAll = header.querySelector("#mail-cb-all");
   if (cbAll) {
-    cbAll.checked = filtered.length > 0 && filtered.every(m => mailState.selected.has(String(m.id || m.ID)));
+    cbAll.checked = msgs.length > 0 && msgs.every(m => mailState.selected.has(String(m.id || m.ID)));
     cbAll.addEventListener("change", () => {
-      filtered.forEach(m => {
+      msgs.forEach(m => {
         const id = String(m.id || m.ID);
         if (cbAll.checked) mailState.selected.add(id);
         else mailState.selected.delete(id);
       });
-      renderMailList(msgs); // re-render to sync cbs (pass original msgs, not filtered)
+      renderMailList(msgs); // re-render to sync cbs
       updateMailSelectedInfo();
     });
   }
 
-  filtered.forEach(m => {
+  msgs.forEach(m => {
     const id = String(m.id || m.ID);
     const from = (typeof m.from === "string" ? m.from : (m.from && (m.from.email || m.from.name)) || m.fromEmail || "").toString();
     const subj = (m.subject || m.Subject || "(no subject)").toString();
@@ -14395,50 +14413,58 @@ function renderMailList(msgs) {
       return `<span class="${cls}" data-tag-id="${tagId}">${escapeHtml(displayName)}<button type="button" class="mail-tag-remove" title="Remove tag">×</button></span>`;
     }).join("") : "";
 
-    // Feedback controls: show on ALL rows (not just Bot Review)
-    const inboxInfo = getMailInboxInfo(m);
+    // Feedback popup: single clipboard-x icon → decoupled popup with Correct/Wrong
     const ruleOptions = Object.entries(_CLASSIFICATION_LABELS).map(([val, label]) =>
       `<option value="${val}">${escapeHtml(label)}</option>`
     ).join("");
-    const feedbackControls = `
-      <span class="mail-feedback-controls" data-feedback-id="${escapeHtml(id)}">
-        <button type="button" class="mail-feedback-btn mail-feedback-correct" title="Bot decision is correct">✓ Correct</button>
-        <button type="button" class="mail-feedback-btn mail-feedback-wrong" title="Bot decision is wrong">✗ Wrong</button>
-      </span>
-      <div class="mail-feedback-form hidden" data-feedback-form-id="${escapeHtml(id)}">
-        <div class="mail-feedback-row">
-          <label class="mail-feedback-label">What was wrong?</label>
-          <select class="mail-feedback-wrong-type">
-            <option value="">Select issue...</option>
-            <option value="wrong_rule">Wrong classification</option>
-            <option value="wrong_deal">Wrong deal / link target</option>
-            <option value="should_notify">Should notify customer</option>
-            <option value="both_wrong">Both rule and deal wrong</option>
-            <option value="other">Other</option>
-          </select>
+    const feedbackPopupHtml = `
+      <div class="mail-feedback-popup hidden" data-feedback-popup-id="${escapeHtml(id)}">
+        <div class="mail-feedback-choices">
+          <button type="button" class="mail-feedback-choice mail-feedback-choice-correct">Correct</button>
+          <button type="button" class="mail-feedback-choice mail-feedback-choice-wrong">Wrong</button>
         </div>
-        <div class="mail-feedback-row mail-feedback-rule-row hidden">
-          <label class="mail-feedback-label">Correct rule</label>
-          <select class="mail-feedback-correct-rule">
-            <option value="">Select correct rule...</option>
-            ${ruleOptions}
-          </select>
-        </div>
-        <div class="mail-feedback-row mail-feedback-deal-row hidden">
-          <label class="mail-feedback-label">Correct deal</label>
-          <input type="text" class="mail-feedback-deal-search" placeholder="Search deal by name or claim code..." autocomplete="off" />
-          <div class="mail-feedback-deal-results"></div>
-        </div>
-        <div class="mail-feedback-row">
-          <label class="mail-feedback-label">Notes (optional)</label>
-          <input type="text" class="mail-feedback-notes" placeholder="Additional context..." />
-        </div>
-        <div class="mail-feedback-actions">
-          <button type="button" class="mail-feedback-submit">Submit</button>
-          <button type="button" class="mail-feedback-cancel">Cancel</button>
+        <div class="mail-feedback-form mail-feedback-wrong-form hidden">
+          <div class="mail-feedback-row">
+            <label class="mail-feedback-label">What was wrong?</label>
+            <select class="mail-feedback-wrong-type">
+              <option value="">Select issue...</option>
+              <option value="wrong_rule">Wrong classification</option>
+              <option value="wrong_deal">Wrong deal / link target</option>
+              <option value="should_notify">Should notify customer</option>
+              <option value="both_wrong">Both rule and deal wrong</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div class="mail-feedback-row mail-feedback-rule-row hidden">
+            <label class="mail-feedback-label">Correct rule</label>
+            <select class="mail-feedback-correct-rule">
+              <option value="">Select correct rule...</option>
+              ${ruleOptions}
+            </select>
+          </div>
+          <div class="mail-feedback-row mail-feedback-deal-row hidden">
+            <label class="mail-feedback-label">Correct deal</label>
+            <input type="text" class="mail-feedback-deal-search" placeholder="Search deal by name or claim code..." autocomplete="off" />
+            <div class="mail-feedback-deal-results"></div>
+          </div>
+          <div class="mail-feedback-row">
+            <label class="mail-feedback-label">Notes (optional)</label>
+            <input type="text" class="mail-feedback-notes" placeholder="Additional context..." />
+          </div>
+          <div class="mail-feedback-actions">
+            <button type="button" class="mail-feedback-submit">Submit</button>
+            <button type="button" class="mail-feedback-cancel">Cancel</button>
+          </div>
         </div>
       </div>
     `;
+
+    // Linked icon: chain-link when scanner linked this email to a deal
+    const logEntry = mailState.scannerLogMap.get(id);
+    const linkedOpp = logEntry?.linked_opp_id ? logEntry : null;
+    const linkedIconHtml = linkedOpp
+      ? `<span class="mail-linked-icon" title="Linked to: ${escapeHtml(linkedOpp.linked_opp_title || 'Deal ' + linkedOpp.linked_opp_id)}"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M9 15l6 -6"/><path d="M11 6l.463 -.536a5 5 0 0 1 7.071 7.072l-.534 .464"/><path d="M13 18l-.397 .534a5.068 5.068 0 0 1 -7.127 0a4.972 4.972 0 0 1 0 -7.071l.524 -.463"/></svg></span>`
+      : "";
 
     const item = document.createElement("div");
     item.className = "mail-item";
@@ -14447,34 +14473,31 @@ function renderMailList(msgs) {
     const row = document.createElement("div");
     row.className = "mail-row";
     if (mailState.selected.has(id)) row.classList.add("selected");
-    // Use tolerant server read detection (list summary may use read/isRead/seen/IsNew etc or nestings)
-    // OR our local dashboard overrides (for marks we performed here + any server-read we promoted).
-    // This makes the darker .mail-row-read rows reflect native CRM mail status when the API provides it,
-    // while our local Set ensures persistence across modal close/reopen even if a list response drops the flag.
     const isRead = getMailMessageIsRead(m) || mailDashboardReadIds.has(id);
     if (isRead) row.classList.add('mail-row-read');
-
-    // Inbox type badge (channel + actions + suggested action)
-    let inboxBadge = "";
-    if (inboxInfo) {
-      const channelCls = inboxInfo.channel === "crm" ? "crm" : inboxInfo.channel === "req" ? "req" : "unknown";
-      const actionText = inboxInfo.actionLabels.length ? inboxInfo.actionLabels.join(" + ") : "";
-      const suggestedText = inboxInfo.suggested ? ` <span class="badge-suggested">${escapeHtml(inboxInfo.suggested)}</span>` : "";
-      inboxBadge = `<div class="mail-inbox-badge ${channelCls}" title="${escapeHtml((inboxInfo.classLabel || "") + (actionText ? " — " + actionText : ""))}">
-        <span class="badge-channel">${escapeHtml(inboxInfo.channel.toUpperCase())}</span>${actionText ? `<span class="badge-actions">${escapeHtml(actionText)}</span>` : ""}${suggestedText}
-      </div>`;
-    }
 
     row.innerHTML = `
       <input type="checkbox" class="mail-cb" data-id="${escapeHtml(id)}" ${mailState.selected.has(id) ? "checked" : ""} />
       <div class="mail-from" title="${escapeHtml(from)}">${escapeHtml(from).slice(0,28)}</div>
-      ${inboxBadge}
       <div class="mail-subject" title="${escapeHtml(subj)}">${escapeHtml(subj).slice(0,80)}</div>
-      <div class="mail-tags">${tagChips}${feedbackControls}</div>
-      <div class="mail-date">${escapeHtml(dateStr)}</div>
+      <div class="mail-tags">${tagChips}</div>
+      <div class="mail-actions">
+        ${linkedIconHtml}
+        <span class="mail-feedback-trigger" data-feedback-for="${escapeHtml(id)}" title="Feedback">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M9 5h-2a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-12a2 2 0 0 0 -2 -2h-2"/><path d="M9 5a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2a2 2 0 0 1 -2 2h-2a2 2 0 0 1 -2 -2"/><path d="M10 12l4 4m0 -4l-4 4"/></svg>
+        </span>
+        <div class="mail-date">${escapeHtml(dateStr)}</div>
+      </div>
     `;
 
-    // Expand button for viewing full email (lazy load, copy from deal preview modal)
+    // Append feedback popup (decoupled, not inside the row flow)
+    const popupWrap = document.createElement("div");
+    popupWrap.className = "mail-feedback-popup-wrap";
+    popupWrap.innerHTML = feedbackPopupHtml;
+    item.appendChild(row);
+    item.appendChild(popupWrap);
+
+    // Expand button for viewing full email
     const expBtn = document.createElement("button");
     expBtn.type = "button";
     expBtn.className = "mail-expand-btn";
@@ -14493,8 +14516,7 @@ function renderMailList(msgs) {
     });
 
     row.addEventListener("click", (e) => {
-      if (e.target.tagName === "INPUT" || e.target === expBtn || e.target.classList.contains("mail-tag-remove") || e.target.classList.contains("mail-feedback-btn") || e.target.classList.contains("mail-feedback-submit") || e.target.classList.contains("mail-feedback-cancel") || e.target.closest(".mail-feedback-form")) return;
-      // toggle selection on row click
+      if (e.target.tagName === "INPUT" || e.target === expBtn || e.target.classList.contains("mail-tag-remove") || e.target.closest(".mail-feedback-trigger") || e.target.closest(".mail-feedback-popup")) return;
       if (mailState.selected.has(id)) {
         mailState.selected.delete(id);
         row.classList.remove("selected");
@@ -14530,60 +14552,72 @@ function renderMailList(msgs) {
       });
     });
 
-    // Bot feedback buttons (all rows)
-    const correctBtn = row.querySelector(".mail-feedback-correct");
-    const wrongBtn = row.querySelector(".mail-feedback-wrong");
-    const feedbackForm = row.querySelector(".mail-feedback-form");
-    if (correctBtn) {
-      correctBtn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        correctBtn.disabled = true;
-        if (wrongBtn) wrongBtn.disabled = true;
-        try {
-          await submitMailFeedback(id, "correct");
-          showToast("Feedback saved: bot decision correct");
-          correctBtn.textContent = "✓ Reviewed";
-        } catch (err) {
-          showToast("Failed to save feedback: " + (err.message || err), true);
-          correctBtn.disabled = false;
-          if (wrongBtn) wrongBtn.disabled = false;
-        }
+    // Feedback popup handlers
+    const feedbackTrigger = row.querySelector(".mail-feedback-trigger");
+    const feedbackPopup = popupWrap.querySelector(".mail-feedback-popup");
+    const wrongForm = popupWrap.querySelector(".mail-feedback-wrong-form");
+    const correctChoice = popupWrap.querySelector(".mail-feedback-choice-correct");
+    const wrongChoice = popupWrap.querySelector(".mail-feedback-choice-wrong");
+
+    // Close popup on outside click
+    const closeFeedbackPopup = (e) => {
+      if (!feedbackPopup.contains(e.target) && !feedbackTrigger.contains(e.target)) {
+        feedbackPopup.classList.add("hidden");
+        document.removeEventListener("click", closeFeedbackPopup);
+      }
+    };
+
+    feedbackTrigger?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      // Close any other open popups first
+      document.querySelectorAll(".mail-feedback-popup:not(.hidden)").forEach(p => {
+        if (p !== feedbackPopup) p.classList.add("hidden");
       });
-    }
-    if (wrongBtn) {
-      wrongBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (feedbackForm) feedbackForm.classList.remove("hidden");
-      });
-    }
-    if (feedbackForm) {
-      const wrongType = feedbackForm.querySelector(".mail-feedback-wrong-type");
-      const ruleRow = feedbackForm.querySelector(".mail-feedback-rule-row");
-      const dealRow = feedbackForm.querySelector(".mail-feedback-deal-row");
-      const ruleSelect = feedbackForm.querySelector(".mail-feedback-correct-rule");
-      const dealSearch = feedbackForm.querySelector(".mail-feedback-deal-search");
-      const dealResults = feedbackForm.querySelector(".mail-feedback-deal-results");
-      const notesInput = feedbackForm.querySelector(".mail-feedback-notes");
-      const submitBtn = feedbackForm.querySelector(".mail-feedback-submit");
-      const cancelBtn = feedbackForm.querySelector(".mail-feedback-cancel");
+      feedbackPopup.classList.toggle("hidden");
+      if (!feedbackPopup.classList.contains("hidden")) {
+        setTimeout(() => document.addEventListener("click", closeFeedbackPopup), 0);
+      }
+    });
+
+    correctChoice?.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      correctChoice.disabled = true;
+      try {
+        await submitMailFeedback(id, "correct");
+        showToast("Feedback saved: bot decision correct");
+        feedbackPopup.innerHTML = '<span class="mail-feedback-reviewed">✓ Reviewed</span>';
+      } catch (err) {
+        showToast("Failed to save feedback: " + (err.message || err), true);
+        correctChoice.disabled = false;
+      }
+    });
+
+    wrongChoice?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      wrongForm?.classList.remove("hidden");
+    });
+
+    // Wrong form handlers
+    if (wrongForm) {
+      const wrongType = wrongForm.querySelector(".mail-feedback-wrong-type");
+      const ruleRow = wrongForm.querySelector(".mail-feedback-rule-row");
+      const dealRow = wrongForm.querySelector(".mail-feedback-deal-row");
+      const ruleSelect = wrongForm.querySelector(".mail-feedback-correct-rule");
+      const dealSearch = wrongForm.querySelector(".mail-feedback-deal-search");
+      const dealResults = wrongForm.querySelector(".mail-feedback-deal-results");
+      const notesInput = wrongForm.querySelector(".mail-feedback-notes");
+      const submitBtn = wrongForm.querySelector(".mail-feedback-submit");
+      const cancelBtn = wrongForm.querySelector(".mail-feedback-cancel");
       let selectedDealId = null;
       let selectedDealTitle = null;
       let dealSearchTimer = null;
 
-      // Show/hide rule and deal rows based on wrong type
       wrongType?.addEventListener("change", () => {
         const v = wrongType.value;
-        const showRule = v === "wrong_rule" || v === "both_wrong";
-        const showDeal = v === "wrong_deal" || v === "both_wrong";
-        ruleRow?.classList.toggle("hidden", !showRule);
-        dealRow?.classList.toggle("hidden", !showDeal);
-        if (v === "should_notify" || v === "other") {
-          ruleRow?.classList.add("hidden");
-          dealRow?.classList.add("hidden");
-        }
+        ruleRow?.classList.toggle("hidden", v !== "wrong_rule" && v !== "both_wrong");
+        dealRow?.classList.toggle("hidden", v !== "wrong_deal" && v !== "both_wrong");
       });
 
-      // Deal search type-ahead
       dealSearch?.addEventListener("input", () => {
         clearTimeout(dealSearchTimer);
         selectedDealId = null;
@@ -14592,12 +14626,13 @@ function renderMailList(msgs) {
         if (q.length < 2) { dealResults.innerHTML = ""; return; }
         dealSearchTimer = setTimeout(async () => {
           try {
-            const results = await searchOpportunitiesByTitle(q, 8);
+            const results = await searchOpportunitiesByTitle(q, { limit: 8 });
             dealResults.innerHTML = results.map(r =>
               `<div class="mail-feedback-deal-option" data-deal-id="${r.id}" data-deal-title="${escapeHtml(r.title)}">${escapeHtml(r.title)}</div>`
             ).join("");
             dealResults.querySelectorAll(".mail-feedback-deal-option").forEach(opt => {
-              opt.addEventListener("click", () => {
+              opt.addEventListener("click", (e) => {
+                e.stopPropagation();
                 selectedDealId = opt.dataset.dealId;
                 selectedDealTitle = opt.dataset.dealTitle;
                 dealSearch.value = selectedDealTitle;
@@ -14629,8 +14664,7 @@ function renderMailList(msgs) {
           opts.notes = notesInput?.value || undefined;
           await submitMailFeedback(id, "wrong", opts);
           showToast("Feedback saved: bot decision wrong");
-          feedbackForm.innerHTML = '<span class="mail-feedback-reviewed">Reviewed (wrong)</span>';
-          feedbackForm.classList.remove("hidden");
+          feedbackPopup.innerHTML = '<span class="mail-feedback-reviewed">✗ Reviewed (wrong)</span>';
         } catch (err) {
           showToast("Failed to save feedback: " + (err.message || err), true);
           submitBtn.disabled = false;
@@ -14638,7 +14672,8 @@ function renderMailList(msgs) {
       });
       cancelBtn?.addEventListener("click", (e) => {
         e.stopPropagation();
-        feedbackForm.classList.add("hidden");
+        feedbackPopup.classList.add("hidden");
+        wrongForm.classList.add("hidden");
         if (wrongType) wrongType.value = "";
         ruleRow?.classList.add("hidden");
         dealRow?.classList.add("hidden");
@@ -14650,7 +14685,6 @@ function renderMailList(msgs) {
 
     const detail = document.createElement("div");
     detail.className = "mail-detail hidden";
-    item.appendChild(row);
     item.appendChild(detail);
 
     expBtn.addEventListener("click", async (e) => {
@@ -18205,7 +18239,7 @@ function bindEventLogModal() {
 // ── Scanner Admin (inside mail modal) ──
 
 function _scannerShowSection(showId) {
-  const sections = ["scanner-admin-status", "scanner-admin-log", "scanner-admin-rules", "scanner-admin-contractors", "scanner-admin-identity", "scanner-admin-behavior"];
+  const sections = ["scanner-admin-status", "scanner-admin-log", "scanner-admin-rules", "scanner-admin-contractors"];
   for (const id of sections) {
     const el = document.getElementById(id);
     if (el) el.style.display = id === showId ? "" : "none";
@@ -18220,8 +18254,12 @@ async function _renderScannerAdminStatus() {
   const el = $("#scanner-admin-status");
   if (!el) return;
   try {
-    const res = await fetch("/api/scanner/status", { credentials: "same-origin" });
+    const [res, cfgRes] = await Promise.all([
+      fetch("/api/scanner/status", { credentials: "same-origin" }),
+      fetch("/api/scanner/config", { credentials: "same-origin" }),
+    ]);
     const s = await res.json();
+    const cfg = await cfgRes.json();
     const acct = s.scanner_account_hint ? `title="Current scanner account: ${escapeHtml(s.scanner_account_hint)}"` : "";
     const strongF = (s.strong_custom_field_ids || []).join(", ") || "11,26,4 (default)";
     const dry = !(s.create_deals || s.create_tasks || s.post_notes || s.notify_users);
@@ -18230,151 +18268,183 @@ async function _renderScannerAdminStatus() {
       ? `Loaded (${mlSummary.num_samples || "?"} samples, ${mlSummary.test_accuracy !== undefined ? (mlSummary.test_accuracy * 100).toFixed(1) + "% acc" : "no eval"})`
       : "Not trained";
     el.innerHTML = `
-      <div class="scanner-status-display">
-        ${dry ? '<div style="background:#fee2e2;color:#991b1b;padding:.25rem .5rem;margin-bottom:.5rem;border-radius:4px;font-weight:600;">DRY RUN — no tasks, notes, links, tags or notifications will be created.</div>' : ''}
-        <span class="label">Status</span><span class="value">${s.enabled ? "Enabled" : "Disabled"}</span>
-        <span class="label">Poll interval</span><span class="value">${s.poll_interval_s}s</span>
-        <span class="label">Total processed</span><span class="value">${s.total_processed}</span>
-        <span class="label">Create deals</span><span class="value">${s.create_deals ? "Yes" : "No (dry-run)"}</span>
-        <span class="label">Create tasks</span><span class="value">${s.create_tasks ? "Yes" : "No (dry-run)"}</span>
-        <span class="label">Post notes</span><span class="value">${s.post_notes ? "Yes" : "No (dry-run)"}</span>
-        <span class="label">Notify users</span><span class="value">${s.notify_users ? "Yes" : "No (dry-run)"}</span>
-        <span class="label">Strong fields (ids)</span><span class="value">${escapeHtml(strongF)}</span>
-        <span class="label">Portal</span><span class="value">${escapeHtml(s.portal_url)}</span>
-        <span class="label">Scanner account</span><span class="value" ${acct}>shared (hidden)</span>
-        <span class="label">Feedback entries</span><span class="value">${s.feedback_count || 0}</span>
-        <span class="label">ML head</span><span class="value">${escapeHtml(mlStatus)}</span>
-      </div>
-      <div class="scanner-status-actions" style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap;">
-        <button type="button" id="scanner-admin-retrain-btn" class="btn btn-secondary btn-sm" style="background:#1e3a8a;border-color:#3b82f6;color:#dbeafe;" ${(s.feedback_count || 0) < 1 ? 'disabled title="Need at least 1 feedback entry to retrain with feedback"' : ''}>Retrain ML Head</button>
-        <span id="scanner-retrain-status" style="font-size:0.8rem;color:var(--muted);align-self:center;"></span>
-      </div>
-      <details class="scanner-rules-legend" style="margin-top:1rem;">
-        <summary style="cursor:pointer;font-weight:600;font-size:0.85rem;color:var(--text);padding:0.25rem 0;">Classification Rules — what each rule matches and does</summary>
-        <div style="margin-top:0.5rem;font-size:0.78rem;line-height:1.45;overflow-x:auto;">
-          <table style="width:100%;border-collapse:collapse;min-width:600px;">
-            <thead>
-              <tr style="border-bottom:2px solid var(--border);text-align:left;">
-                <th style="padding:4px 6px;font-weight:600;">Rule</th>
-                <th style="padding:4px 6px;font-weight:600;">Matches</th>
-                <th style="padding:4px 6px;font-weight:600;">Actions</th>
-                <th style="padding:4px 6px;font-weight:600;">Record inbox</th>
-                <th style="padding:4px 6px;font-weight:600;">Assignee</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr style="border-bottom:1px solid var(--border);">
-                <td style="padding:4px 6px;font-weight:600;">ack_delay</td>
-                <td style="padding:4px 6px;">Ack/delay/OOO/receipt from carrier</td>
-                <td style="padding:4px 6px;">Link + note</td>
-                <td style="padding:4px 6px;color:var(--muted);">Same</td>
-                <td style="padding:4px 6px;color:var(--muted);">—</td>
-              </tr>
-              <tr style="border-bottom:1px solid var(--border);">
-                <td style="padding:4px 6px;font-weight:600;">jobnimbus_task</td>
-                <td style="padding:4px 6px;">"New task assigned in JobNimbus"</td>
-                <td style="padding:4px 6px;">Create task</td>
-                <td style="padding:4px 6px;color:var(--muted);">Task suppressed</td>
-                <td style="padding:4px 6px;">Ken</td>
-              </tr>
-              <tr style="border-bottom:1px solid var(--border);">
-                <td style="padding:4px 6px;font-weight:600;">jobnimbus_new_job</td>
-                <td style="padding:4px 6px;">"X assigned you a new job"</td>
-                <td style="padding:4px 6px;">Create task</td>
-                <td style="padding:4px 6px;color:var(--muted);">Task suppressed</td>
-                <td style="padding:4px 6px;">Ken</td>
-              </tr>
-              <tr style="border-bottom:1px solid var(--border);">
-                <td style="padding:4px 6px;font-weight:600;">jobnimbus_mention_est</td>
-                <td style="padding:4px 6px;">JN mention + estimate language (Liberty/Highland)</td>
-                <td style="padding:4px 6px;">Create task</td>
-                <td style="padding:4px 6px;color:var(--muted);">Task suppressed</td>
-                <td style="padding:4px 6px;">Ken</td>
-              </tr>
-              <tr style="border-bottom:1px solid var(--border);">
-                <td style="padding:4px 6px;font-weight:600;">jobnimbus_mention</td>
-                <td style="padding:4px 6px;">JN mention (generic)</td>
-                <td style="padding:4px 6px;">Create task</td>
-                <td style="padding:4px 6px;color:var(--muted);">Task suppressed</td>
-                <td style="padding:4px 6px;">Rebeca</td>
-              </tr>
-              <tr style="border-bottom:1px solid var(--border);">
-                <td style="padding:4px 6px;font-weight:600;">jobnimbus_mention_ambiguous</td>
-                <td style="padding:4px 6px;">JN mention (LH, no estimate signal)</td>
-                <td style="padding:4px 6px;">Bot Review mail tag, no task</td>
-                <td style="padding:4px 6px;color:var(--muted);">Tag suppressed</td>
-                <td style="padding:4px 6px;color:var(--muted);">Bot Review</td>
-              </tr>
-              <tr style="border-bottom:1px solid var(--border);">
-                <td style="padding:4px 6px;font-weight:600;">supplement_update</td>
-                <td style="padding:4px 6px;">"Job Supplement Notification" (Acculynx)</td>
-                <td style="padding:4px 6px;">Link + note (+ task if active)</td>
-                <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
-                <td style="padding:4px 6px;">Ken + Claudiu</td>
-              </tr>
-              <tr style="border-bottom:1px solid var(--border);">
-                <td style="padding:4px 6px;font-weight:600;">check_claimant</td>
-                <td style="padding:4px 6px;">"Job Notification: &lt;code&gt;" (Acculynx)</td>
-                <td style="padding:4px 6px;">Link + note (strong) / task (new potential)</td>
-                <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
-                <td style="padding:4px 6px;">Rebeca + Claudiu</td>
-              </tr>
-              <tr style="border-bottom:1px solid var(--border);">
-                <td style="padding:4px 6px;font-weight:600;">reconciliation_task</td>
-                <td style="padding:4px 6px;">"reconcil" or carrier estimate revision</td>
-                <td style="padding:4px 6px;">Link + note + task + tag</td>
-                <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
-                <td style="padding:4px 6px;">Ken + Claudiu</td>
-              </tr>
-              <tr style="border-bottom:1px solid var(--border);">
-                <td style="padding:4px 6px;font-weight:600;">adjuster_action</td>
-                <td style="padding:4px 6px;">"adjuster wants/requested/said..."</td>
-                <td style="padding:4px 6px;">Link + note + task + tags</td>
-                <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
-                <td style="padding:4px 6px;">Ken + Claudiu</td>
-              </tr>
-              <tr style="border-bottom:1px solid var(--border);">
-                <td style="padding:4px 6px;font-weight:600;">carrier_adjuster_email</td>
-                <td style="padding:4px 6px;">Known carrier domain (Allstate, State Farm, etc.)</td>
-                <td style="padding:4px 6px;">Link + opp tag + note (strong)</td>
-                <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
-                <td style="padding:4px 6px;">Rebeca</td>
-              </tr>
-              <tr style="border-bottom:1px solid var(--border);">
-                <td style="padding:4px 6px;font-weight:600;">supplement_discussion</td>
-                <td style="padding:4px 6px;">"supplement" in body + contractor sender</td>
-                <td style="padding:4px 6px;">Link + note (+ task if request language)</td>
-                <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
-                <td style="padding:4px 6px;">Ken + Claudiu</td>
-              </tr>
-              <tr style="border-bottom:1px solid var(--border);">
-                <td style="padding:4px 6px;font-weight:600;">claim_code_only</td>
-                <td style="padding:4px 6px;">Bare claim code subject (BCC record)</td>
-                <td style="padding:4px 6px;">Link + note</td>
-                <td style="padding:4px 6px;color:var(--muted);">Link + note (cat 39, most-recent body)</td>
-                <td style="padding:4px 6px;color:var(--muted);">—</td>
-              </tr>
-              <tr style="border-bottom:1px solid var(--border);">
-                <td style="padding:4px 6px;font-weight:600;">acculynx_other</td>
-                <td style="padding:4px 6px;">Acculynx domain, other patterns</td>
-                <td style="padding:4px 6px;">Link + opp tag + note</td>
-                <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
-                <td style="padding:4px 6px;">Rebeca + Claudiu</td>
-              </tr>
-              <tr style="border-bottom:1px solid var(--border);">
-                <td style="padding:4px 6px;font-weight:600;">uncertain</td>
-                <td style="padding:4px 6px;">Fallback — no other rule matched</td>
-                <td style="padding:4px 6px;">Link + opp tag + note</td>
-                <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
-                <td style="padding:4px 6px;">Rebeca</td>
-              </tr>
-            </tbody>
-          </table>
-          <div style="margin-top:0.5rem;color:var(--muted);font-size:0.75rem;">
-            <strong>Record inbox policy:</strong> For crm@vanguardadj.online emails, tasks, notifications, deal creation, and Bot Review mail tags are all suppressed. Only linking and notes are active. This is the "record link only" policy.
+      <div class="scanner-status-columns">
+        <div class="scanner-status-left">
+          <div class="scanner-status-display">
+            ${dry ? '<div style="background:#fee2e2;color:#991b1b;padding:.25rem .5rem;margin-bottom:.5rem;border-radius:4px;font-weight:600;">DRY RUN — no tasks, notes, links, tags or notifications will be created.</div>' : ''}
+            <span class="label">Status</span><span class="value">${s.enabled ? "Enabled" : "Disabled"}</span>
+            <span class="label">Poll interval</span><span class="value">${s.poll_interval_s}s</span>
+            <span class="label">Total processed</span><span class="value">${s.total_processed}</span>
+            <span class="label">Create deals</span><span class="value">${s.create_deals ? "Yes" : "No (dry-run)"}</span>
+            <span class="label">Create tasks</span><span class="value">${s.create_tasks ? "Yes" : "No (dry-run)"}</span>
+            <span class="label">Post notes</span><span class="value">${s.post_notes ? "Yes" : "No (dry-run)"}</span>
+            <span class="label">Notify users</span><span class="value">${s.notify_users ? "Yes" : "No (dry-run)"}</span>
+            <span class="label">Strong fields (ids)</span><span class="value">${escapeHtml(strongF)}</span>
+            <span class="label">Portal</span><span class="value">${escapeHtml(s.portal_url)}</span>
+            <span class="label">Scanner account</span><span class="value" ${acct}>shared (hidden)</span>
+            <span class="label">Feedback entries</span><span class="value">${s.feedback_count || 0}</span>
+            <span class="label">ML head</span><span class="value">${escapeHtml(mlStatus)}</span>
+          </div>
+          <div class="scanner-status-actions" style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap;">
+            <button type="button" id="scanner-admin-retrain-btn" class="btn btn-secondary btn-sm" style="background:#1e3a8a;border-color:#3b82f6;color:#dbeafe;" ${(s.feedback_count || 0) < 1 ? 'disabled title="Need at least 1 feedback entry to retrain with feedback"' : ''}>Retrain ML Head</button>
+            <span id="scanner-retrain-status" style="font-size:0.8rem;color:var(--muted);align-self:center;"></span>
+          </div>
+          <details class="scanner-rules-legend" style="margin-top:1rem;">
+            <summary style="cursor:pointer;font-weight:600;font-size:0.85rem;color:var(--text);padding:0.25rem 0;">Classification Rules — what each rule matches and does</summary>
+            <div style="margin-top:0.5rem;font-size:0.78rem;line-height:1.45;overflow-x:auto;">
+              <table style="width:100%;border-collapse:collapse;min-width:500px;">
+                <thead>
+                  <tr style="border-bottom:2px solid var(--border);text-align:left;">
+                    <th style="padding:4px 6px;font-weight:600;">Rule</th>
+                    <th style="padding:4px 6px;font-weight:600;">Matches</th>
+                    <th style="padding:4px 6px;font-weight:600;">Actions</th>
+                    <th style="padding:4px 6px;font-weight:600;">Record inbox</th>
+                    <th style="padding:4px 6px;font-weight:600;">Assignee</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:4px 6px;font-weight:600;">ack_delay</td>
+                    <td style="padding:4px 6px;">Ack/delay/OOO/receipt from carrier</td>
+                    <td style="padding:4px 6px;">Link + note</td>
+                    <td style="padding:4px 6px;color:var(--muted);">Same</td>
+                    <td style="padding:4px 6px;color:var(--muted);">—</td>
+                  </tr>
+                  <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:4px 6px;font-weight:600;">jobnimbus_task</td>
+                    <td style="padding:4px 6px;">"New task assigned in JobNimbus"</td>
+                    <td style="padding:4px 6px;">Create task</td>
+                    <td style="padding:4px 6px;color:var(--muted);">Task suppressed</td>
+                    <td style="padding:4px 6px;">Ken</td>
+                  </tr>
+                  <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:4px 6px;font-weight:600;">jobnimbus_new_job</td>
+                    <td style="padding:4px 6px;">"X assigned you a new job"</td>
+                    <td style="padding:4px 6px;">Create task</td>
+                    <td style="padding:4px 6px;color:var(--muted);">Task suppressed</td>
+                    <td style="padding:4px 6px;">Ken</td>
+                  </tr>
+                  <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:4px 6px;font-weight:600;">jobnimbus_mention_est</td>
+                    <td style="padding:4px 6px;">JN mention + estimate language (Liberty/Highland)</td>
+                    <td style="padding:4px 6px;">Create task</td>
+                    <td style="padding:4px 6px;color:var(--muted);">Task suppressed</td>
+                    <td style="padding:4px 6px;">Ken</td>
+                  </tr>
+                  <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:4px 6px;font-weight:600;">jobnimbus_mention</td>
+                    <td style="padding:4px 6px;">JN mention (generic)</td>
+                    <td style="padding:4px 6px;">Create task</td>
+                    <td style="padding:4px 6px;color:var(--muted);">Task suppressed</td>
+                    <td style="padding:4px 6px;">Rebeca</td>
+                  </tr>
+                  <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:4px 6px;font-weight:600;">jobnimbus_mention_ambiguous</td>
+                    <td style="padding:4px 6px;">JN mention (LH, no estimate signal)</td>
+                    <td style="padding:4px 6px;">Bot Review mail tag, no task</td>
+                    <td style="padding:4px 6px;color:var(--muted);">Tag suppressed</td>
+                    <td style="padding:4px 6px;color:var(--muted);">Bot Review</td>
+                  </tr>
+                  <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:4px 6px;font-weight:600;">supplement_update</td>
+                    <td style="padding:4px 6px;">"Job Supplement Notification" (Acculynx)</td>
+                    <td style="padding:4px 6px;">Link + note (+ task if active)</td>
+                    <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
+                    <td style="padding:4px 6px;">Ken + Claudiu</td>
+                  </tr>
+                  <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:4px 6px;font-weight:600;">check_claimant</td>
+                    <td style="padding:4px 6px;">"Job Notification: &lt;code&gt;" (Acculynx)</td>
+                    <td style="padding:4px 6px;">Link + note (strong) / task (new potential)</td>
+                    <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
+                    <td style="padding:4px 6px;">Rebeca + Claudiu</td>
+                  </tr>
+                  <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:4px 6px;font-weight:600;">reconciliation_task</td>
+                    <td style="padding:4px 6px;">"reconcil" or carrier estimate revision</td>
+                    <td style="padding:4px 6px;">Link + note + task + tag</td>
+                    <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
+                    <td style="padding:4px 6px;">Ken + Claudiu</td>
+                  </tr>
+                  <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:4px 6px;font-weight:600;">adjuster_action</td>
+                    <td style="padding:4px 6px;">"adjuster wants/requested/said..."</td>
+                    <td style="padding:4px 6px;">Link + note + task + tags</td>
+                    <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
+                    <td style="padding:4px 6px;">Ken + Claudiu</td>
+                  </tr>
+                  <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:4px 6px;font-weight:600;">carrier_adjuster_email</td>
+                    <td style="padding:4px 6px;">Known carrier domain (Allstate, State Farm, etc.)</td>
+                    <td style="padding:4px 6px;">Link + opp tag + note (strong)</td>
+                    <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
+                    <td style="padding:4px 6px;">Rebeca</td>
+                  </tr>
+                  <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:4px 6px;font-weight:600;">supplement_discussion</td>
+                    <td style="padding:4px 6px;">"supplement" in body + contractor sender</td>
+                    <td style="padding:4px 6px;">Link + note (+ task if request language)</td>
+                    <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
+                    <td style="padding:4px 6px;">Ken + Claudiu</td>
+                  </tr>
+                  <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:4px 6px;font-weight:600;">claim_code_only</td>
+                    <td style="padding:4px 6px;">Bare claim code subject (BCC record)</td>
+                    <td style="padding:4px 6px;">Link + note</td>
+                    <td style="padding:4px 6px;color:var(--muted);">Link + note (cat 39, most-recent body)</td>
+                    <td style="padding:4px 6px;color:var(--muted);">—</td>
+                  </tr>
+                  <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:4px 6px;font-weight:600;">acculynx_other</td>
+                    <td style="padding:4px 6px;">Acculynx domain, other patterns</td>
+                    <td style="padding:4px 6px;">Link + opp tag + note</td>
+                    <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
+                    <td style="padding:4px 6px;">Rebeca + Claudiu</td>
+                  </tr>
+                  <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:4px 6px;font-weight:600;">uncertain</td>
+                    <td style="padding:4px 6px;">Fallback — no other rule matched</td>
+                    <td style="padding:4px 6px;">Link + opp tag + note</td>
+                    <td style="padding:4px 6px;color:var(--muted);">Link + note only</td>
+                    <td style="padding:4px 6px;">Rebeca</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div style="margin-top:0.5rem;color:var(--muted);font-size:0.75rem;">
+                <strong>Record inbox policy:</strong> For crm@vanguardadj.online emails, tasks, notifications, deal creation, and Bot Review mail tags are all suppressed. Only linking and notes are active. This is the "record link only" policy.
+              </div>
+            </div>
+          </details>
+        </div>
+        <div class="scanner-status-right">
+          <div class="scanner-behavior" style="border:1px solid var(--border);border-radius:6px;padding:.75rem;">
+            <p style="margin:0 0 .5rem 0;font-size:.85rem;color:var(--muted);"><strong>DRY RUN by default (all off).</strong> Changes live immediately.</p>
+            <label style="display:block;margin:.15rem 0;font-size:.82rem;"><input type="checkbox" id="sb-link" ${(cfg.action_toggles?.link_email ?? false) ? "checked" : ""}/> link_email</label>
+            <label style="display:block;margin:.15rem 0;font-size:.82rem;"><input type="checkbox" id="sb-post" ${(cfg.post_notes ?? s.post_notes ?? false) ? "checked" : ""}/> post_notes</label>
+            <label style="display:block;margin:.15rem 0;font-size:.82rem;"><input type="checkbox" id="sb-tasks" ${(cfg.create_tasks ?? s.create_tasks ?? false) ? "checked" : ""}/> create_tasks</label>
+            <label style="display:block;margin:.15rem 0;font-size:.82rem;"><input type="checkbox" id="sb-deals" ${(cfg.create_deals ?? s.create_deals ?? false) ? "checked" : ""}/> create_deals</label>
+            <label style="display:block;margin:.15rem 0;font-size:.82rem;"><input type="checkbox" id="sb-notify" ${(cfg.notify_users ?? s.notify_users ?? false) ? "checked" : ""}/> notify_users</label>
+            <label style="display:block;margin:.15rem 0;font-size:.82rem;"><input type="checkbox" id="sb-mark" ${(cfg.action_toggles?.mark_read ?? false) ? "checked" : ""}/> mark_read</label>
+            <label style="display:block;margin:.15rem 0;font-size:.82rem;"><input type="checkbox" id="sb-bot-tag" ${(cfg.action_toggles?.apply_bot_review_mail_tag ?? false) ? "checked" : ""}/> apply_bot_review_mail_tag</label>
+            <button type="button" id="sb-save" class="btn btn-secondary btn-sm" style="margin-top:.4rem;">Save</button>
+            <span id="sb-status" style="margin-left:.5rem;font-size:.8rem;color:var(--muted);"></span>
+            <div id="sb-hint" style="display:none;margin-top:.3rem;font-size:.8rem;color:var(--accent);">Saved. Changes are live immediately.</div>
+          </div>
+          <div class="scanner-identity" style="border:1px solid var(--border);border-radius:6px;padding:.75rem;margin-top:.75rem;">
+            <p style="margin:0 0 .5rem 0;font-size:.85rem;color:var(--muted);">${s.scanner_account_hint ? `Current account: ${escapeHtml(s.scanner_account_hint)} (credentials not shown)` : "Current scanner account is not displayed for security."}</p>
+            <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end;">
+              <label style="font-size:.8rem;">Email<br>
+                <input id="scanner-id-email" type="text" autocomplete="off" placeholder="scanner@yourdomain.com" style="min-width:200px;" />
+              </label>
+              <label style="font-size:.8rem;">Password<br>
+                <input id="scanner-id-pass" type="password" autocomplete="new-password" placeholder="••••••••" style="min-width:160px;" />
+              </label>
+              <button type="button" id="scanner-id-save" class="btn btn-secondary btn-sm">Save</button>
+            </div>
+            <div id="scanner-id-status" style="margin-top:.4rem;font-size:.8rem;color:var(--muted);"></div>
           </div>
         </div>
-      </details>
+      </div>
     `;
     const retrainBtn = $("#scanner-admin-retrain-btn");
     const retrainStatus = $("#scanner-retrain-status");
@@ -18428,6 +18498,14 @@ async function _renderScannerAdminLog() {
         <option value="500">500</option>
       </select></label>
       <button type="button" id="scanner-admin-reprocess-btn" class="btn btn-secondary btn-sm" style="margin-left:1rem;background:#92400e;border-color:#d97706;color:#fef3c7;">Reprocess Selected</button>
+      <button type="button" id="scanner-admin-log-feedback-btn" class="btn btn-secondary btn-sm" style="margin-left:.5rem;" title="Submit feedback for selected log entries">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M9 5h-2a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-12a2 2 0 0 0 -2 -2h-2"/><path d="M9 5a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2a2 2 0 0 1 -2 2h-2a2 2 0 0 1 -2 -2"/><path d="M10 12l4 4m0 -4l-4 4"/></svg>
+        Feedback
+      </button>
+      <button type="button" id="scanner-admin-log-csv-btn" class="btn btn-secondary btn-sm" style="margin-left:.5rem;" title="Export selected or all log entries as CSV">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z"/><path d="M9 9h1"/><path d="M9 13h6"/><path d="M9 17h3"/></svg>
+        CSV
+      </button>
       <span id="scanner-reprocess-status" style="margin-left:.5rem;font-size:.8rem;color:var(--muted);"></span>
     </div>
     <div id="scanner-admin-log-list" class="scanner-log-list"></div>
@@ -18439,9 +18517,27 @@ async function _renderScannerAdminLog() {
   list.innerHTML = '<div class="scanner-empty">Loading…</div>';
 
   try {
-    const res = await fetch(`/api/scanner/log?limit=${encodeURIComponent(limit)}`, { credentials: "same-origin" });
+    const [res, fbRes] = await Promise.all([
+      fetch(`/api/scanner/log?limit=${encodeURIComponent(limit)}`, { credentials: "same-origin" }),
+      fetch("/api/scanner/feedback?limit=500", { credentials: "same-origin" }).catch(() => null),
+    ]);
     const data = await res.json();
     const entries = data.entries || [];
+    const fbData = fbRes && fbRes.ok ? await fbRes.json().catch(() => ({})) : {};
+    const fbEntries = fbData.entries || [];
+    const fbByConv = new Map();
+    for (const fb of fbEntries) {
+      const cid = String(fb.conversation_id || "");
+      if (!cid) continue;
+      const existing = fbByConv.get(cid);
+      // Keep the entry with the most data (prefer ones with correct_opp_id or correct_classification)
+      if (!existing) { fbByConv.set(cid, fb); continue; }
+      const existingScore = (existing.correct_opp_id ? 1 : 0) + (existing.correct_classification ? 1 : 0) + (existing.reviewer_notes ? 1 : 0);
+      const newScore = (fb.correct_opp_id ? 1 : 0) + (fb.correct_classification ? 1 : 0) + (fb.reviewer_notes ? 1 : 0);
+      if (newScore > existingScore || (newScore === existingScore && (fb.reviewed_at || "") > (existing.reviewed_at || ""))) {
+        fbByConv.set(cid, fb);
+      }
+    }
     if (!entries.length) {
       list.innerHTML = '<div class="scanner-empty">No scanner activity logged yet.</div>';
       return;
@@ -18598,6 +18694,28 @@ async function _renderScannerAdminLog() {
           contentWrap.appendChild(skipDiv);
         }
 
+        // Show feedback correction if present
+        const cid = String(e.conversation_id || "");
+        const fb = cid ? fbByConv.get(cid) : null;
+        if (fb) {
+          const fbDiv = document.createElement("div");
+          fbDiv.className = "log-actions";
+          fbDiv.style.fontSize = "0.78rem";
+          if (fb.user_verdict === "correct") {
+            fbDiv.style.color = "#16a34a";
+            fbDiv.textContent = "[✓ verified correct]";
+          } else if (fb.user_verdict === "wrong") {
+            fbDiv.style.color = "#dc2626";
+            let correctionText = "[✗ corrected";
+            if (fb.correct_classification) correctionText += ` → rule:${fb.correct_classification}`;
+            if (fb.correct_opp_id) correctionText += ` → deal:${fb.correct_opp_title || fb.correct_opp_id}`;
+            if (fb.reviewer_notes) correctionText += ` — ${fb.reviewer_notes.slice(0, 60)}`;
+            correctionText += "]";
+            fbDiv.textContent = correctionText;
+          }
+          contentWrap.appendChild(fbDiv);
+        }
+
         // failures
         if (e.errors && Array.isArray(e.errors) && e.errors.length) {
           const errDiv = document.createElement("div");
@@ -18677,6 +18795,179 @@ async function _renderScannerAdminLog() {
         }
       });
     }
+
+    // Scanner admin log feedback button
+    const logFeedbackBtn = $("#scanner-admin-log-feedback-btn");
+    if (logFeedbackBtn) {
+      logFeedbackBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const cbs = list.querySelectorAll(".scanner-log-cb:checked");
+        const ids = [...cbs].map(cb => parseInt(cb.dataset.convId)).filter(id => !isNaN(id));
+        if (!ids.length) { showToast("No log entries selected", true); return; }
+        if (ids.length > 1) { showToast("Feedback works on one entry at a time — select a single log entry", true); return; }
+        const convId = ids[0];
+
+        // Close any existing popups
+        document.querySelectorAll(".scanner-log-feedback-popup").forEach(p => p.remove());
+
+        const ruleOptions = Object.entries(_CLASSIFICATION_LABELS).map(([val, label]) =>
+          `<option value="${escapeHtml(val)}">${escapeHtml(label)}</option>`
+        ).join("");
+
+        // Build dropdown anchored below the button
+        const btnRect = logFeedbackBtn.getBoundingClientRect();
+        const popup = document.createElement("div");
+        popup.className = "scanner-log-feedback-popup mail-feedback-popup";
+        popup.style.cssText = `position:fixed;top:${btnRect.bottom + 4}px;left:${btnRect.left}px;z-index:10000;min-width:260px;`;
+        popup.innerHTML = `
+          <div class="mail-feedback-choices">
+            <button type="button" class="mail-feedback-choice mail-feedback-choice-correct">✓ Correct — mark as reviewed</button>
+            <button type="button" class="mail-feedback-choice mail-feedback-choice-wrong">✗ Wrong — needs correction</button>
+          </div>
+          <div class="mail-feedback-wrong-form hidden" style="padding:8px 12px;border-top:1px solid var(--border);">
+            <label style="display:block;font-size:.75rem;color:var(--muted);margin-top:6px;">What was wrong?</label>
+            <select class="log-fb-wrong-type" style="width:100%;background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:.75rem;margin-top:2px;">
+              <option value="">Select issue...</option>
+              <option value="wrong_rule">Wrong classification</option>
+              <option value="wrong_deal">Wrong deal / link target</option>
+              <option value="should_notify">Should notify customer</option>
+              <option value="both_wrong">Both rule and deal wrong</option>
+              <option value="other">Other</option>
+            </select>
+            <div class="log-fb-rule-row" style="display:none;">
+              <label style="display:block;font-size:.75rem;color:var(--muted);margin-top:6px;">Correct rule</label>
+              <select class="log-fb-correct-rule" style="width:100%;background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:.75rem;margin-top:2px;">
+                <option value="">Select correct rule...</option>
+                ${ruleOptions}
+              </select>
+            </div>
+            <div class="log-fb-deal-row" style="display:none;">
+              <label style="display:block;font-size:.75rem;color:var(--muted);margin-top:6px;">Correct deal</label>
+              <input type="text" class="log-fb-deal-search" placeholder="Search deal name..." autocomplete="off" style="width:100%;background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:.75rem;margin-top:2px;box-sizing:border-box;" />
+              <div class="log-fb-deal-results" style="max-height:80px;overflow-y:auto;"></div>
+            </div>
+            <label style="display:block;font-size:.75rem;color:var(--muted);margin-top:6px;">Notes (optional)</label>
+            <input type="text" class="log-fb-notes" placeholder="Additional context..." style="width:100%;background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:.75rem;margin-top:2px;box-sizing:border-box;" />
+            <div style="display:flex;gap:6px;margin-top:8px;">
+              <button type="button" class="log-fb-submit" style="background:var(--surface-2);border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.7rem;padding:3px 8px;cursor:pointer;">Submit</button>
+              <button type="button" class="log-fb-cancel" style="background:var(--surface-2);border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.7rem;padding:3px 8px;cursor:pointer;">Cancel</button>
+            </div>
+          </div>
+        `;
+        document.body.appendChild(popup);
+
+        const close = () => { popup.remove(); document.removeEventListener("click", outsideCloser); };
+        const outsideCloser = (ev) => { if (!popup.contains(ev.target) && ev.target !== logFeedbackBtn) close(); };
+
+        // Wrong type toggles rule/deal rows
+        const wrongType = popup.querySelector(".log-fb-wrong-type");
+        const ruleRow = popup.querySelector(".log-fb-rule-row");
+        const dealRow = popup.querySelector(".log-fb-deal-row");
+        wrongType?.addEventListener("change", () => {
+          const v = wrongType.value;
+          ruleRow.style.display = (v === "wrong_rule" || v === "both_wrong") ? "" : "none";
+          dealRow.style.display = (v === "wrong_deal" || v === "both_wrong") ? "" : "none";
+        });
+
+        // Deal search
+        const dealSearch = popup.querySelector(".log-fb-deal-search");
+        const dealResults = popup.querySelector(".log-fb-deal-results");
+        let selectedDeal = null;
+        let searchTimer = null;
+        dealSearch?.addEventListener("input", () => {
+          clearTimeout(searchTimer);
+          const q = dealSearch.value.trim();
+          if (q.length < 2) { dealResults.innerHTML = ""; return; }
+          searchTimer = setTimeout(async () => {
+            try {
+              const results = await searchOpportunitiesByTitle(q, { limit: 8 });
+              dealResults.innerHTML = results.map(r =>
+                `<div class="feedback-deal-option" data-id="${escapeHtml(String(r.id || r.ID))}" data-title="${escapeHtml(r.title || r.Title || "")}" style="font-size:.7rem;padding:3px 6px;cursor:pointer;border-radius:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(r.title || r.Title || "Untitled")}</div>`
+              ).join("");
+              dealResults.querySelectorAll(".feedback-deal-option").forEach(opt => {
+                opt.addEventListener("click", (e) => {
+                  e.stopPropagation();
+                  selectedDeal = { id: opt.dataset.id, title: opt.dataset.title };
+                  dealSearch.value = opt.dataset.title;
+                  dealResults.innerHTML = "";
+                });
+              });
+            } catch { dealResults.innerHTML = ""; }
+          }, 300);
+        });
+
+        // Correct → submit
+        popup.querySelector(".mail-feedback-choice-correct")?.addEventListener("click", async () => {
+          close();
+          try {
+            await submitMailFeedback(convId, "correct");
+            showToast("Marked as correct");
+          } catch (err) { showToast("Feedback failed: " + err.message, true); }
+        });
+
+        // Wrong → show form
+        popup.querySelector(".mail-feedback-choice-wrong")?.addEventListener("click", () => {
+          popup.querySelector(".mail-feedback-choices").style.display = "none";
+          popup.querySelector(".mail-feedback-wrong-form").classList.remove("hidden");
+        });
+
+        // Submit wrong form
+        popup.querySelector(".log-fb-submit")?.addEventListener("click", async () => {
+          const correction = wrongType.value || "other";
+          const opts = { correction };
+          const ruleVal = popup.querySelector(".log-fb-correct-rule")?.value;
+          if (ruleVal) opts.correctClassification = ruleVal;
+          if (selectedDeal) { opts.correctOppId = selectedDeal.id; opts.correctOppTitle = selectedDeal.title; }
+          const notes = popup.querySelector(".log-fb-notes")?.value?.trim();
+          if (notes) opts.notes = notes;
+          close();
+          try {
+            await submitMailFeedback(convId, "wrong", opts);
+            showToast("Feedback submitted");
+          } catch (err) { showToast("Feedback failed: " + err.message, true); }
+        });
+
+        // Cancel
+        popup.querySelector(".log-fb-cancel")?.addEventListener("click", close);
+
+        setTimeout(() => document.addEventListener("click", outsideCloser), 10);
+      });
+    }
+
+    // Export CSV button
+    const csvBtn = $("#scanner-admin-log-csv-btn");
+    if (csvBtn) {
+      csvBtn.addEventListener("click", () => {
+        const cbs = list.querySelectorAll(".scanner-log-cb:checked");
+        let rows;
+        if (cbs.length) {
+          const selectedIds = new Set([...cbs].map(cb => cb.dataset.convId));
+          rows = entries.filter(e => selectedIds.has(String(e.conversation_id || "")));
+        } else {
+          rows = entries;
+        }
+        if (!rows.length) { showToast("No entries to export", true); return; }
+        const headers = ["timestamp", "conversation_id", "subject", "from", "source_inbox", "classification", "match_strength", "linked_opp_id", "linked_opp_title", "actions_taken", "no_deal", "no_deal_reason", "errors", "ml_actionable_score", "ml_category", "policy"];
+        const csvEscape = (v) => {
+          if (v == null) return "";
+          const s = Array.isArray(v) ? v.join("; ") : String(v);
+          if (s.includes(",") || s.includes('"') || s.includes("\n")) return '"' + s.replace(/"/g, '""') + '"';
+          return s;
+        };
+        const lines = [headers.join(",")];
+        for (const e of rows) {
+          lines.push(headers.map(h => csvEscape(e[h])).join(","));
+        }
+        const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `scanner-log-${new Date().toISOString().slice(0,10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast(`Exported ${rows.length} entries as CSV`);
+      });
+    }
   } catch {
     list.innerHTML = '<div class="scanner-empty">Failed to load log.</div>';
   }
@@ -18738,29 +19029,48 @@ async function _renderScannerAdminRules() {
       uncertain: "Uncertain / Ambiguous (Bot Review mail tag, leave unread)",
     };
 
-    let html = '<div class="scanner-rules-list">';
-    for (const [ruleKey, label] of Object.entries(ruleLabels)) {
-      const selected = rules[ruleKey] || [];
-      html += `<div class="scanner-rule-row">
-        <span class="scanner-rule-label" title="${escapeHtml(ruleKey)}">${escapeHtml(label)}</span>
+    const ruleEntries = Object.entries(ruleLabels);
+    const midpoint = Math.ceil(ruleEntries.length / 2);
+
+    function buildRuleRow(ruleKey, selected) {
+      let row = `<div class="scanner-rule-row">
+        <span class="scanner-rule-label" title="${escapeHtml(ruleKey)}">${escapeHtml(ruleLabels[ruleKey])}</span>
         <div class="scanner-rule-controls">
           <select class="scanner-rule-select" data-rule="${escapeHtml(ruleKey)}" multiple size="4">`;
       for (const su of selectableUsers) {
         const sel = selected.includes(su.key) ? "selected" : "";
-        html += `<option value="${escapeHtml(su.key)}" ${sel}>${escapeHtml(su.label)}</option>`;
+        row += `<option value="${escapeHtml(su.key)}" ${sel}>${escapeHtml(su.label)}</option>`;
       }
-      html += `</select>
+      row += `</select>
           <div class="scanner-rule-selected" data-rule-chips="${escapeHtml(ruleKey)}">`;
       for (const su of selectableUsers) {
         if (selected.includes(su.key)) {
-          html += `<span class="scanner-rule-chip">${escapeHtml(su.label)}</span>`;
+          row += `<span class="scanner-rule-chip">${escapeHtml(su.label)}</span>`;
         }
       }
-      html += `</div></div></div>`;
+      row += `</div></div></div>`;
+      return row;
     }
-    html += `</div>
+
+    let html = '<div class="scanner-rules-grid">';
+    // Left column
+    html += '<div class="scanner-rules-col">';
+    for (let i = 0; i < midpoint; i++) {
+      const [ruleKey] = ruleEntries[i];
+      html += buildRuleRow(ruleKey, rules[ruleKey] || []);
+    }
+    html += '</div>';
+    // Right column
+    html += '<div class="scanner-rules-col">';
+    for (let i = midpoint; i < ruleEntries.length; i++) {
+      const [ruleKey] = ruleEntries[i];
+      html += buildRuleRow(ruleKey, rules[ruleKey] || []);
+    }
+    html += '</div></div>';
+    html += `<div style="margin-top:0.5rem;">
       <button type="button" id="scanner-rules-save-btn" class="btn btn-secondary btn-sm scanner-rules-save">Save Assignee Rules</button>
-      <span id="scanner-rules-save-status" style="margin-left:0.5rem;font-size:0.8rem;color:var(--muted);"></span>`;
+      <span id="scanner-rules-save-status" style="margin-left:0.5rem;font-size:0.8rem;color:var(--muted);"></span>
+    </div>`;
     el.innerHTML = html;
 
     // Sync chips with select changes
@@ -18839,146 +19149,6 @@ async function _renderScannerAdminContractors() {
   }
 }
 
-async function _renderScannerAdminIdentity() {
-  const el = $("#scanner-admin-identity");
-  if (!el) return;
-  el.innerHTML = '<div class="scanner-empty">Loading…</div>';
-  try {
-    const [cfgRes, statusRes] = await Promise.all([
-      fetch("/api/scanner/contractors", { credentials: "same-origin" }),
-      fetch("/api/scanner/status", { credentials: "same-origin" }),
-    ]);
-    const cfg = await cfgRes.json();
-    const status = await statusRes.json();
-    const hint = status.scanner_account_hint ? `Current account: ${escapeHtml(status.scanner_account_hint)} (credentials not shown)` : "Current scanner account is not displayed for security.";
-    el.innerHTML = `
-      <div class="scanner-identity">
-        <p style="margin:0 0 .5rem 0;font-size:.85rem;color:var(--muted);">${hint}</p>
-        <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end;">
-          <label style="font-size:.8rem;">Email<br>
-            <input id="scanner-id-email" type="text" autocomplete="off" placeholder="scanner@yourdomain.com" style="min-width:260px;" />
-          </label>
-          <label style="font-size:.8rem;">Password<br>
-            <input id="scanner-id-pass" type="password" autocomplete="new-password" placeholder="••••••••" style="min-width:220px;" />
-          </label>
-          <button type="button" id="scanner-id-save" class="btn btn-secondary btn-sm">Save</button>
-        </div>
-        <div id="scanner-id-status" style="margin-top:.4rem;font-size:.8rem;color:var(--muted);"></div>
-      </div>
-    `;
-    const saveBtn = $("#scanner-id-save");
-    const stat = $("#scanner-id-status");
-    if (saveBtn) saveBtn.addEventListener("click", async () => {
-      const email = ($("#scanner-id-email")?.value || "").trim();
-      const password = $("#scanner-id-pass")?.value || "";
-      if (!email) { if (stat) { stat.textContent = "Email is required"; stat.style.color = "red"; } return; }
-      try {
-        const putRes = await fetch("/api/scanner/credentials", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          credentials: "same-origin",
-          body: JSON.stringify({ email, password }),
-        });
-        if (putRes.ok) {
-          if (stat) { stat.textContent = "Credentials saved and active — no restart needed."; stat.style.color = "var(--accent)"; }
-          const ei = $("#scanner-id-email"); if (ei) ei.value = "";
-          const pi = $("#scanner-id-pass"); if (pi) pi.value = "";
-        } else {
-          const err = await putRes.json().catch(() => ({}));
-          if (stat) { stat.textContent = err.error || "Save failed"; stat.style.color = "red"; }
-        }
-      } catch {
-        if (stat) { stat.textContent = "Error saving"; stat.style.color = "red"; }
-      }
-    });
-  } catch {
-    el.innerHTML = '<div class="scanner-empty">Failed to load scanner identity.</div>';
-  }
-}
-
-async function _renderScannerAdminBehavior() {
-  const el = $("#scanner-admin-behavior");
-  if (!el) return;
-  el.innerHTML = '<div class="scanner-empty">Loading…</div>';
-  try {
-    const [statusRes, cfgRes] = await Promise.all([
-      fetch("/api/scanner/status", { credentials: "same-origin" }),
-      fetch("/api/scanner/config", { credentials: "same-origin" }),
-    ]);
-    const status = await statusRes.json();
-    const cfg = await cfgRes.json();
-    const cd = !!(cfg.create_deals ?? status.create_deals);
-    const ct = !!(cfg.create_tasks ?? status.create_tasks);
-    const pn = !!(cfg.post_notes ?? status.post_notes);
-    const nu = !!(cfg.notify_users ?? status.notify_users);
-    const at = (status.action_toggles || cfg.action_toggles || {});
-    const le = !!(at.link_email ?? false);
-    const mr = !!(at.mark_read ?? false);
-    const bt = !!(at.apply_bot_review_mail_tag ?? false);
-    const pnv = !!(at.post_notes ?? pn); // alias
-    const ctv = !!(at.create_tasks ?? ct);
-    const cdv = !!(at.create_deals ?? cd);
-    const nuv = !!(at.notify_users ?? nu);
-    el.innerHTML = `
-      <div class="scanner-behavior">
-        <p style="margin:0 0 .5rem 0;font-size:.85rem;color:var(--muted);"><strong>DRY RUN by default (all off).</strong> Changes live immediately. Every action has its own toggle.</p>
-        <label style="display:block;margin:.15rem 0;"><input type="checkbox" id="sb-link" ${le ? "checked" : ""}/> link_email</label>
-        <label style="display:block;margin:.15rem 0;"><input type="checkbox" id="sb-post" ${pnv ? "checked" : ""}/> post_notes</label>
-        <label style="display:block;margin:.15rem 0;"><input type="checkbox" id="sb-tasks" ${ctv ? "checked" : ""}/> create_tasks</label>
-        <label style="display:block;margin:.15rem 0;"><input type="checkbox" id="sb-deals" ${cdv ? "checked" : ""}/> create_deals</label>
-        <label style="display:block;margin:.15rem 0;"><input type="checkbox" id="sb-notify" ${nuv ? "checked" : ""}/> notify_users</label>
-        <label style="display:block;margin:.15rem 0;"><input type="checkbox" id="sb-mark" ${mr ? "checked" : ""}/> mark_read</label>
-        <label style="display:block;margin:.15rem 0;"><input type="checkbox" id="sb-bot-tag" ${bt ? "checked" : ""}/> apply_bot_review_mail_tag</label>
-        <button type="button" id="sb-save" class="btn btn-secondary btn-sm" style="margin-top:.4rem;">Save</button>
-        <span id="sb-status" style="margin-left:.5rem;font-size:.8rem;color:var(--muted);"></span>
-        <div id="sb-hint" style="display:none;margin-top:.3rem;font-size:.8rem;color:var(--accent);">Saved. Changes are live immediately.</div>
-      </div>
-    `;
-    const saveBtn = $("#sb-save");
-    const stat = $("#sb-status");
-    const hint = $("#sb-hint");
-    if (saveBtn) saveBtn.addEventListener("click", async () => {
-      const payload = {
-        create_deals: !!$("#sb-deals")?.checked,
-        create_tasks: !!$("#sb-tasks")?.checked,
-        post_notes: !!$("#sb-post")?.checked,
-        notify_users: !!$("#sb-notify")?.checked,
-        action_toggles: {
-          link_email: !!$("#sb-link")?.checked,
-          post_notes: !!$("#sb-post")?.checked,
-          create_tasks: !!$("#sb-tasks")?.checked,
-          create_deals: !!$("#sb-deals")?.checked,
-          notify_users: !!$("#sb-notify")?.checked,
-          mark_read: !!$("#sb-mark")?.checked,
-          apply_bot_review_mail_tag: !!$("#sb-bot-tag")?.checked,
-        }
-      };
-      try {
-        const headers = { "Content-Type": "application/json" };
-        if (window.__SCANNER_ADMIN_TOKEN) headers["X-Scanner-Admin-Token"] = window.__SCANNER_ADMIN_TOKEN;
-        const putRes = await fetch("/api/scanner/config", {
-          method: "PUT",
-          headers,
-          credentials: "same-origin",
-          body: JSON.stringify(payload),
-        });
-        if (putRes.ok) {
-          if (stat) { stat.textContent = "Saved."; stat.style.color = "var(--accent)"; }
-          if (hint) hint.style.display = "";
-          // Refresh status so other panes see it
-          try { await _renderScannerAdminStatus(); } catch {}
-        } else {
-          if (stat) { stat.textContent = "Save failed"; stat.style.color = "red"; }
-        }
-      } catch {
-        if (stat) { stat.textContent = "Error saving"; stat.style.color = "red"; }
-      }
-    });
-  } catch {
-    el.innerHTML = '<div class="scanner-empty">Failed to load scanner behavior.</div>';
-  }
-}
-
 function _switchMailInboxTab(name) {
   const modal = $("#mail-inbox-modal");
   if (!modal) return;
@@ -19054,8 +19224,6 @@ function _appendMailInboxTabListeners() {
   bindClick("scanner-admin-log-btn", "scanner-admin-log");
   bindClick("scanner-admin-rules-btn", "scanner-admin-rules");
   bindClick("scanner-admin-contractors-btn", "scanner-admin-contractors");
-  bindClick("scanner-admin-identity-btn", "scanner-admin-identity");
-  bindClick("scanner-admin-behavior-btn", "scanner-admin-behavior");
 
   // Deferred render on section show
   const observer = new MutationObserver(() => {
@@ -19073,16 +19241,6 @@ function _appendMailInboxTabListeners() {
     if (contractorsEl && contractorsEl.style.display !== "none" && !contractorsEl.dataset.rendered) {
       contractorsEl.dataset.rendered = "1";
       _renderScannerAdminContractors();
-    }
-    const identityEl = $("#scanner-admin-identity");
-    if (identityEl && identityEl.style.display !== "none" && !identityEl.dataset.rendered) {
-      identityEl.dataset.rendered = "1";
-      _renderScannerAdminIdentity();
-    }
-    const behaviorEl = $("#scanner-admin-behavior");
-    if (behaviorEl && behaviorEl.style.display !== "none" && !behaviorEl.dataset.rendered) {
-      behaviorEl.dataset.rendered = "1";
-      _renderScannerAdminBehavior();
     }
   });
   observer.observe(modal, { subtree: true, attributes: true, attributeFilter: ["style"] });

@@ -4,6 +4,80 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 ## [Unreleased]
 
+### Mail UI: Feedback fixes, log improvements, retrain fix (2026-07-14, evening)
+
+**Feedback popup fixes:**
+- **Fixed feedback popup closing on deal selection.** Both inbox and log feedback popups closed immediately when a deal was selected from the type-ahead search results. Root cause: `dealResults.innerHTML = ""` removed the clicked element from the DOM, so the document-level outside-click handler's `feedbackPopup.contains(e.target)` returned `false` (detached node). Fix: added `e.stopPropagation()` to deal option click handlers in both popups.
+- **Fixed feedback cross-referencing in log.** The `fbByConv` map that matches feedback entries to log entries only kept the first entry per `conversation_id`. When a user clicked "Wrong" without selecting a deal first, then submitted again with the deal, the empty first entry was kept and the correction was lost. Fix: map now keeps the entry with the most data (prefers entries with `correct_opp_id`, `correct_classification`, or `reviewer_notes`).
+
+**Scanner mailbox detection fix (CRM droplet):**
+- **Fixed `_detect_mailbox()` not detecting requests@ action inbox.** The function checked `to` field as a plain string, but the CRM API returns `to` as a list of objects like `[{email: "...", name: "..."}]`. `str(x)` on a dict produces `{'email': '...'}` which doesn't contain the mailbox address as a substring. Fix: added `_extract_email_addresses()` helper that extracts email strings from strings, lists of strings, lists of objects (with `email`/`address` keys), and dicts. Also added more `to` field key variants (`toAddress`, `ToAddress`, `recipients`, `Recipients`) and a `from_email` fallback (if sender matches a known mailbox address, classify by that).
+- **Updated `config.example.env`** with correct CRM droplet IP (`68.183.130.39`) instead of the old dashboard IP.
+
+**Retrain ML Head fix:**
+- **Fixed retrain using system Python without ML deps.** `retrain_classifier_head()` used `sys.executable` which is `/usr/bin/python3` (system) when the scanner runs locally, but ML dependencies are in `.venv-ml`. Fix: now prefers `.venv-ml/bin/python3` if it exists. Also installed `sentence-transformers` in `.venv-ml`.
+
+**Scanner Admin Log tab:**
+- **Feedback corrections visible in log entries.** Log entries now show feedback status in colored brackets after the actions line: `[✓ verified correct]` (green) or `[✗ corrected → rule:... → deal:... — notes]` (red). Fetches feedback entries in parallel with log data.
+- **Export CSV button.** New "CSV" button next to "Feedback" in the log toolbar (Tabler `file-type-csv` icon). Exports selected entries (or all if none selected) as CSV with columns: timestamp, conversation_id, subject, from, source_inbox, classification, match_strength, linked_opp_id, linked_opp_title, actions_taken, no_deal, no_deal_reason, errors, ml_actionable_score, ml_category, policy.
+
+**Scanner Admin toolbar alignment:**
+- Tab buttons (Status/Log/Assignee Rules/Contractors) moved from right-aligned to left-aligned next to the "Auto Mail Scanner" title. Removed `margin-left:auto`, added `margin-left:0.5rem`.
+
+**Deployment note:** `mail_scanner.py` changes (`_detect_mailbox`, `retrain_classifier_head`) must be pushed to the CRM droplet and the scanner container rebuilt. Frontend changes (`app.js`, `index.html`, `styles.css`) deploy with the dashboard server.
+
+---
+
+### Mail UI: Bug fixes + major layout rework (2026-07-14)
+
+**Critical bug fixes:**
+- **Fixed "filtered is not defined" crash in inbox.** After the CRM/REQ filter removal in the prior session, three references to the deleted `filtered` variable in `renderMailList()` were left behind, causing a `ReferenceError` that prevented any emails from loading. All three replaced with the `msgs` function parameter.
+- **Fixed inbox feedback popup not appearing.** The `.mail-feedback-popup-wrap` container had no CSS positioning, so the absolutely-positioned popup escaped its parent row and rendered off-screen invisible. Added `position: relative` to `.mail-feedback-popup-wrap`.
+- **Fixed log feedback "Wrong" crash.** Clicking "Wrong" in the scanner admin log feedback popup threw `Cannot read properties of null (reading 'style')` because the popup HTML had no `.mail-feedback-choices` wrapper div — the handler's `querySelector(".mail-feedback-choices")` returned null. Added the wrapper div.
+- **Fixed `searchOpportunitiesByTitle` call signature.** Inbox wrong-form deal search called `searchOpportunitiesByTitle(q, 8)` passing a raw number instead of `{ limit: 8 }`. Would have broken deal search.
+
+**Scanner Admin Status tab — two-column layout:**
+- Redesigned the Status tab from a single vertical column to a two-column flex layout.
+  - **Left column:** Status key-value grid (poll interval, processed count, toggles, ML status), Retrain ML Head button, and Classification Rules legend (collapsible table).
+  - **Right column:** Behavior/action toggles (link_email, post_notes, create_tasks, create_deals, notify_users, mark_read, apply_bot_review_mail_tag) with Save button, and Scanner Identity credentials form (email/password/save).
+- Added `.scanner-status-columns` flex container with `.scanner-status-left` (flex:3) and `.scanner-status-right` (flex:2) CSS classes.
+- Removed separate Identity and Behavior tab sections — merged into Status tab to eliminate redundant tab navigation and vertical scrolling.
+
+**Scanner Admin Assignee Rules tab — two-column grid:**
+- Split the 13 assignee rules into a two-column grid layout (`.scanner-rules-grid` → two `.scanner-rules-col` containers, 50/50 split).
+- Added `flex-wrap: wrap` to `.scanner-rule-row` for responsive handling in narrower columns.
+- Removed the old single-column `.scanner-rules-list` CSS.
+
+**Scanner Admin Log tab — feedback button:**
+- Added clipboard-x icon "Feedback" button next to "Reprocess Selected" in the scanner admin log toolbar.
+- Single-entry guard: selecting more than 1 log entry and clicking Feedback shows a toast ("Feedback works on one entry at a time — select a single log entry").
+- Dropdown positioned below the button (not centered modal-style) using `getBoundingClientRect()`.
+- Full correction form on "Wrong": wrong_type dropdown, correct_rule dropdown (from `_CLASSIFICATION_LABELS`), deal type-ahead search (via `searchOpportunitiesByTitle`), notes field, submit/cancel.
+- "Correct" submits immediately via `submitMailFeedback()`.
+
+**Mail inbox — terminal look:**
+- `.mail-from` column now uses monospace font (`ui-monospace, SFMono-Regular, Menlo`) with green `#6e8a` color.
+- `.mail-subject` uses gray-blue `#8892a2`.
+- Row borders changed to dashed (`border-bottom: 1px dashed var(--border)`) for a terminal aesthetic.
+- Date column moved inside `.mail-actions` flex container alongside the linked icon and feedback trigger.
+
+**Mail inbox — linked email icon:**
+- Added chain-link SVG icon (Tabler `link` icon, 16×16, green `#22c55e`) on emails that the scanner linked to a deal.
+- Icon tooltip shows the linked deal title from `scannerLogMap.linked_opp_id`.
+
+**Removed features:**
+- CRM/REQ inbox filter buttons (`All | CRM | REQ`) removed from toolbar.
+- Source channel badges (`.mail-inbox-badge` `.crm`/`.req`/`.unknown`) CSS removed.
+- Identity and Behavior separate tab buttons and panels removed from Scanner Admin HTML.
+- Old inline feedback buttons (✓/✗) and inline correction form CSS removed; replaced by decoupled popup pattern.
+
+**Scanner backend:**
+- `mail_scanner.py`: `page_size` increased from 50 to 100 for both `_seed_existing_conversations_as_processed()` and `_poll_inbox()` to catch more recent emails.
+
+**Files changed:** `public/app.js`, `public/styles.css`, `public/index.html`, `mail_scanner.py`, `AGENTS.md`.
+
+---
+
 ### Phase 8: Tag/Feedback Learning System (2026-07-12)
 
 - **Mail tag add/remove UI in CRM Mail Quick View (Inbox tab).** Users can now add or remove mail tags on selected conversations:

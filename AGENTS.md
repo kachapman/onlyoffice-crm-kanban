@@ -2,6 +2,29 @@
 
 **Current version:** 2.2.1 (released 2026-07-08; see CHANGELOG.md)  
 **Last session summary (for next resume):** 
+- **Phase 8d: Feedback fixes, log improvements, retrain fix (2026-07-14 evening).**
+  - Fixed feedback popup closing on deal selection (ISSUE-013): `e.stopPropagation()` on deal option click handlers in both inbox and log feedback popups.
+  - Fixed feedback cross-referencing in log: `fbByConv` map now keeps entry with most data (not first).
+  - Fixed `_detect_mailbox()` not detecting requests@ action inbox (ISSUE-014): added `_extract_email_addresses()` helper for complex CRM `to` field objects, added more key variants (`toAddress`, `recipients`), added `from_email` fallback. **Must rebuild scanner container on CRM droplet.**
+  - Fixed retrain ML Head using system Python (ISSUE-012): now prefers `.venv-ml/bin/python3`. Installed `sentence-transformers` in `.venv-ml`.
+  - Log feedback corrections visible: colored brackets `[✓ verified correct]` / `[✗ corrected → rule:... → deal:...]`.
+  - Log Export CSV button with Tabler `file-type-csv` icon.
+  - Scanner admin tab buttons aligned left next to "Auto Mail Scanner" title.
+  - Updated `config.example.env` with correct CRM droplet IP (68.183.130.39).
+  - Files: `mail_scanner.py`, `public/app.js`, `public/index.html`, `config.example.env`, `CHANGELOG.md`, `ISSUES.md`, `AGENTS.md`.
+- **Phase 8c: Mail UI bug fixes + major layout rework (2026-07-14).**
+  - Fixed "filtered is not defined" crash (ISSUE-011): three stale `filtered` references left after filter removal replaced with `msgs` in `renderMailList()`.
+  - Fixed inbox feedback popup invisible: `.mail-feedback-popup-wrap` missing `position: relative`.
+  - Fixed log feedback "Wrong" crash: missing `.mail-feedback-choices` wrapper div in popup HTML.
+  - Fixed `searchOpportunitiesByTitle(q, 8)` call signature → `{ limit: 8 }`.
+  - Status tab redesigned to two-column layout: left = status grid + retrain + rules legend; right = behavior toggles + credentials form. Identity/Behavior tabs removed and merged into Status.
+  - Assignee Rules tab redesigned to two-column grid (`.scanner-rules-grid`).
+  - Log tab: feedback button added next to Reprocess Selected (single-entry, dropdown with full correction form).
+  - Mail inbox terminal look: monospace green from, gray-blue subject, dashed row borders.
+  - Chain-link icon for scanner-linked emails with deal name tooltip.
+  - Removed: CRM/REQ filter buttons, badge CSS, old inline feedback buttons.
+  - `page_size` 50→100 in `mail_scanner.py` (seed + poll).
+  - Files: `app.js`, `styles.css`, `index.html`, `mail_scanner.py`, `AGENTS.md`, `CHANGELOG.md`, `ISSUES.md`.
 - **Phase 8: Tag/Feedback Learning System (2026-07-12).**
   - Mail tag add/remove UI in CRM Mail Quick View (Inbox tab): `fetchMailTags`, `addMailTag`, `removeMailTag`, tag dropdown button renamed to "Add Tags" with checkboxes + partial-state indicators, per-row tag chips now amber/larger with × remove.
   - Bot feedback loop: flagged emails (Bot Review / ML override / no candidate) auto-recorded in `data/mail_scanner/feedback.jsonl` as candidates. Users see "✓ Correct" / "✗ Wrong" buttons on Bot Review emails; wrong opens correction selector (actionable/ack_suppress/owner_name_title/note_only/other). `POST /api/scanner/feedback` stores verdict; `GET /api/scanner/feedback` lists entries.
@@ -114,6 +137,7 @@ Legacy open items (lower priority unless asked): FEAT-003 attachments, new toast
 - **Profile data:** `data/user-profiles/...` (gitignored); survives restarts on both local and production.
 
 ## Coding Conventions (follow existing)
+- **Icons/buttons:** Always check https://tabler.io/icons first for new icons. Use inline SVG from Tabler (24x24 viewBox, `stroke="currentColor"`, `stroke-width="2"`). Prefix: `icon-tabler-link`, `icon-tabler-clipboard-x`, etc.
 - Vanilla JS + CSS; no new libs.
 - Reuse helpers (formatMoney, unwrap, escapeHtml, crmOpportunityUrl, historyEventDate, customField* etc.).
 - State in `state = { groups, ... }`; render functions are idempotent (find or create tile).

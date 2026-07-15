@@ -1,5 +1,106 @@
 # Known issues
 
+## ISSUE-014 — Scanner `_detect_mailbox` can't identify requests@ action inbox
+
+**Status:** ✅ Fixed 2026-07-14 (evening)
+**Priority:** High
+**Area:** Mail scanner (`mail_scanner.py` — `_detect_mailbox()`)
+
+### Symptoms
+- Log tab showed `source_inbox` as `"unknown"` for all requests@sherwoodestimates.com emails, never `"action"`.
+- Log entries from both inboxes were indistinguishable (no `[action]` badge).
+- `source_inbox` distribution in `log.jsonl`: 241 `none`, 29 `unknown`, 22 `record`, 0 `action`.
+
+### Root cause
+`_detect_mailbox()` checked the `to` field as a plain string:
+```python
+to_val = src.get("to") or src.get("To") or ""
+if isinstance(to_val, list):
+    to_val = " ".join(str(x) for x in to_val)
+```
+The CRM API returns `to` as a list of objects like `[{email: "...", name: "..."}]`. `str(x)` on a dict produces `{'email': 'requests@...'}` which doesn't contain the bare email address as a substring. The `in` check against `act_email` fails.
+
+Additionally, the CRM API may use keys like `toAddress`, `ToAddress`, `recipients`, or `Recipients` instead of `to`.
+
+### Fix
+- Added `_extract_email_addresses()` helper that extracts email strings from: plain strings, lists of strings, lists of objects (checking `email`, `Email`, `address`, `Address` keys), and dicts.
+- Updated `_detect_mailbox()` to check multiple `to` field key variants (`to`, `To`, `toAddress`, `ToAddress`, `recipients`, `Recipients`) using the new helper.
+- Added `from_email` fallback: if the sender address matches a known mailbox address, classify by that (catches sent items).
+
+### Deployment
+This fix is in `mail_scanner.py` which runs on the CRM droplet. Must rebuild the scanner container after pushing.
+
+---
+
+## ISSUE-013 — Feedback popup closes immediately when selecting a deal from search results
+
+**Status:** ✅ Fixed 2026-07-14 (evening)
+**Priority:** High
+**Area:** Mail inbox + Scanner Admin log (`public/app.js`)
+
+### Symptoms
+- In both inbox and log feedback popups, clicking a deal from the type-ahead search results immediately closed the popup.
+- In the inbox, clicking the feedback button again would reopen with the deal correctly selected.
+- In the log, the deal selection was lost entirely.
+
+### Root cause
+When a deal option is clicked, `dealResults.innerHTML = ""` removes the option from the DOM synchronously. The document-level `closeFeedbackPopup` handler then fires (event bubbles to document) and checks `feedbackPopup.contains(e.target)`. Since `e.target` (the deal option div) has been removed from the DOM tree, `contains()` returns `false`, and the popup closes.
+
+### Fix
+Added `e.stopPropagation()` to deal option click handlers in both the inbox feedback popup (line ~14634) and the log feedback popup (line ~18844). This prevents the click event from reaching the document-level outside-click handler.
+
+---
+
+## ISSUE-012 — Retrain ML Head fails with "No module named 'sentence_transformers'"
+
+**Status:** ✅ Fixed 2026-07-14 (evening)
+**Priority:** Medium
+**Area:** Scanner admin (`mail_scanner.py` — `retrain_classifier_head()`)
+
+### Symptoms
+- Clicking "Retrain ML Head" in Scanner Admin Status tab returned: `Retrain failed: ... No module named 'sentence_transformers' ...`
+
+### Root cause
+`retrain_classifier_head()` used `sys.executable` to run `train_ml_head.py`. When the dashboard server runs locally, `sys.executable` is `/usr/bin/python3` (system Python). The ML dependencies (`sentence-transformers`, `torch`, etc.) are installed in `.venv-ml/bin/python3`, not the system Python.
+
+### Fix
+- `retrain_classifier_head()` now prefers `.venv-ml/bin/python3` if it exists, falling back to `sys.executable`.
+- Installed `sentence-transformers` in `.venv-ml`.
+
+---
+
+## ISSUE-011 — CRM/REQ inbox filter removal left stale `filtered` variable, crashing mail inbox
+
+**Status:** ✅ Fixed 2026-07-14
+**Priority:** Critical
+**Area:** Mail inbox (`public/app.js` — `renderMailList()`)
+
+### Symptoms
+- Opening the CRM Mail Quick View (Inbox tab) showed no emails.
+- Error message: "Could not load mail: filtered is not defined".
+- Browser console showed `ReferenceError: filtered is not defined` at three locations in `renderMailList()`.
+
+### Root cause
+In the Phase 8b session (2026-07-13), the CRM/REQ inbox filter feature was added. This introduced `const filtered` inside `renderMailList()` and changed all iteration from `msgs` (the function parameter) to `filtered`.
+
+In the next session (2026-07-14), the user requested the filter be removed entirely (the `inboxFilter` state variable, the filter button handlers, and the `let filtered = msgs` / `if (filter === "crm" ...)` block were all deleted). However, the three places that still referenced `filtered` were not updated back to `msgs`:
+
+| Line | Code (broken) |
+|------|---------------|
+| 14386 | `cbAll.checked = filtered.length > 0 && filtered.every(...)` |
+| 14388 | `filtered.forEach(m => {` |
+| 14398 | `filtered.forEach(m => {` |
+
+Since `filtered` was never declared in the function scope (it was removed), this threw a `ReferenceError` at runtime whenever `renderMailList` was called with one or more messages. The error propagated to the `catch` block in `loadMailMessagesForModal()`, which displayed "Could not load mail: filtered is not defined".
+
+### Fix
+Replaced all three `filtered` references with `msgs` (the function parameter). Also cleaned up a stale comment referencing "filtered".
+
+### Prevention
+This is a recurrence of ISSUE-005 (agent forgets completed work). When removing a feature, grep the entire file for any remaining references to the removed variable/function before considering the edit complete.
+
+---
+
 ## ISSUE-007 — Tasks tile "All users" view does not show all users' tasks
 
 **Status:** Open
