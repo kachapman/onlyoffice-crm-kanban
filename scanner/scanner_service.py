@@ -65,7 +65,7 @@ def _require_admin(handler: BaseHTTPRequestHandler, cached_body: bytes | None = 
     return False, body
 
 class ScannerHandler(BaseHTTPRequestHandler):
-    def log_message(self, format, *args):  # quieter
+    def log_message(self, format, *args):
         pass
 
     def do_GET(self):
@@ -74,6 +74,8 @@ class ScannerHandler(BaseHTTPRequestHandler):
         qs = parse_qs(parsed.query)
 
         if path == "/status":
+            if not _require_admin(self)[0]:
+                return
             try:
                 s = mail_scanner.get_scanner_status()
             except Exception as e:
@@ -83,6 +85,8 @@ class ScannerHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/config":
+            if not _require_admin(self)[0]:
+                return
             try:
                 cfg = mail_scanner.get_contractors() or {}
                 sb = cfg.get("scanner_behavior") or {}
@@ -106,6 +110,8 @@ class ScannerHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/log":
+            if not _require_admin(self)[0]:
+                return
             try:
                 limit = 200
                 ls = (qs.get("limit") or [""])[0]
@@ -119,6 +125,8 @@ class ScannerHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/feedback":
+            if not _require_admin(self)[0]:
+                return
             try:
                 limit = 200
                 ls = (qs.get("limit") or [""])[0]
@@ -240,8 +248,11 @@ class ScannerHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/feedback":
+            ok, body = _require_admin(self)
+            if not ok:
+                return
             try:
-                payload = json.loads(_read_body(self) or b"{}")
+                payload = json.loads(body or b"{}")
             except json.JSONDecodeError:
                 _json_response(self, 400, {"error": "Invalid JSON"})
                 return
