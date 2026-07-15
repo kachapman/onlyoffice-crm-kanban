@@ -3658,24 +3658,36 @@ function applyUserProfile(profile) {
 
   state.groupTemplates = Array.isArray(profile.groupTemplates) ? profile.groupTemplates : [];
 
-  // Bookmarked deals
+  // Bookmarked items (deals + dividers)
   if (Array.isArray(profile.bookmarkedDeals)) {
-    state.bookmarkedDeals = profile.bookmarkedDeals.map((d) => ({
-      oppId: Number(d.oppId),
-      title: String(d.title || ""),
-      addedAt: String(d.addedAt || new Date().toISOString()),
-    })).filter((d) => Number.isFinite(d.oppId) && d.oppId > 0);
+    state.bookmarkedDeals = profile.bookmarkedDeals.map((d) => {
+      if (d?.type === "divider") {
+        return { type: "divider", id: String(d.id || "") };
+      }
+      return {
+        type: "deal",
+        oppId: Number(d.oppId),
+        title: String(d.title || ""),
+        addedAt: String(d.addedAt || new Date().toISOString()),
+      };
+    }).filter((d) => d.type === "divider" ? d.id : Number.isFinite(d.oppId) && d.oppId > 0);
   } else {
     try {
       const raw = localStorage.getItem(BOOKMARKED_STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          state.bookmarkedDeals = parsed.map((d) => ({
-            oppId: Number(d.oppId),
-            title: String(d.title || ""),
-            addedAt: String(d.addedAt || new Date().toISOString()),
-          })).filter((d) => Number.isFinite(d.oppId) && d.oppId > 0);
+          state.bookmarkedDeals = parsed.map((d) => {
+            if (d?.type === "divider") {
+              return { type: "divider", id: String(d.id || "") };
+            }
+            return {
+              type: "deal",
+              oppId: Number(d.oppId),
+              title: String(d.title || ""),
+              addedAt: String(d.addedAt || new Date().toISOString()),
+            };
+          }).filter((d) => d.type === "divider" ? d.id : Number.isFinite(d.oppId) && d.oppId > 0);
         }
       }
     } catch {
@@ -3896,6 +3908,9 @@ function saveLocalKanbanTilesToStorage() {
 
 function stripBookmarkedRuntimeFields(entry) {
   if (!entry || typeof entry !== "object") return entry;
+  if (entry.type === "divider") {
+    return { type: "divider", id: entry.id };
+  }
   const { _cachedData, ...rest } = entry;
   return rest;
 }
@@ -17302,7 +17317,7 @@ async function handleSearchPreviewEdit(oppId) {
    ================================================================================ */
 
 function isDealBookmarked(oppId) {
-  return state.bookmarkedDeals.some((d) => Number(d.oppId) === Number(oppId));
+  return state.bookmarkedDeals.some((d) => d.type !== "divider" && Number(d.oppId) === Number(oppId));
 }
 
 function initBookmarkSidebar() {
@@ -17329,6 +17344,14 @@ function initBookmarkSidebar() {
   if (toggleBtn) {
     toggleBtn.addEventListener("click", () => {
       hideBookmarkSidebar();
+    });
+  }
+
+  // Add divider button in sidebar header
+  const addDividerBtn = $("#bookmark-add-divider");
+  if (addDividerBtn) {
+    addDividerBtn.addEventListener("click", () => {
+      addBookmarkDivider();
     });
   }
 
@@ -17427,13 +17450,20 @@ function renderBookmarkTabs() {
   if (!tabBar) return;
   tabBar.innerHTML = "";
 
-  if (!state.bookmarkedDeals.length) {
+  const dealCount = state.bookmarkedDeals.filter((d) => d.type !== "divider").length;
+  if (!dealCount) {
     tabBar.innerHTML = '<div class="bookmark-tabs-empty">No bookmarked deals</div>';
     return;
   }
 
   for (let i = 0; i < state.bookmarkedDeals.length; i++) {
-    const deal = state.bookmarkedDeals[i];
+    const item = state.bookmarkedDeals[i];
+    if (item.type === "divider") {
+      renderBookmarkDivider(tabBar, item, i);
+      continue;
+    }
+
+    const deal = item;
     const btn = document.createElement("button");
     btn.type = "button";
     // Check if this bookmarked deal is tagged High Priority
@@ -17450,50 +17480,7 @@ function renderBookmarkTabs() {
     btn.draggable = true;
     btn.dataset.index = i;
 
-    // Drag events
-    btn.addEventListener("dragstart", (e) => {
-      e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", btn.dataset.index);
-      btn.classList.add("bookmark-tab-dragging");
-    });
-    btn.addEventListener("dragend", () => {
-      btn.classList.remove("bookmark-tab-dragging");
-      tabBar.querySelectorAll(".bookmark-tab-drag-over").forEach((el) => el.classList.remove("bookmark-tab-drag-over"));
-    });
-    btn.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
-      tabBar.querySelectorAll(".bookmark-tab-drag-over").forEach((el) => el.classList.remove("bookmark-tab-drag-over"));
-      btn.classList.add("bookmark-tab-drag-over");
-    });
-    btn.addEventListener("dragleave", () => {
-      btn.classList.remove("bookmark-tab-drag-over");
-    });
-    btn.addEventListener("drop", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      btn.classList.remove("bookmark-tab-drag-over");
-      tabBar.querySelectorAll(".bookmark-tab-drag-over").forEach((el) => el.classList.remove("bookmark-tab-drag-over"));
-
-      const fromIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
-      const toIdx = parseInt(btn.dataset.index, 10);
-      if (!Number.isFinite(fromIdx) || !Number.isFinite(toIdx) || fromIdx === toIdx) return;
-
-      // Reorder array
-      const [moved] = state.bookmarkedDeals.splice(fromIdx, 1);
-      state.bookmarkedDeals.splice(toIdx, 0, moved);
-      saveBookmarkedDealsToStorage();
-      renderBookmarkTabs();
-      // Re-activate the moved tab if it was active
-      if (state.activeBookmarkTab === moved.oppId) {
-        const activeEl = tabBar.querySelector(`.bookmark-tab[data-opp-id="${moved.oppId}"]`);
-        if (activeEl) {
-          activeEl.classList.add("active");
-          // Scroll into view
-          activeEl.scrollIntoView({ block: "nearest" });
-        }
-      }
-    });
+    attachBookmarkDragEvents(btn, i, tabBar);
 
     // Stage dot color
     const stageColor = getStageColorForOppId(deal.oppId) || "#4f8cff";
@@ -17525,6 +17512,100 @@ function renderBookmarkTabs() {
     const activeEl = tabBar.querySelector(`.bookmark-tab[data-opp-id="${state.activeBookmarkTab}"]`);
     if (activeEl) activeEl.classList.add("active");
   }
+}
+
+function attachBookmarkDragEvents(el, index, tabBar) {
+  el.draggable = true;
+  el.dataset.index = index;
+
+  el.addEventListener("dragstart", (e) => {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", el.dataset.index);
+    el.classList.add(el.classList.contains("bookmark-divider") ? "bookmark-divider-dragging" : "bookmark-tab-dragging");
+  });
+  el.addEventListener("dragend", () => {
+    el.classList.remove("bookmark-tab-dragging", "bookmark-divider-dragging");
+    tabBar.querySelectorAll(".bookmark-tab-drag-over, .bookmark-divider-drag-over").forEach((n) => {
+      n.classList.remove("bookmark-tab-drag-over", "bookmark-divider-drag-over");
+    });
+  });
+  el.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    tabBar.querySelectorAll(".bookmark-tab-drag-over, .bookmark-divider-drag-over").forEach((n) => {
+      n.classList.remove("bookmark-tab-drag-over", "bookmark-divider-drag-over");
+    });
+    el.classList.add(el.classList.contains("bookmark-divider") ? "bookmark-divider-drag-over" : "bookmark-tab-drag-over");
+  });
+  el.addEventListener("dragleave", () => {
+    el.classList.remove("bookmark-tab-drag-over", "bookmark-divider-drag-over");
+  });
+  el.addEventListener("drop", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    el.classList.remove("bookmark-tab-drag-over", "bookmark-divider-drag-over");
+    tabBar.querySelectorAll(".bookmark-tab-drag-over, .bookmark-divider-drag-over").forEach((n) => {
+      n.classList.remove("bookmark-tab-drag-over", "bookmark-divider-drag-over");
+    });
+
+    const fromIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
+    const toIdx = parseInt(el.dataset.index, 10);
+    if (!Number.isFinite(fromIdx) || !Number.isFinite(toIdx) || fromIdx === toIdx) return;
+
+    // Reorder array
+    const [moved] = state.bookmarkedDeals.splice(fromIdx, 1);
+    state.bookmarkedDeals.splice(toIdx, 0, moved);
+    saveBookmarkedDealsToStorage();
+    renderBookmarkTabs();
+    // Re-activate the moved tab if it was active
+    if (moved.type !== "divider" && state.activeBookmarkTab === moved.oppId) {
+      const activeEl = tabBar.querySelector(`.bookmark-tab[data-opp-id="${moved.oppId}"]`);
+      if (activeEl) {
+        activeEl.classList.add("active");
+        activeEl.scrollIntoView({ block: "nearest" });
+      }
+    }
+  });
+}
+
+function renderBookmarkDivider(tabBar, divider, index) {
+  const el = document.createElement("div");
+  el.className = "bookmark-divider";
+  el.dataset.dividerId = divider.id;
+  el.draggable = true;
+  el.dataset.index = index;
+
+  attachBookmarkDragEvents(el, index, tabBar);
+
+  const line = document.createElement("span");
+  line.className = "bookmark-divider-line";
+
+  const delBtn = document.createElement("button");
+  delBtn.type = "button";
+  delBtn.className = "bookmark-divider-delete";
+  delBtn.title = "Remove divider";
+  delBtn.innerHTML = "&times;";
+  delBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    removeBookmarkDivider(divider.id);
+  });
+
+  el.appendChild(line);
+  el.appendChild(delBtn);
+  tabBar.appendChild(el);
+}
+
+function addBookmarkDivider() {
+  const id = "div_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 7);
+  state.bookmarkedDeals.push({ type: "divider", id });
+  saveBookmarkedDealsToStorage();
+  renderBookmarkTabs();
+}
+
+function removeBookmarkDivider(id) {
+  state.bookmarkedDeals = state.bookmarkedDeals.filter((d) => !(d.type === "divider" && d.id === id));
+  saveBookmarkedDealsToStorage();
+  renderBookmarkTabs();
 }
 
 function getStageColorForOppId(oppId) {
@@ -17620,12 +17701,14 @@ function addBookmarkDeal(oppId, title) {
   if (!Number.isFinite(id) || id <= 0) return;
   if (isDealBookmarked(id)) return;
 
-  if (state.bookmarkedDeals.length >= MAX_BOOKMARKED_DEALS) {
+  const dealCount = state.bookmarkedDeals.filter((d) => d.type !== "divider").length;
+  if (dealCount >= MAX_BOOKMARKED_DEALS) {
     showToast(`Maximum ${MAX_BOOKMARKED_DEALS} bookmarked deals reached. Remove one to add another.`, true);
     return;
   }
 
   state.bookmarkedDeals.push({
+    type: "deal",
     oppId: id,
     title: String(title || "").trim() || `Opportunity #${id}`,
     addedAt: new Date().toISOString(),
@@ -17639,7 +17722,7 @@ function addBookmarkDeal(oppId, title) {
 
 function removeBookmarkDeal(oppId) {
   const id = Number(oppId);
-  state.bookmarkedDeals = state.bookmarkedDeals.filter((d) => Number(d.oppId) !== id);
+  state.bookmarkedDeals = state.bookmarkedDeals.filter((d) => d.type === "divider" || Number(d.oppId) !== id);
 
   if (state.activeBookmarkTab === id) {
     closeBookmarkPreview();

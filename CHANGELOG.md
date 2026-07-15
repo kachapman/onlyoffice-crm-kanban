@@ -7,11 +7,13 @@ All notable changes to the CRM Kanban dashboard are documented here.
 ### New features
 
 - **Search popup minimize + right-side Search trigger.** The search modal now has a minimize button that parks all open preview tabs. A vertical "Search" tab appears on the right edge above the bookmarks trigger; clicking it (or the header search button) restores the parked tabs and lands on the Search tab. Parked tabs persist in the user profile (server + localStorage fallback). Hidden when the bookmark sidebar is open.
+- **Bookmark sidebar dividers.** Add draggable horizontal dividers in the bookmark tab bar to visually organize saved bookmarks into groups. New divider button in the sidebar header uses the Tabler `divide` icon. Dividers can be dragged between bookmark tiles and removed via hover ×. Stored in the user profile alongside bookmarks.
 
 ### Improvements
 
 - **Search popup preview tab limit raised from 5 to 10.**
 - **Search results export button is now an icon-only CSV button.** Replaced the "📋 Export CSV" text with the Tabler `file-type-csv` icon.
+- **Login screen refreshed.** Title changed to "Vanguard Adjusting Dashboard" and centered. Portal URL field hidden from view. Added discrete "Old CRM link" footer pointing to `office.publicadjustermidwest.com`.
 
 ### Bug fixes
 

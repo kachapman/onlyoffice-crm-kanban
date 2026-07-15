@@ -50,16 +50,15 @@
   })();
   </script>
   <noscript>
-    <div style="padding:2rem;font-family:sans-serif">JavaScript is required for the Vanguard Adjusting CRM Board dashboard. Please enable it and reload.</div>
+    <div style="padding:2rem;font-family:sans-serif">JavaScript is required for the Vanguard Adjusting Dashboard. Please enable it and reload.</div>
   </noscript>
   <div id="login-screen" class="login-screen">
     <!-- Large watermark ship logo (same as header) behind the login card, low opacity -->
     <img src="hero-ship-168.png" class="login-watermark" alt="" aria-hidden="true" />
     <div class="login-card">
-      <h1 class="login-title">Vanguard Adjusting CRM Board</h1>
-      <p class="login-sub">Sign in with your OnlyOffice account at <strong>office.publicadjustermidwest.com</strong>.</p>
+      <h1 class="login-title">Vanguard Adjusting Dashboard</h1>
       <form id="login-form">
-        <label>
+        <label class="hidden">
           Portal URL
           <input type="url" id="portal-url" value="https://office.publicadjustermidwest.com" readonly />
         </label>
@@ -74,6 +73,9 @@
         <p id="login-error" class="error-text hidden"></p>
         <button type="submit" class="btn btn-primary btn-block" id="login-submit-btn">Sign in</button>
       </form>
+      <div class="login-footer">
+        <a href="https://office.publicadjustermidwest.com" target="_blank" rel="noopener noreferrer" class="login-old-crm-link">Old CRM link</a>
+      </div>
     </div>
   </div>
 
@@ -220,10 +222,15 @@
       </div>
       <div class="bookmark-sidebar-strip">
         <div class="bookmark-sidebar-header">
-          <button type="button" id="bookmark-sidebar-toggle" class="bookmark-sidebar-toggle" title="Hide bookmarks" aria-label="Hide bookmarks">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+          <div class="bookmark-sidebar-header-left">
+            <button type="button" id="bookmark-sidebar-toggle" class="bookmark-sidebar-toggle" title="Hide bookmarks" aria-label="Hide bookmarks">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+            <span class="bookmark-sidebar-label">Bookmarks</span>
+          </div>
+          <button type="button" id="bookmark-add-divider" class="bookmark-sidebar-action-btn" title="Add divider" aria-label="Add divider">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M11 6a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" fill="currentColor"/><path d="M11 18a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" fill="currentColor"/><path d="M5 12l14 0"/></svg>
           </button>
-          <span class="bookmark-sidebar-label">Bookmarks</span>
         </div>
         <div id="bookmark-sidebar-tabs" class="bookmark-sidebar-tabs"></div>
       </div>

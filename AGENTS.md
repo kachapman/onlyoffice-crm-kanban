@@ -1,7 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
-**Current version:** 2.2.3 (in progress; see CHANGELOG.md)  
-**Last session summary (for next resume):** v2.2.3: Search popup minimize feature — parks preview tabs, shows right-side "Search" trigger above bookmark trigger, restores on header/search-trigger click, persists via user profile (server + localStorage), max preview tabs raised to 10. Search results export button now icon-only CSV. Login fix — `_handle_login` now reads `portalUrl` from request body first instead of requiring env/header. Also included: confirm-modal z-index 2100 and note editor paste handler (strip formatting, preserve line breaks).
+**Current version:** 2.2.3 (released 2026-07-15; see CHANGELOG.md)  
+**Last session summary (for next resume):** v2.2.3 release: Search popup minimize with right-side "Search" trigger and profile-persisted parked tabs; max preview tabs 10; CSV export icon-only. Bookmark sidebar dividers — draggable visual separators organized via header button. Login screen refresh — "Vanguard Adjusting Dashboard" title, hidden portal URL, "Old CRM link" footer. Login body-portalUrl fix so local dev works without env var. Includes earlier confirm-modal z-index 2100 and note editor paste handler fixes.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 

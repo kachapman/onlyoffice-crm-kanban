@@ -103,12 +103,33 @@ body {
   margin: 0 0 0.5rem;
   font-size: 1.35rem;
   font-weight: 600;
+  text-align: center;
 }
 
 .login-sub {
   margin: 0 0 1.5rem;
   color: var(--muted);
   font-size: 0.9rem;
+}
+
+.login-footer {
+  margin-top: 1.25rem;
+  text-align: center;
+}
+
+.login-old-crm-link {
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-decoration: underline;
+  opacity: 0.7;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.login-old-crm-link:hover,
+.login-old-crm-link:focus-visible {
+  color: var(--text);
+  opacity: 1;
+  outline: none;
 }
 
 .login-card label {
@@ -6750,10 +6771,41 @@ body {
 .bookmark-sidebar-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 0.35rem;
   padding: 0.5rem 0.5rem 0.35rem;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+}
+
+.bookmark-sidebar-header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.bookmark-sidebar-action-btn {
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s;
+}
+
+.bookmark-sidebar-action-btn:hover,
+.bookmark-sidebar-action-btn:focus-visible {
+  color: var(--text);
+  background: var(--surface-2);
+  outline: none;
 }
 
 .bookmark-sidebar-toggle {
@@ -6902,6 +6954,68 @@ body {
 .bookmark-tab-drag-over {
   border-top: 2px solid var(--accent) !important;
   border-left-color: var(--accent) !important;
+  background: var(--surface-2);
+}
+
+/* Bookmark dividers — visual separators / category headers */
+
+.bookmark-divider {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem 0.65rem;
+  margin: 0.25rem 0;
+  cursor: grab;
+  position: relative;
+  user-select: none;
+}
+
+.bookmark-divider-line {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+  min-width: 1rem;
+}
+
+.bookmark-divider:hover .bookmark-divider-delete,
+.bookmark-divider:focus-within .bookmark-divider-delete {
+  opacity: 1;
+}
+
+.bookmark-divider-delete {
+  position: absolute;
+  right: 0.35rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  border: none;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.bookmark-divider-delete:hover,
+.bookmark-divider-delete:focus-visible {
+  color: #ef4444;
+  background: var(--surface-2);
+  outline: none;
+}
+
+.bookmark-divider-dragging {
+  opacity: 0.4;
+}
+
+.bookmark-divider-drag-over {
+  border-top: 2px solid var(--accent) !important;
   background: var(--surface-2);
 }
 
