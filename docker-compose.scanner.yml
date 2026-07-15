@@ -1,0 +1,43 @@
+# Production compose for the mail scanner service on the CRM droplet.
+# Place in the project root alongside docker-compose.yml.
+#
+# SETUP (one-time):
+#   1. Clone the repo on the CRM droplet (68.183.130.39)
+#   2. Create scanner/.env with these values:
+#        BOT_CRM_EMAIL=bot@vanguardadj.com
+#        BOT_CRM_PASSWORD=FRi3tz4yWXrMTEZ
+#        SCANNER_ADMIN_TOKEN=<generate with: python3 -c "import secrets; print(secrets.token_urlsafe(32))">
+#        SCANNER_ENABLED=true
+#        SCANNER_POLL_INTERVAL=120
+#   3. Build and start: docker compose -f docker-compose.scanner.yml up -d --build
+#
+# REDEPLOY (after code changes):
+#   git pull origin email_scanner
+#   docker compose -f docker-compose.scanner.yml up -d --build
+#
+# EXPOSE PORT (for dashboard to reach it):
+#   The scanner binds to 127.0.0.1:8787 inside the container.
+#   docker-compose.scanner.yml maps it to 127.0.0.1:8787 on the host.
+#   To make it reachable from the dashboard (159.89.229.126), either:
+#     a) Change "127.0.0.1:8787:8787" to "0.0.0.0:8787:8787" (less secure)
+#     b) Use nginx reverse proxy on the CRM droplet (recommended)
+#     c) Use SSH tunnel from dashboard: ssh -L 8787:127.0.0.1:8787 root@68.183.130.39
+
+services:
+  mail-scanner:
+    build:
+      context: .
+      dockerfile: scanner/Dockerfile
+      args:
+        INSTALL_ML: "1"
+    container_name: vanguard-mail-scanner
+    restart: unless-stopped
+    env_file:
+      - scanner/.env
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - scanner-data:/app/data
+
+volumes:
+  scanner-data:
