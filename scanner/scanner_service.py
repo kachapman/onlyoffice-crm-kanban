@@ -292,11 +292,20 @@ class ScannerHandler(BaseHTTPRequestHandler):
 def main():
     # Start the background scanner using env-configured creds + persisted toggles.
     # mail_scanner.start_scanner will read SCANNER_* and also re-apply persisted scanner_behavior.
-    # Configure mail_scanner globals from env (standalone container doesn't go through server.py).
-    portal = os.environ.get("ONLYOFFICE_PORTAL_URL", "").rstrip("/")
-    if portal:
-        mail_scanner.configure(PORTAL_URL=portal)
-    mail_scanner.start_scanner()
+    # Build config dict from env (standalone container doesn't go through server.py).
+    config = {
+        "PORTAL_URL": os.environ.get("ONLYOFFICE_PORTAL_URL", "").rstrip("/"),
+        "SCANNER_CRM_EMAIL": os.environ.get("BOT_CRM_EMAIL", "") or os.environ.get("SCANNER_CRM_EMAIL", ""),
+        "SCANNER_CRM_PASSWORD": os.environ.get("BOT_CRM_PASSWORD", "") or os.environ.get("SCANNER_CRM_PASSWORD", ""),
+        "SCANNER_ENABLED": os.environ.get("SCANNER_ENABLED", "true").lower() in ("true", "1", "yes"),
+        "SCANNER_POLL_INTERVAL": int(os.environ.get("SCANNER_POLL_INTERVAL", "120")),
+        "SCANNER_CREATE_DEALS": os.environ.get("SCANNER_CREATE_DEALS", "false").lower() in ("true", "1", "yes"),
+        "SCANNER_CREATE_TASKS": os.environ.get("SCANNER_CREATE_TASKS", "false").lower() in ("true", "1", "yes"),
+        "SCANNER_POST_NOTES": os.environ.get("SCANNER_POST_NOTES", "false").lower() in ("true", "1", "yes"),
+        "SCANNER_NOTIFY_USERS": os.environ.get("SCANNER_NOTIFY_USERS", "false").lower() in ("true", "1", "yes"),
+        "SSL_VERIFY": os.environ.get("SSL_VERIFY", "true").lower() in ("true", "1", "yes"),
+    }
+    mail_scanner.start_scanner(config=config)
 
     server = ThreadingHTTPServer(("0.0.0.0", PORT), ScannerHandler)
     print(f"Scanner service listening on :{PORT} (admin_token_required={bool(ADMIN_TOKEN)})")
