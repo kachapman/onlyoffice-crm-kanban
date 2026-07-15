@@ -18254,6 +18254,20 @@ async function _renderScannerAdminStatus() {
   const el = $("#scanner-admin-status");
   if (!el) return;
   try {
+    // Test scanner service connectivity first
+    let scannerConnected = false;
+    let scannerUrl = "";
+    let scannerLatency = 0;
+    try {
+      const t0 = performance.now();
+      const testRes = await fetch("/api/scanner/status", { credentials: "same-origin" });
+      scannerLatency = Math.round(performance.now() - t0);
+      scannerConnected = testRes.ok;
+      // Extract URL from response headers or config
+      const testJson = await testRes.json().catch(() => ({}));
+      scannerUrl = testJson.scanner_service_url || "";
+    } catch {}
+
     const [res, cfgRes] = await Promise.all([
       fetch("/api/scanner/status", { credentials: "same-origin" }),
       fetch("/api/scanner/config", { credentials: "same-origin" }),
@@ -18267,10 +18281,32 @@ async function _renderScannerAdminStatus() {
     const mlStatus = s.ml_model_exists
       ? `Loaded (${mlSummary.num_samples || "?"} samples, ${mlSummary.test_accuracy !== undefined ? (mlSummary.test_accuracy * 100).toFixed(1) + "% acc" : "no eval"})`
       : "Not trained";
+    // Connection indicator
+    const svcUrl = s.scanner_service_url || "";
+    let connIcon = scannerConnected
+      ? `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7 18l3.6 -3.6m-2.84 -2.84a8 8 0 1 1 11.32 0"/><path d="M17 18l-3.6 -3.6m.94 -3.06a8 8 0 0 1 -11.32 0"/><path d="M7 18l3.6 3.6m.94 3.06a8 8 0 0 1 -11.32 0"/></svg>`
+      : `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7 18l3.6 -3.6m-2.84 -2.84a8 8 0 1 1 11.32 0"/><path d="M17 18l-3.6 -3.6m.94 -3.06a8 8 0 0 1 -11.32 0"/><line x1="2" y1="2" x2="22" y2="22" /></svg>`;
+    let connColor = scannerConnected ? "#16a34a" : "#dc2626";
+    let connText;
+    if (!svcUrl) {
+      // No scanner URL configured — always "local fallback" even if status OK (local data)
+      connText = `No SCANNER_SERVICE_URL set — using local data only`;
+      connColor = "#92400e";
+      connIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#92400e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 12m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49"/><path d="M7.76 16.24a6 6 0 0 1 0 -8.49"/><path d="M7.76 7.76a6 6 0 0 1 8.49 0"/></svg>`;
+    } else if (scannerConnected) {
+      connText = `Connected to scanner (${svcUrl.replace(/^https?:\/\//, "")})${scannerLatency ? " — " + scannerLatency + "ms" : ""}`;
+    } else {
+      connText = `Disconnected from ${svcUrl.replace(/^https?:\/\//, "")} — log and feedback use local data only`;
+    }
     el.innerHTML = `
       <div class="scanner-status-columns">
         <div class="scanner-status-left">
           <div class="scanner-status-display">
+            <div id="scanner-conn-status" style="display:flex;align-items:center;gap:6px;padding:.35rem .5rem;margin-bottom:.5rem;border-radius:4px;font-size:.82rem;font-weight:600;background:${!svcUrl ? "#fef3c7" : scannerConnected ? "#dcfce7" : "#fee2e2"};color:${connColor};">
+              ${connIcon}
+              <span>${connText}</span>
+              <button type="button" id="scanner-conn-test-btn" class="btn btn-secondary btn-sm" style="margin-left:auto;padding:2px 8px;font-size:.75rem;">Test</button>
+            </div>
             ${dry ? '<div style="background:#fee2e2;color:#991b1b;padding:.25rem .5rem;margin-bottom:.5rem;border-radius:4px;font-weight:600;">DRY RUN — no tasks, notes, links, tags or notifications will be created.</div>' : ''}
             <span class="label">Status</span><span class="value">${s.enabled ? "Enabled" : "Disabled"}</span>
             <span class="label">Poll interval</span><span class="value">${s.poll_interval_s}s</span>
@@ -18281,6 +18317,7 @@ async function _renderScannerAdminStatus() {
             <span class="label">Notify users</span><span class="value">${s.notify_users ? "Yes" : "No (dry-run)"}</span>
             <span class="label">Strong fields (ids)</span><span class="value">${escapeHtml(strongF)}</span>
             <span class="label">Portal</span><span class="value">${escapeHtml(s.portal_url)}</span>
+            <span class="label">Scanner URL</span><span class="value" style="color:${svcUrl ? 'inherit' : '#92400e'}">${svcUrl ? escapeHtml(svcUrl) : '<em>Not set (local data only)</em>'}</span>
             <span class="label">Scanner account</span><span class="value" ${acct}>shared (hidden)</span>
             <span class="label">Feedback entries</span><span class="value">${s.feedback_count || 0}</span>
             <span class="label">ML head</span><span class="value">${escapeHtml(mlStatus)}</span>
@@ -18478,6 +18515,46 @@ async function _renderScannerAdminStatus() {
           if (retrainStatus) retrainStatus.textContent = "Request failed";
         } finally {
           retrainBtn.disabled = false;
+        }
+      });
+    }
+
+    // Connection test button
+    const connTestBtn = $("#scanner-conn-test-btn");
+    if (connTestBtn) {
+      connTestBtn.addEventListener("click", async () => {
+        connTestBtn.disabled = true;
+        connTestBtn.textContent = "Testing…";
+        const connDiv = $("#scanner-conn-status");
+        try {
+          const t0 = performance.now();
+          const testRes = await fetch("/api/scanner/status", { credentials: "same-origin" });
+          const latency = Math.round(performance.now() - t0);
+          const testJson = await testRes.json().catch(() => ({}));
+          const url = testJson.scanner_service_url || "";
+          if (testRes.ok) {
+            if (connDiv) {
+              connDiv.style.background = "#dcfce7";
+              connDiv.style.color = "#16a34a";
+              const label = url ? `Connected to ${url.replace(/^https?:\/\//, "")}` : "Connected (local)";
+              connDiv.querySelector("span").textContent = `${label} — ${latency}ms`;
+              connDiv.querySelector("svg").outerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7 18l3.6 -3.6m-2.84 -2.84a8 8 0 1 1 11.32 0"/><path d="M17 18l-3.6 -3.6m.94 -3.06a8 8 0 0 1 -11.32 0"/><path d="M7 18l3.6 3.6m.94 3.06a8 8 0 0 1 -11.32 0"/></svg>`;
+            }
+            showToast("Scanner service reachable");
+          } else {
+            throw new Error(`HTTP ${testRes.status}`);
+          }
+        } catch (e) {
+          if (connDiv) {
+            connDiv.style.background = "#fee2e2";
+            connDiv.style.color = "#dc2626";
+            connDiv.querySelector("span").textContent = `Disconnected — ${e.message || "unreachable"}`;
+            connDiv.querySelector("svg").outerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7 18l3.6 -3.6m-2.84 -2.84a8 8 0 1 1 11.32 0"/><path d="M17 18l-3.6 -3.6m.94 -3.06a8 8 0 0 1 -11.32 0"/><line x1="2" y1="2" x2="22" y2="22" /></svg>`;
+          }
+          showToast("Scanner service unreachable: " + (e.message || e), true);
+        } finally {
+          connTestBtn.disabled = false;
+          connTestBtn.textContent = "Test";
         }
       });
     }

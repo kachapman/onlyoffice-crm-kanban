@@ -2303,6 +2303,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 fwd = _forward_scanner_request(self, "/status")
                 if fwd is not None:
                     code, data = fwd
+                    if isinstance(data, dict):
+                        data["scanner_service_url"] = SCANNER_SERVICE_URL or ""
                     _json_response(self, code, data)
                     return
                 s = get_scanner_status()
@@ -2314,6 +2316,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 if email:
                     s2["scanner_account_hint"] = email
                     s2["email"] = ""
+                s2["scanner_service_url"] = ""
                 _json_response(self, 200, s2)
                 return
             if api_path == "/api/scanner/log":

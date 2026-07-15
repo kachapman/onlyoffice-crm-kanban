@@ -292,6 +292,10 @@ class ScannerHandler(BaseHTTPRequestHandler):
 def main():
     # Start the background scanner using env-configured creds + persisted toggles.
     # mail_scanner.start_scanner will read SCANNER_* and also re-apply persisted scanner_behavior.
+    # Configure mail_scanner globals from env (standalone container doesn't go through server.py).
+    portal = os.environ.get("ONLYOFFICE_PORTAL_URL", "").rstrip("/")
+    if portal:
+        mail_scanner.configure(PORTAL_URL=portal)
     mail_scanner.start_scanner()
 
     server = ThreadingHTTPServer(("0.0.0.0", PORT), ScannerHandler)
