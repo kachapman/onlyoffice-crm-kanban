@@ -1,5 +1,30 @@
 # Known issues
 
+## ISSUE-015 — Scanner Admin token gate not shown when remote scanner requires authentication
+
+**Status:** ✅ Fixed 2026-07-18
+**Priority:** High
+**Area:** Scanner service (`scanner/scanner_service.py`) + Scanner Admin UI (`public/app.js`)
+
+### Symptoms
+- Scanner Admin tab shows red "Disconnected — HTTP 403" without prompting for a token.
+- No token input field visible, so the user cannot authenticate against a scanner service that has `SCANNER_ADMIN_TOKEN` set.
+
+### Root cause
+- `scanner_service.py` returned 403 responses with only `{"error": "Scanner admin token required"}`.
+- The Scanner Admin UI token gate renders only when `st.admin_token_required` is true, so it never appeared.
+- The connection indicator rendered its own error status, masking the gate entirely.
+
+### Fix
+- `scanner_service.py` now returns `{"error": "Scanner admin token required", "admin_token_required": true}` on 403.
+- The existing token gate in `app.js` can now detect the flag and show the unlock prompt.
+
+### Deployment
+- Rebuild and restart the scanner container on the CRM droplet after pushing.
+- Local dashboard server uses the updated `public/app.js` directly.
+
+---
+
 ## ISSUE-014 — Scanner `_detect_mailbox` can't identify requests@ action inbox
 
 **Status:** ✅ Fixed 2026-07-14 (evening)

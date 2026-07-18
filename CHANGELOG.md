@@ -4,6 +4,29 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 ## [Unreleased]
 
+### Scanner deployment, connection indicator, and admin token gate (2026-07-18)
+
+**Scanner container deployment (CRM droplet):**
+- Cloned `email_scanner` branch to CRM droplet at `/root/onlyoffice-crm-kanban` and built scanner container directly from the branch.
+- Added `ONLYOFFICE_PORTAL_URL` to the scanner container so it can authenticate and call the CRM API.
+- Fixed standalone scanner config: `scanner_service.py` now passes the full config dict from env (`PORTAL_URL`, `BOT_CRM_EMAIL`, `BOT_CRM_PASSWORD`, toggles, `SSL_VERIFY`) into `mail_scanner.start_scanner()`. Previously the container only set `PORTAL_URL`, leaving `SCANNER_CRM_EMAIL`/`PASSWORD` as empty strings and causing CRM auth to fail.
+
+**Scanner Admin connection indicator:**
+- Added a connection status banner at the top of the Scanner Admin Status tab with three states:
+  - Green: connected to remote scanner (shows URL + latency).
+  - Amber: no `SCANNER_SERVICE_URL` set; dashboard uses local data only.
+  - Red: `SCANNER_SERVICE_URL` configured but unreachable.
+- Added a "Test" button to re-check connectivity on demand.
+- Added a "Scanner URL" row in the status grid showing the configured `SCANNER_SERVICE_URL` or "Not set (local data only)".
+- `server.py` now returns `scanner_service_url` in the `/api/scanner/status` response so the frontend can distinguish remote vs local fallback.
+
+**Scanner admin token gate:**
+- Scanner service now returns `admin_token_required: true` in its 403 responses so the dashboard Scanner Admin UI can prompt for the token when the remote scanner requires authentication.
+
+**Files:** `scanner/scanner_service.py`, `public/app.js`, `server.py`, `CHANGELOG.md`, `AGENTS.md`.
+
+---
+
 ### Mail UI: Feedback fixes, log improvements, retrain fix (2026-07-14, evening)
 
 **Feedback popup fixes:**

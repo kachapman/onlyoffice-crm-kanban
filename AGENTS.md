@@ -2,6 +2,14 @@
 
 **Current version:** 2.2.1 (released 2026-07-08; see CHANGELOG.md)  
 **Last session summary (for next resume):** 
+- **Phase 8e: Scanner deployment, connection indicator, admin token gate (2026-07-18).**
+  - Cloned `email_scanner` branch to CRM droplet (`/root/onlyoffice-crm-kanban`) and built scanner container from branch.
+  - Fixed standalone scanner container config: `scanner_service.py` now passes full config dict from env (`PORTAL_URL`, `BOT_CRM_EMAIL`, `BOT_CRM_PASSWORD`, toggles, `SSL_VERIFY`) into `mail_scanner.start_scanner()`. Added `ONLYOFFICE_PORTAL_URL` env var to container.
+  - Added Scanner Admin connection indicator (green/amber/red) with Test button and Scanner URL row in status grid.
+  - `server.py` returns `scanner_service_url` in `/api/scanner/status` so frontend can distinguish remote vs local fallback.
+  - Added `admin_token_required: true` to scanner service 403 responses so token gate appears in dashboard UI.
+  - Files: `scanner/scanner_service.py`, `public/app.js`, `server.py`, `CHANGELOG.md`, `AGENTS.md`.
+  - **Next:** Test token gate on local dashboard; test end-to-end scanner admin (status, log, feedback) against CRM droplet scanner; merge `email_scanner` → `main` and deploy dashboard only when ready.
 - **Phase 8d: Feedback fixes, log improvements, retrain fix (2026-07-14 evening).**
   - Fixed feedback popup closing on deal selection (ISSUE-013): `e.stopPropagation()` on deal option click handlers in both inbox and log feedback popups.
   - Fixed feedback cross-referencing in log: `fbByConv` map now keeps entry with most data (not first).
