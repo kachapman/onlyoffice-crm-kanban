@@ -2,7 +2,6 @@
  * Vanguard CRM — multi-group opportunity board (local test portal)
  */
 
-const DEFAULT_PORTAL = "https://office.publicadjustermidwest.com";
 const GROUPS_STORAGE_KEY = "oo_board_groups_v2";
 const CALENDARS_STORAGE_KEY = "oo_board_calendars_v1";
 const NOTES_TILES_STORAGE_KEY = "oo_board_notes_v1";
@@ -33,11 +32,8 @@ const FILTER_RESULT_CACHE_TTL_MS = 30 * 1000;
 /** Set true when create-opportunity custom user field save is fixed (see ISSUES.md). */
 const CREATE_OPP_USER_FIELDS_ENABLED = true;
 
-/** Mutation queue for offline / transient CRM write resilience (client-side only). Completed. */
-const MUTATION_QUEUE_KEY = "oo_board_mutation_queue_v1";
+/** Mutation queue removed — no longer needed. */
 const TASK_CATEGORIES_KEY = "oo_board_task_categories_v1";
-const MAX_QUEUE_SIZE = 50;
-const RETRY_INTERVAL_MS = 5000;
 
 /** Presence / Team feature (user status, online list, basic DMs, pinned top tile) */
 const PRESENCE_USERS_CACHE_KEY = "oo_board_presence_users_v1";
@@ -354,7 +350,7 @@ let userProfileReady = false;
 let profileSaveTimer = null;
 
 const state = {
-  portalUrl: localStorage.getItem("oo_portal_url") || DEFAULT_PORTAL,
+  portalUrl: localStorage.getItem("oo_portal_url") || "",
   stages: [],
   allTags: [],
   groups: [],
@@ -403,17 +399,11 @@ const state = {
 };
 
 function crmOpportunityUrl(id) {
-  const base = state.portalUrl.replace(/\/$/, "");
-  return `${base}/Products/CRM/Deals.aspx?id=${id}`;
+  return "#";
 }
 
 function crmTaskUrl(task) {
-  const ent = task.entity;
-  if (ent?.entityType === "opportunity" && ent.entityId) {
-    return crmOpportunityUrl(ent.entityId);
-  }
-  const base = state.portalUrl.replace(/\/$/, "");
-  return `${base}/Products/CRM/Tasks.aspx`;
+  return "#";
 }
 
 function groupFilterSummary(group) {
@@ -1946,11 +1936,10 @@ function parseApiError(body, status) {
 
 async function api(path, options = {}) {
   const headers = { Accept: "application/json", ...options.headers };
-  if (state.portalUrl) headers["X-OnlyOffice-Portal"] = state.portalUrl;
 
   let res;
   try {
-    res = await fetch(`/api/proxy${path}`, {
+    res = await fetch(path, {
       ...options,
       headers,
       credentials: "same-origin",
@@ -1983,424 +1972,33 @@ async function api(path, options = {}) {
     const msg = parseApiError(body, res.status);
     const err = new Error(msg);
     err.status = res.status;
-    if (options.showCrashBanner !== false) {
-      const lower = msg.toLowerCase();
-      if (res.status >= 500 || /502|503|504|500|5\d{2}|bad gateway|unavailable|proxy|gateway/.test(lower)) {
-        showCrmCrashBanner();
-      }
-    }
     throw err;
-  }
-  // Successful CRM-ish call
-  if (/\/crm\//i.test(path)) {
-    onCRMSuccess();
-    // If we have queued mutations, a successful CRM response is a good signal that the backend
-    // may be back — kick the processor to drain the queue promptly on recovery.
-    if (mutationQueue.length > 0) {
-      setTimeout(() => { processMutationQueue().catch(() => {}); }, 10);
-    }
   }
   return body;
 }
 
-// --- Mutation Queue (client-side offline / transient CRM write resilience) ---
-// All CRM writes that hit transient errors are queued (localStorage) and retried in bg.
-// On timeout after CONNECTING_GRACE, progress bar notifies "server unreachable, adding to queue".
-// Header marquee (scrolling, tiny) only appears >8s after queue item + after any modal closed.
-// No header warning/crash/queue banners are ever created (removed per spec).
+// --- Mutation Queue / Connection State / Crash Banner removed ---
+// Stubs kept for call-sites outside this zone (refreshAll, deal-edit, note-submit, etc.)
 
-let mutationQueue = [];
-
-/* Note attachments queue list (for history notes with files).
-   Shows all pending (from mutationQueue) + recently completed.
-   Completed entries auto-prune after 10s. */
-let noteQueueCompleted = [];
-
-let connectionState = 'connected'; // 'connected' | 'connecting' | 'disconnected'
-let connectingTimer = null;
-const CONNECTING_GRACE_MS = 10000; // grace before marking a push as queued (progress bar shows unreachable + queue msg)
-const QUEUE_MARQUEE_DELAY_MS = 8000; // for pending count / stale in marquee (only when there are actual queued push failures)
-let lastCRMSuccessTime = Date.now();
-
-let _syncStatusEl = null;
-
-function loadMutationQueue() {
-  try {
-    const raw = localStorage.getItem(MUTATION_QUEUE_KEY);
-    mutationQueue = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(mutationQueue)) mutationQueue = [];
-  } catch {
-    mutationQueue = [];
-  }
-  updateNoteQueueList();
-}
-
-function persistMutationQueue() {
-  try {
-    localStorage.setItem(MUTATION_QUEUE_KEY, JSON.stringify(mutationQueue));
-  } catch {
-    // localStorage full or unavailable — best effort
-  }
-}
-
-function getMutationQueue() {
-  return [...mutationQueue];
-}
-
-function isTransientError(err) {
-  if (!err) return false;
-  const msg = String(err.message || err || "").toLowerCase();
-  // Very broad match for anything that looks like a temporary server/network/proxy/CRM-backend problem.
-  // Covers real CRM being down (portal returns 502/503 with various bodies, URLError from proxy, etc.).
-  if (/typeerror|network|fetch failed|failed to fetch|timeout|econn|enotfound|resolve host|could not resolve|connection refused|unavailable|offline|bad gateway|gateway|upstream|service unavailable|backend|proxy/.test(msg)) {
-    return true;
-  }
-  if (/502|503|504|500|5\d{2}/.test(msg) || /http 5\d\d/.test(msg) || /\b5[0-9]{2}\b/.test(msg)) {
-    return true;
-  }
-  // Known OnlyOffice/CRM proxy error strings when its backend CRM services are unreachable
-  if (/could not resolve crm|crm user|resolve crm/.test(msg)) {
-    return true;
-  }
-  return false;
-}
-
-function enqueueCrmMutation(descriptor) {
-  if (!descriptor || !descriptor.path) return;
-  if (mutationQueue.length >= MAX_QUEUE_SIZE) {
-    mutationQueue.shift(); // drop oldest on cap
-  }
-  const item = {
-    id: (Date.now() + Math.random()).toString(36),
-    ts: Date.now(),
-    ...descriptor,
-  };
-  mutationQueue.push(item);
-  persistMutationQueue();
-  updateMutationSyncStatus();
-  // Kick the processor shortly after enqueue
-  setTimeout(() => { processMutationQueue().catch(() => {}); }, 50);
-}
-
-let _mqInFlight = false;
-
-async function processMutationQueue() {
-  if (_mqInFlight) return;
-  if (!navigator.onLine) return;
-  _mqInFlight = true;
-  try {
-    while (mutationQueue.length > 0) {
-      if (!navigator.onLine) break;
-      const item = mutationQueue[0];
-      try {
-        await api(item.path, {
-          method: item.method || "POST",
-          headers: item.headers || { "Content-Type": "application/json" },
-          body: item.body || undefined,
-          showCrashBanner: false,
-        });
-        // Success — remove, persist, notify, and reconcile
-        mutationQueue.shift();
-        persistMutationQueue();
-        updateMutationSyncStatus();
-        onCRMSuccess();
-        if (item.opType === "history") {
-          addCompletedNoteQueueEntry({
-            preview: item.notePreview,
-            attachmentNames: item.attachmentNames || [],
-            failedNames: item.failedAttachmentNames || [],
-            status: "success",
-          });
-        }
-        try {
-          showToast(`Synced: ${item.description || 'CRM action'}`);
-        } catch {}
-        // Light reconciliation. loadTasks covers task creates/closes.
-        // For opportunity mutations the optimistic state + next natural group load/refresh is usually sufficient;
-        // we can expand this later with targeted refreshGroup if needed.
-        loadTasks().catch(() => {});
-        if (item.opType === 'task') {
-          // Also refresh the full tasks list modal if it's currently open, so newly synced
-          // tasks (created while offline) appear without the user having to close/re-open.
-          const listModal = $("#tasks-list-modal");
-          if (listModal && !listModal.classList.contains("hidden")) {
-            // Re-fetch by hiding and re-opening the modal (listeners are re-bound but acceptable for this flow).
-            listModal.classList.add("hidden");
-            setTimeout(() => {
-              try { openTasksListModal(); } catch {}
-            }, 80);
-          }
-        }
-        // Gentle full refresh for opp changes (quiet).
-        // NOTE: 'history' (event notes) intentionally omitted — adding a note does not change board cards/tiles,
-        // and the full refreshAll (profile + renders) was causing perceived UI hang shortly after send.
-        // Defer to avoid blocking clicks / main thread during/after pushes.
-        if (item.opType === 'stage' || item.opType === 'due' || item.opType === 'tag') {
-          if (item.opType === 'tag' && item.oppId != null) {
-            state.oppTagCache?.invalidate(item.oppId);
-          }
-          setTimeout(() => { refreshAll({ force: true }).catch(() => {}); }, 50);
-        }
-      } catch (err) {
-        // Only drop queued actions on clear *permanent client errors* (bad data that will never succeed
-        // even when CRM is healthy). Anything network/5xx/unknown/server-down related must stay in the
-        // queue and keep retrying. This prevents the scary "action dropped non-retryable" toast during
-        // normal "CRM server is down" testing or transient outages.
-        const m = String(err && err.message || err || "").toLowerCase();
-        const status = parseInt((m.match(/\b([45]\d{2})\b/) || [0, 0])[1], 10);
-        const isPermanentClientError =
-          (status >= 400 && status < 500 && status !== 429 && status !== 408) ||
-          /bad request|validation|invalid (request|data|field|value|id)|malformed|missing required|cannot (create|update)|not allowed|forbidden|unauthorized/.test(m);
-
-        if (isPermanentClientError && !isTransientError(err)) {
-          mutationQueue.shift();
-          persistMutationQueue();
-          if (item.opType === "history") {
-            addCompletedNoteQueueEntry({
-              preview: item.notePreview,
-              attachmentNames: item.attachmentNames || [],
-              failedNames: item.failedAttachmentNames || [],
-              status: "fail",
-            });
-          }
-          try {
-            showToast(`Sync failed for "${item.description || item.path}". Action dropped (non-retryable client error).`, true);
-          } catch {}
-          continue;
-        }
-        // Transient (including all CRM-down, proxy, 5xx, network cases) — keep in queue for retry
-        break;
-      }
-    }
-  } finally {
-    _mqInFlight = false;
-  }
-  updateMutationSyncStatus();
-}
-
-function updateMutationSyncStatus() {
-  const el = $("#mutation-sync-status");
-  if (!el) return;
-  const count = mutationQueue.length;
-  const now = Date.now();
-  const hasStaleQueued = mutationQueue.some(item => now - (item.ts || 0) > QUEUE_MARQUEE_DELAY_MS);
-  const showPill = hasStaleQueued && count > 0 && (now - lastCRMSuccessTime > QUEUE_MARQUEE_DELAY_MS);
-
-  if (count > 0 && showPill) {
-    el.textContent = `${count} pending`;
-    el.classList.remove("hidden");
-    el.title = `${count} CRM action(s) queued for sync`;
-  } else {
-    el.textContent = "";
-    el.classList.add("hidden");
-  }
-
-  // Header marquee indicator (scrolling, minimal): only shows for actual stale queued items from push failures.
-  // (Global time-based + periodic poller removed to stop frequent false positives.)
-  updateCrmHeaderMarquee(count, hasStaleQueued);
-  updateNoteQueueList();
-}
-
-function updateNoteQueueList() {
-  const el = $("#note-queue-list");
-  if (!el) return;
-
-  const items = [];
-
-  // Pending history items from the main mutation queue (not yet sent or retrying)
-  for (const item of mutationQueue) {
-    if (item.opType === "history") {
-      const preview = item.notePreview || "(note)";
-      const atts = (item.attachmentNames || []).join(", ");
-      const fails = (item.failedAttachmentNames || []).join(", ");
-      let text = preview;
-      if (atts) text += ` + ${atts}`;
-      if (fails) text += ` (some failed: ${fails})`;
-      items.push(`<span class="note-queue-item">⏳ ${escapeHtml(text)}</span>`);
-    }
-  }
-
-  // Completed (success or fail) — will be pruned by their own timers
-  for (const c of noteQueueCompleted) {
-    const preview = c.preview || "(note)";
-    let text = preview;
-    if (c.attachmentNames && c.attachmentNames.length) text += ` + ${c.attachmentNames.join(", ")}`;
-    if (c.failedNames && c.failedNames.length) text += ` (failed: ${c.failedNames.join(", ")})`;
-    const cls = c.status === "success" ? "success" : "fail";
-    const icon = c.status === "success" ? "✓" : "✕";
-    items.push(`<span class="note-queue-item ${cls}">${icon} ${escapeHtml(text)}</span>`);
-  }
-
-  el.innerHTML = items.join("");
-  syncIndicatorStack();
-}
-
-function addCompletedNoteQueueEntry({ preview, attachmentNames = [], failedNames = [], status }) {
-  const entry = {
-    id: Date.now() + Math.random(),
-    preview,
-    attachmentNames,
-    failedNames,
-    status: status || "success",
-    completedAt: Date.now(),
-  };
-  noteQueueCompleted.push(entry);
-  // Auto clear this entry after exactly 10s (per spec: "10 second timer on completion")
-  setTimeout(() => {
-    noteQueueCompleted = noteQueueCompleted.filter((e) => e.id !== entry.id);
-    updateNoteQueueList();
-  }, 10000);
-  updateNoteQueueList();
-}
-
-function updateCrmHeaderMarquee(count, hasStale) {
-  const marquee = $("#crm-header-marquee");
-  if (!marquee) return;
-
-  const openModal = document.querySelector(".modal:not(.hidden)");
-  // Only show for actual stale queued actions from failed pushes (original behavior).
-  // Removed global "time since last success" check + periodic poller that was causing frequent false "unreachable" indicators.
-  const shouldShow = !openModal && (count > 0 && hasStale);
-
-  if (shouldShow) {
-    let text = `❗ CRM unreachable — actions queued locally until restored`;
-    if (count > 0) text += ` (${count} pending)`;
-    // Use duplicated content for seamless scroll
-    marquee.innerHTML = `<span>${text} • ${text}</span>`;
-    marquee.classList.remove("hidden");
-    marquee.style.display = "";
-
-    // Once the header marquee (the connectivity indicator) is visible and carrying the pending count,
-    // the bottom progress bar is redundant — hide it. The marquee is now the persistent signal.
-    try { hideCRMSyncStatus(); } catch {}
-    const pill = $("#mutation-sync-status");
-    if (pill) {
-      pill.classList.add("hidden");
-      pill.textContent = "";
-    }
-  } else {
-    marquee.classList.add("hidden");
-    marquee.style.display = "none";
-    marquee.innerHTML = "";
-  }
-}
-
-function getSyncStatusEl() {
-  if (!_syncStatusEl || !_syncStatusEl.parentNode) {
-    _syncStatusEl = document.createElement("div");
-    _syncStatusEl.id = "crm-sync-status";
-    _syncStatusEl.className = "crm-sync-status";
-    document.body.appendChild(_syncStatusEl);
-  }
-  return _syncStatusEl;
-}
-
-function showCRMSyncStatus(text, isWarning = false) {
-  const marquee = $("#crm-header-marquee");
-  const marqueeActive = marquee && !marquee.classList.contains("hidden") && marquee.style.display !== "none";
-
-  // When the header marquee is the active persistent "unreachable + N pending" indicator,
-  // suppress the bottom progress bar (it carries overlapping info).
-  if (marqueeActive && isWarning) {
-    // For the persistent warning state, let the marquee own it.
-    return;
-  }
-
-  const el = getSyncStatusEl();
-  el.innerHTML = `<span>${text}</span><div class="progress"><div class="progress-bar"></div></div>`;
-  if (isWarning) {
-    el.classList.add("warning");
-  } else {
-    el.classList.remove("warning");
-  }
-  el.style.display = "";
-  repositionRightIndicator(el);
-  syncIndicatorStack();
-}
-
-function hideCRMSyncStatus() {
-  if (_crmRefreshing) {
-    // Don't hide the bar during a global CRM refresh — restore the refresh message
-    // so the user still sees progress. Individual mutations (deal edit, notes, etc.)
-    // may have temporarily overridden it with their own status text.
-    showCRMSyncStatus("Loading CRM data…");
-    return;
-  }
-  if (_syncStatusEl) {
-    _syncStatusEl.style.display = "none";
-    _syncStatusEl.classList.remove("warning");
-  }
-}
-
-function clearConnectingTimer() {
-  if (connectingTimer) {
-    clearTimeout(connectingTimer);
-    connectingTimer = null;
-  }
-}
-
-function showRefreshingStatus(text = 'Refreshing CRM data\u2026') {
-  const el = getSyncStatusEl();
-  el.innerHTML = `<span class="refreshing-spinner"></span><span>${text}</span>`;
-  el.classList.remove("warning");
-  el.style.display = "";
-}
-function hideRefreshingStatus() {
-  hideCRMSyncStatus();
-}
-
-function setConnectionState(newState) {
-  if (connectionState === newState) return;
-  connectionState = newState;
-  updateMutationSyncStatus();
-}
-
-function startConnectingGrace(descriptor) {
-  setConnectionState('connecting');
-  showCRMSyncStatus('Connecting...');
-
-  clearConnectingTimer();
-  connectingTimer = setTimeout(() => {
-    // Only confirm failed if we are STILL in connecting after full 10s.
-    // This means the push is stuck and we switch to queue. Success would have cleared the timer.
-    if (connectionState === 'connecting') {
-      setConnectionState('disconnected');
-      // The persistent signal is the header marquee (after its 8s delay + post-close check).
-      // Hide any bottom bar message here so we don't leave stale "unreachable" text when the
-      // marquee takes over.
-      hideCRMSyncStatus();
-    }
-  }, CONNECTING_GRACE_MS);
-}
-
-let _crashBannerSuppressUntil = 0;
-
-function onCRMSuccess() {
-  clearConnectingTimer();
-  lastCRMSuccessTime = Date.now();
-  setConnectionState('connected');
-  hideCrmCrashBanner();
-  // Do NOT auto-hide here. The "sent successfully" messages in form handlers control
-  // a deliberate linger (so the progress bar is visible for a readable moment even on fast success).
-  // General CRM successes will rely on the per-action "sent" calls or other hides.
-}
-
-function showCrmCrashBanner() {
-  if (Date.now() < _crashBannerSuppressUntil) return;
-  const el = $("#crm-crash-banner");
-  if (!el) return;
-  el.textContent = "CRM is temporarily unreachable and may have crashed. Refresh again in 30 seconds or contact system administrator.";
-  el.classList.remove("hidden");
-}
-
-function hideCrmCrashBanner() {
-  const el = $("#crm-crash-banner");
-  if (el) el.classList.add("hidden");
-}
+function isTransientError() { return false; }
+function addCompletedNoteQueueEntry() {}
+function onCRMSuccess() {}
+function showCrmCrashBanner() {}
+function hideCrmCrashBanner() {}
+function showCRMSyncStatus() {}
+function hideCRMSyncStatus() {}
+function showRefreshingStatus() {}
+function hideRefreshingStatus() {}
+function clearConnectingTimer() {}
+function setConnectionState() {}
+function startConnectingGrace() {}
+function enqueueCrmMutation() {}
+async function processMutationQueue() {}
+function updateMutationSyncStatus() {}
+function updateNoteQueueList() {}
 
 function showSubmittingNote(button, message = 'Submitting — do not press the button again') {
   if (!button || !button.parentNode) return null;
-  // Remove any previous note
   const prev = button.parentNode.querySelector('.submitting-note');
   if (prev) prev.remove();
   const note = document.createElement('div');
@@ -2412,28 +2010,10 @@ function showSubmittingNote(button, message = 'Submitting — do not press the b
 }
 
 /**
- * Thin wrapper used to make specific CRM mutators queue on transient failure.
- * Returns {queued: true} on transient (caller can early-return), otherwise the result of mutateFn.
- * Hard errors are re-thrown unchanged (preserves all existing modal/global error UX).
+ * Thin wrapper — no longer queues on transient failure, just calls mutateFn directly.
  */
 async function withCrmQueueOnTransient(mutateFn, descriptor) {
-  const desc = descriptor.description || 'action';
-  try {
-    const result = await mutateFn();
-    onCRMSuccess();
-    // Form submit handlers fully control the progress bar sequence (Connecting -> Connected & Syncing -> success).
-    // Non-form/inline actions rely on showToast for feedback instead of the bar.
-    // (Removed auto "sent successfully" here to prevent overlapping/reappearing messages on the bar after forms take over.)
-    return result;
-  } catch (err) {
-    if (isTransientError(err)) {
-      enqueueCrmMutation(descriptor);
-      startConnectingGrace(descriptor);
-      return { queued: true };
-    }
-    hideCRMSyncStatus();
-    throw err;
-  }
+  return await mutateFn();
 }
 
 function newGroup(overrides = {}) {
@@ -3773,7 +3353,6 @@ async function loadUserProfileFromServer() {
   let serverProfile = null;
   try {
     const headers = { Accept: "application/json" };
-    if (state.portalUrl) headers["X-OnlyOffice-Portal"] = state.portalUrl;
     const res = await fetch("/api/user-profile", { credentials: "same-origin", headers });
     const data = await res.json().catch(() => ({}));
     if (res.ok && data && typeof data === "object") serverProfile = data;
@@ -3825,7 +3404,6 @@ async function saveUserProfileToServer({ quiet = false } = {}) {
   persistProfileToLocalStorage();
   try {
     const headers = { Accept: "application/json", "Content-Type": "application/json" };
-    if (state.portalUrl) headers["X-OnlyOffice-Portal"] = state.portalUrl;
     const res = await fetch("/api/user-profile", {
       method: "PUT",
       credentials: "same-origin",
@@ -9069,7 +8647,6 @@ async function uploadAttachmentForNote(file) {
   fd.append("file", file);
 
   const uploadHeaders = {};
-  if (state.portalUrl) uploadHeaders["X-OnlyOffice-Portal"] = state.portalUrl;
 
   const res = await fetch(url, {
     method: "POST",
@@ -11133,13 +10710,9 @@ function getPresenceUserId(u) {
   return String(u.id ?? u.ID ?? u.userId ?? u.UserId ?? "");
 }
 
-// Helper for direct presence API calls (bypass the /api/proxy wrapper).
-// Always sends credentials + X-OnlyOffice-Portal (when known) so server _portal_base
-// works even if the python process has no PORTAL_URL env. Matches pattern used by
-// user-profile direct fetches and api() wrapper.
+// Helper for direct API calls (bypass the /api/proxy wrapper).
 function presenceFetch(path, init = {}) {
   const headers = { ...(init.headers || {}) };
-  if (state.portalUrl) headers["X-OnlyOffice-Portal"] = state.portalUrl;
   return fetch(path, { credentials: "same-origin", ...init, cache: "no-cache", headers });
 }
 
@@ -19429,10 +19002,7 @@ document.addEventListener("visibilitychange", () => {
     }
     groupCardObservers.clear();
   } else {
-    // Tab just became visible — suppress crash banner for 15s to absorb
-    // stale-connection failures from browser throttle during background.
-    _crashBannerSuppressUntil = Date.now() + 15000;
-    // Re-observe after a short delay to let the browser settle
+    // Tab just became visible — re-observe after a short delay to let the browser settle
     setTimeout(() => {
       for (const group of state.groups) {
         if (group._el && !tileBodyCollapsed(`group-${group.id}`)) {
@@ -19852,7 +19422,6 @@ async function refreshAll({ force = false } = {}) {
 function showApp() {
   $("#login-screen").classList.add("hidden");
   $("#app").classList.remove("hidden");
-  $("#portal-label").textContent = state.portalUrl;
   renderDailyFocus();
   noteDashboardActivity();
   startPanelTileAutoRefresh();
@@ -19867,7 +19436,6 @@ function showLogin() {
   userProfileReady = false;
   $("#app").classList.add("hidden");
   $("#login-screen").classList.remove("hidden");
-  $("#portal-url").value = state.portalUrl || DEFAULT_PORTAL;
 }
 
 function getDailyQuote() {
@@ -19974,16 +19542,9 @@ function bindChangelogModal(version) {
 }
 
 async function init() {
-  // Load any previously queued CRM mutations (survives reload / offline periods).
-  loadMutationQueue();
   loadEventLogFromStorage();
-  updateMutationSyncStatus();
 
   const config = await (await fetch("/api/config")).json();
-  if (config.portalUrl) {
-    state.portalUrl = config.portalUrl;
-    localStorage.setItem("oo_portal_url", state.portalUrl);
-  }
   // Version next to sign out (loaded from server /VERSION so it auto-updates on release)
   const verEl = $("#app-version");
   if (verEl) verEl.textContent = config.version ? "v" + config.version : "v1.7.5";
@@ -20034,20 +19595,6 @@ async function init() {
     showLogin();
   });
 
-  // Mutation queue lifecycle wiring (client-side only, per plan)
-  window.addEventListener("online", () => {
-    processMutationQueue().catch(() => {});
-  });
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") {
-      processMutationQueue().catch(() => {});
-    }
-  });
-  // Background safety net (the guard + online check inside process make this cheap)
-  setInterval(() => {
-    processMutationQueue().catch(() => {});
-  }, RETRY_INTERVAL_MS);
-
   $("#login-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const errEl = $("#login-error");
@@ -20069,7 +19616,6 @@ async function init() {
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
         body: JSON.stringify({
-          portalUrl: $("#portal-url").value.trim().replace(/\/$/, ""),
           userName: $("#username").value,
           password: $("#password").value,
         }),
@@ -20078,8 +19624,6 @@ async function init() {
       clearTimeout(timeoutId);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || data.detail || "Login failed");
-      state.portalUrl = data.portalUrl || $("#portal-url").value.trim();
-      localStorage.setItem("oo_portal_url", state.portalUrl);
       showApp();
       // Start presence (bind button, heartbeats for self-online, snapshot for indicators/badge) immediately.
       // This makes the header icon show indicators right away, and button responsive without waiting for refreshAll.
@@ -20092,7 +19636,6 @@ async function init() {
         await refreshAll();
         try { ensurePresenceOnLogin(); } catch {}
         loadTaskCategories({ force: true }).catch(() => {});
-        processMutationQueue().catch(() => {});
       }, 0);
     } catch (err) {
       clearTimeout(timeoutId);
@@ -20125,7 +19668,6 @@ async function init() {
       await refreshAll();
       try { ensurePresenceOnLogin(); } catch {}
       loadTaskCategories({ force: false }).catch(() => {});
-      processMutationQueue().catch(() => {});
     }, 0);
   } else {
     showLogin();
