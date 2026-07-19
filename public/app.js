@@ -19165,8 +19165,7 @@ async function refreshAll({ force = false } = {}) {
         }
       }
     }
-    updateBotCustomersBtn();
-    updateBrandingBtn();
+    // bot and branding buttons removed (consolidated into admin console)
     updateAdminConsoleBtn();
     syncFeedFilterPlaceholder();
     // Re-render bookmark sidebar + button states now that profile (including bookmarkedDeals) is loaded
@@ -19463,7 +19462,7 @@ async function init() {
   const config = await (await fetch("/api/config")).json();
   // Version next to sign out (loaded from server /VERSION so it auto-updates on release)
   const verEl = $("#app-version");
-  if (verEl) verEl.textContent = "Sietch CRM " + (config.version ? "v" + config.version : "v1.7.5");
+  if (verEl) verEl.textContent = config.version ? "v" + config.version : "v1.7.5";
 
   // Load branding configuration
   try {
