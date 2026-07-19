@@ -1,7 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** Phase 2A search popup tabs wired (commit 7de588f). Also fixed add tile modal close: added onclick fallbacks directly on cancel button and backdrop HTML elements (the JS event listeners were not firing — root cause unclear; fallback approach guarantees the buttons work). Added Phase 2H (Documents modal) to plan: shared folder file manager with list/upload/delete/rename/copy/move/open-in-editor, header button with files icon. Refresh dashboard and Nuke Cache buttons still useful. Commit 1c83244 pushed. Next: Phase 2D tile layout, or Phase 2H documents modal, or continue Phase 2A.
+**Last session summary (for next resume):** Fixed add tile modal close (onclick fallbacks on cancel + backdrop, commit 1c83244). Wrote detailed Phase 2H plan to sietch-crm-plan.md: three scopes (project/personal/company), full file manager UI, batch ops, search, header button, overhauled per-project docs tab. DB migration, backend endpoints, frontend modal, implementation order all documented. Commit cf7fbdd pushed. Next: Phase 2D tile layout or Phase 2H build (DB migration + backend first).
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 
