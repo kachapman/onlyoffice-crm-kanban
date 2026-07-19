@@ -7,7 +7,7 @@ services:
       - .env
     environment:
       PORT: "8766"
-      COOKIE_SECURE: "true"
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
       DB_HOST: db
       DB_PORT: "5432"
       DOCS_INTERNAL_URL: http://docserver:8080
@@ -23,7 +23,7 @@ services:
       - vanguard-internal
 
   db:
-    image: postgres:16-alpine
+    image: docker.io/library/postgres:16-alpine
     container_name: sietch-db
     restart: always
     env_file:
@@ -44,7 +44,7 @@ services:
       - vanguard-internal
 
   docserver:
-    image: onlyoffice/documentserver:latest
+    image: docker.io/onlyoffice/documentserver:latest
     container_name: sietch-docserver
     restart: unless-stopped
     environment:
@@ -60,7 +60,7 @@ services:
       - vanguard-internal
 
   redis:
-    image: redis:7-alpine
+    image: docker.io/library/redis:7-alpine
     container_name: sietch-redis
     restart: unless-stopped
     networks:

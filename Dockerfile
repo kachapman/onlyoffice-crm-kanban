@@ -4,9 +4,9 @@ WORKDIR /app
 
 RUN useradd --create-home --uid 10001 appuser
 
-RUN pip install --no-cache-dir psycopg2-binary Pillow ExifRead
+RUN pip install --no-cache-dir psycopg2-binary Pillow ExifRead httpx
 
-COPY server.py db.py auth.py smtp_client.py ics_calendar.py notes_store.py user_profile_store.py presence_store.py event_log_store.py crm_bot_store.py ./
+COPY server.py db.py auth.py smtp_client.py ics_calendar.py notes_store.py user_profile_store.py presence_store.py event_log_store.py crm_bot_store.py notification_dispatcher.py telegram_bot.py ./
 COPY VERSION ./
 COPY CHANGELOG.md ./
 COPY init.sql ./
