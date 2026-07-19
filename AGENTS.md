@@ -1,7 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** Updated plan/AGENTS with non-negotiables (preserve data/layout like OO API, contacts support, refer to prod/main for tiles/preview, git+docs after changes, focus functional first). Started admin console consolidation (icons in tabs, no separate btns), header "Sietch CRM [ver]" static, logos static for footer/favicon/name. Fix flashing by original hover (no re-render on mouseover). Sync later. Go.
+**Last session summary (for next resume):** Added non-negotiables to plan/AGENTS (preserve OO data/layout, contacts impl, refer prod, git+docs always, functional first). Admin: button to right of header left of signout; tabs current order + exact SVGs next to titles (branding/bot/logs); no separate btns. Header static "Sietch CRM [ver]". Logos static footer/favicon/name. Fixed flashing: original hover border light-up (disabled observer re-render). Committed with git. Next: contacts support, more admin content move, keep functional focus (sync later).
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 
