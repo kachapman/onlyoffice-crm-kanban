@@ -19,7 +19,8 @@ On **both** the export host and the import host:
 
 ```bash
 cd ~
-git clone git@github.com:kachapman/onlyoffice-crm-kanban.git sietch-migration || true
+# Use HTTPS (SSH keys often not present on servers)
+git clone https://github.com/kachapman/onlyoffice-crm-kanban.git sietch-migration || true
 cd sietch-migration
 git fetch origin
 git checkout new-crm

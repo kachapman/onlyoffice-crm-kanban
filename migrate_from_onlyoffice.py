@@ -26,10 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-try:
-    import psycopg2
-except ImportError:
-    sys.exit("psycopg2 not found. Install with: pip install psycopg2-binary")
+# psycopg2 is only required for non-export runs
+psycopg2 = None
 
 
 # ── Configuration ──────────────────────────────────────────────────────────────
@@ -812,6 +810,11 @@ def main():
         return
 
     # ── Connect to PostgreSQL ──
+    try:
+        import psycopg2
+    except ImportError:
+        sys.exit("psycopg2 not found. Install with: pip install psycopg2-binary")
+
     print(f"\nConnecting to PostgreSQL at {args.db_host}:{args.db_port}/{args.db_name}...")
     conn = psycopg2.connect(
         host=args.db_host,
