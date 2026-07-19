@@ -2,7 +2,9 @@
 """One-time migration from OnlyOffice CRM to PostgreSQL (Vanguard CRM v3.0).
 
 Run after init.sql has been executed and the PostgreSQL container is up.
-Requires: psycopg2 (pip install psycopg2-binary)
+
+For --export-only (recommended for round-trip tests): no psycopg2 required.
+For full migration (writes to DB): requires psycopg2 (pip install psycopg2-binary)
 
 Usage:
     python migrate_from_onlyoffice.py --portal-url https://office.publicadjustermidwest.com --email admin@example.com --password secret
