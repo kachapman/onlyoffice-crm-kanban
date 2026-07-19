@@ -25,6 +25,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse, urlencode
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logger = logging.getLogger("sietch_server")
+
 from ics_calendar import _MAX_ICS_BYTES, is_allowed_calendar_url, parse_ics_calendar
 
 # ── Version ────────────────────────────────────────────────────────────────────
@@ -540,56 +545,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                     "faviconPath": "/favicon.ico",
                 })
             return
-        if api_path == "/api/branding" and method == "POST":
-            user = _require_admin(self)
-            if not user:
-                return
-            try:
-                payload = json.loads(_read_body(self) or b"{}")
-            except json.JSONDecodeError:
-                _json_response(self, 400, {"error": "Invalid JSON body"})
-                return
-            try:
-                # Update or insert branding
-                existing = db.query_one("SELECT id FROM branding LIMIT 1")
-                if existing:
-                    db.execute(
-                        """UPDATE branding SET
-                            company_name = COALESCE(%s, company_name),
-                            logo_path = COALESCE(%s, logo_path),
-                            watermark_path = %s,
-                            login_title = COALESCE(%s, login_title),
-                            header_eyebrow = COALESCE(%s, header_eyebrow),
-                            header_title = COALESCE(%s, header_title),
-                            primary_color = COALESCE(%s, primary_color),
-                            favicon_path = COALESCE(%s, favicon_path),
-                            updated_at = NOW()
-                        WHERE id = %s""",
-                        (payload.get("companyName"), payload.get("logoPath"),
-                         payload.get("watermarkPath"), payload.get("loginTitle"),
-                         payload.get("headerEyebrow"), payload.get("headerTitle"),
-                         payload.get("primaryColor"), payload.get("faviconPath"),
-                         existing["id"]),
-                    )
-                else:
-                    db.execute(
-                        """INSERT INTO branding (company_name, logo_path, watermark_path,
-                            login_title, header_eyebrow, header_title, primary_color, favicon_path)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-                        (payload.get("companyName", "Sietch CRM"),
-                         payload.get("logoPath", "/assets/sietch-logo.png"),
-                         payload.get("watermarkPath"),
-                         payload.get("loginTitle", "Sietch CRM"),
-                         payload.get("headerEyebrow", "Sietch CRM"),
-                         payload.get("headerTitle", "Workspace <em>dashboard</em>"),
-                         payload.get("primaryColor", "#3b82f6"),
-                         payload.get("faviconPath", "/favicon.ico")),
-                    )
-                _json_response(self, 200, {"ok": True})
-            except Exception:
-                logger.exception("Failed to update branding")
-                _json_response(self, 500, {"error": "Failed to update branding"})
-            return
         if api_path == "/api/changelog":
             cl = Path(__file__).parent / "CHANGELOG.md"
             body = cl.read_text("utf-8") if cl.exists() else "# Changelog\n\nNo changelog available."
@@ -794,6 +749,57 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         if api_path == "/api/v2/auth/change-password" and method == "POST":
             self._handle_change_password()
+            return
+
+        # ── Branding (admin) ──
+        if api_path == "/api/branding" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON body"})
+                return
+            try:
+                existing = db.query_one("SELECT id FROM branding LIMIT 1")
+                if existing:
+                    db.execute(
+                        """UPDATE branding SET
+                            company_name = COALESCE(%s, company_name),
+                            logo_path = COALESCE(%s, logo_path),
+                            watermark_path = %s,
+                            login_title = COALESCE(%s, login_title),
+                            header_eyebrow = COALESCE(%s, header_eyebrow),
+                            header_title = COALESCE(%s, header_title),
+                            primary_color = COALESCE(%s, primary_color),
+                            favicon_path = COALESCE(%s, favicon_path),
+                            updated_at = NOW()
+                        WHERE id = %s""",
+                        (payload.get("companyName"), payload.get("logoPath"),
+                         payload.get("watermarkPath"), payload.get("loginTitle"),
+                         payload.get("headerEyebrow"), payload.get("headerTitle"),
+                         payload.get("primaryColor"), payload.get("faviconPath"),
+                         existing["id"]),
+                    )
+                else:
+                    db.execute(
+                        """INSERT INTO branding (company_name, logo_path, watermark_path,
+                            login_title, header_eyebrow, header_title, primary_color, favicon_path)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                        (payload.get("companyName", "Sietch CRM"),
+                         payload.get("logoPath", "/assets/sietch-logo.png"),
+                         payload.get("watermarkPath"),
+                         payload.get("loginTitle", "Sietch CRM"),
+                         payload.get("headerEyebrow", "Sietch CRM"),
+                         payload.get("headerTitle", "Workspace <em>dashboard</em>"),
+                         payload.get("primaryColor", "#3b82f6"),
+                         payload.get("faviconPath", "/favicon.ico")),
+                    )
+                _json_response(self, 200, {"ok": True})
+            except Exception:
+                logger.exception("Failed to update branding")
+                _json_response(self, 500, {"error": "Failed to update branding"})
             return
 
         # ── Bot customers (admin) ──

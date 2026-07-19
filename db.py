@@ -116,6 +116,26 @@ def insert_returning(sql: str, params: tuple | None = None) -> Any:
         put_conn(conn)
 
 
+def query_one(sql: str, params: tuple | None = None) -> dict | None:
+    """Execute a query and return a single row as a dict, or None."""
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, params or ())
+        row = cur.fetchone()
+        conn.commit()
+        if not row:
+            return None
+        columns = [desc[0] for desc in cur.description]
+        return row_to_dict(row, columns)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        put_conn(conn)
+
+
 def row_to_dict(row, columns: list[str] | None = None) -> dict:
     """Convert a DB row (tuple) to a dict using column names from cursor.description, or explicit list."""
     if columns:

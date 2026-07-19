@@ -1,7 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** Created `sietch-crm-plan.md` as the single source of truth for migration phases, confirmed decisions (branch `new-crm`, card title click opens preview, one JSON per entity type for export, bidirectional hourly sync, Document Server for future docs). Active work: Phase 1 follow-up UI/JS fixes (kanban stage/stageType field paths, defensive localeCompare, remove preview button, move POST /api/branding out of GET handler, active-user filter for Team tile). Previous: Document Server integration, migration fixes, CSV import, dashboard-local data migration, JS syntax fixes, project-list index fix. See `sietch-crm-plan.md` for current progress.
+**Last session summary (for next resume):** Implemented Phase 1 follow-up UI/JS fixes and committed: kanban now reads `stageId`/`stageType` from top-level (app.js: resolveOppStageId/resolveOppStageType), defensive `localeCompare` everywhere, removed card preview button + title click opens preview, moved POST /api/branding to _handle_api_post_put (server.py), added db.query_one + logger, portalUsers captures isActive + filters inactive in presence roster. Verified locally (branding save, projects shape, users isActive). Updated sietch-crm-plan.md, CHANGELOG.md, AGENTS.md. See sietch-crm-plan.md.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 

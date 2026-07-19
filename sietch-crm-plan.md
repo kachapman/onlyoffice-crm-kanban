@@ -63,15 +63,15 @@ This document is the single source of truth for phases, progress, and open decis
 | 1F: Threaded replies | ✅ | API endpoints and UI exist. |
 | 1G: Bot + Presence | ✅ | Bot and presence adapted to local DB. Telegram notification dispatch exists. |
 
-### Phase 1 follow-up fixes (active — do now)
+### Phase 1 follow-up fixes (done)
 
 Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local v2 API.
 
-- [ ] **Kanban display:** The v2 API returns `stageId` and `stageType` as top-level fields on opportunity objects, but the frontend still reads `opp.stage.status` / `opp.stage.stageType`. Update `isOpenOpportunity`, `stageTypeKey`, `groupOpportunities`, and `sortCards` to use the top-level fields.
-- [ ] **JS `localeCompare` crashes:** defensive string coercion on all `localeCompare` arguments.
-- [ ] **Card title interaction:** remove the card-level "Preview" button; make the project title click open the preview modal. No CRM link needed.
-- [ ] **Branding save:** `POST /api/branding` is currently defined inside `_handle_api_get`, so it is unreachable. Move it to `_handle_api_post_put`.
-- [ ] **Team tile active-user filter:** Read `isActive` from `/api/v2/users` and filter the Team tile roster to active users only.
+- [x] **Kanban display:** Fixed in `app.js`: added `resolveOppStageId`/`resolveOppStageType`, updated `isOpenOpportunity`, `stageTypeKey`, `groupOpportunities`, `sortCards`.
+- [x] **JS `localeCompare` crashes:** All calls now use `String(...)` coercion.
+- [x] **Card title interaction:** Removed preview button from `renderCard`; title link now calls `openOpportunityPreviewModal`. Also updated feed notification title behavior for consistency. Removed unused `CARD_ICON_PREVIEW_SCREEN`.
+- [x] **Branding save:** Moved `POST /api/branding` to `_handle_api_post_put` in `server.py`. Added `db.query_one` helper and `logger` definition.
+- [x] **Team tile active-user filter:** Server presence endpoints already filter `WHERE is_active = TRUE`. Frontend: `loadPortalUsers` now captures `isActive`, and `renderPresenceUserList` filters inactive users. Verified via `/api/v2/users`.
 
 ### Phase 2: UI Enhancements + Features
 
@@ -137,6 +137,7 @@ Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local 
 - 2026-07-18: `9bb823c` — CSV import and project-list fix.
 - 2026-07-18: `7f28153` — Fix projects list stage/contact field indices and add CSV import script.
 - 2026-07-18: `a2e8cb2` — Fix JS syntax error after `uploadAttachmentForNote` refactor.
+- 2026-07-19: Phase 1 follow-up fixes committed (kanban fields, `localeCompare`, card title→preview, branding POST route, active-user filter). Verified locally: branding save works, `/api/v2/projects` returns top-level `stageId`/`stageType`, `/api/v2/users` returns `isActive`.
 - 2026-07-18: `60d880b` — Add dashboard-local data migration tooling.
 - 2026-07-18: `b7d091b` — Expose dashboard on `0.0.0.0` and DB on `127.0.0.1:5432`.
 - 2026-07-18: `0fb82e3` — Fix local deployment for Podman.
@@ -147,8 +148,6 @@ Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local 
 
 ## Next action
 
-Implement Phase 1 follow-up fixes:
-1. `server.py` — move `POST /api/branding` to `_handle_api_post_put`.
-2. `public/app.js` — fix kanban field reading, `localeCompare`, card title click, active-user filter.
+Phase 1 follow-up complete. Next: Phase 2 export tooling (`--export-only` mode + `import_json_export.py`).
 
-Then commit and update this plan.
+Update AGENTS.md and commit.

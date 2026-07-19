@@ -5683,7 +5683,11 @@ function dealTagsChanged(initialTags, nextTags) {
 }
 
 function resolveOppStageId(opp) {
-  return opp.stage?.id ?? opp.stage?.ID ?? opp.stageId ?? opp.StageId ?? "";
+  return opp.stageId ?? opp.stage?.id ?? opp.stage?.ID ?? opp.StageId ?? "";
+}
+
+function resolveOppStageType(opp) {
+  return opp.stageType ?? opp.stage?.stageType ?? opp.stage?.status ?? opp.StageType ?? "";
 }
 
 /** Due today or earlier — matches CRM “red” overdue opportunities. */
@@ -5709,7 +5713,7 @@ function oppCreatedMs(opp) {
 }
 
 function isOpenOpportunity(opp) {
-  const st = opp.stage?.status ?? opp.stage?.stageType;
+  const st = resolveOppStageType(opp);
   if (st === 1 || st === 2 || st === "ClosedAndWon" || st === "ClosedAndLost") return false;
   return st === 0 || st === "Open" || st == null || st === "";
 }
@@ -5770,7 +5774,7 @@ function sortCards(items, group) {
     let cmp = 0;
     switch (sortBy) {
       case "title":
-        cmp = (a.title || "").localeCompare(b.title || "");
+        cmp = String(a.title || "").localeCompare(String(b.title || ""));
         break;
       case "bidvalue":
         cmp = (a.bidValue || 0) - (b.bidValue || 0);
@@ -5784,10 +5788,10 @@ function sortCards(items, group) {
         break;
       }
       default: {
-        const sa = stageOrder.get(Number(a.stage?.id)) ?? 999;
-        const sb = stageOrder.get(Number(b.stage?.id)) ?? 999;
+        const sa = stageOrder.get(Number(resolveOppStageId(a))) ?? 999;
+        const sb = stageOrder.get(Number(resolveOppStageId(b))) ?? 999;
         cmp = sa - sb;
-        if (cmp === 0) cmp = (a.title || "").localeCompare(b.title || "");
+        if (cmp === 0) cmp = String(a.title || "").localeCompare(String(b.title || ""));
       }
     }
     return cmp * mul;
@@ -5795,7 +5799,7 @@ function sortCards(items, group) {
 }
 
 function stageTypeKey(opp) {
-  const st = opp.stage?.status ?? opp.stage?.stageType;
+  const st = resolveOppStageType(opp);
   if (st === 0 || st === "Open") return "open";
   if (st === 1 || st === "ClosedAndWon") return "won";
   if (st === 2 || st === "ClosedAndLost") return "lost";
@@ -5821,7 +5825,7 @@ function groupOpportunities(group) {
     const byId = new Map(columns.map((c) => [c.stageId, c]));
 
     for (const opp of sorted) {
-      const sid = Number(opp.stage?.id ?? opp.stage?.ID);
+      const sid = Number(resolveOppStageId(opp));
       if (!Number.isFinite(sid) || sid <= 0) continue;
       const col = byId.get(sid);
       if (col) {
@@ -5897,7 +5901,7 @@ function groupOpportunities(group) {
     return out.sort((a, b) => {
       if (a.id === "_untagged") return 1;
       if (b.id === "_untagged") return -1;
-      return a.title.localeCompare(b.title);
+      return String(a.title || "").localeCompare(String(b.title || ""));
     });
   }
 
@@ -6132,8 +6136,6 @@ function appendCardDetailLine(container, label, value) {
   container.appendChild(line);
 }
 
-const CARD_ICON_PREVIEW_SCREEN = `<svg class="card-action-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>`;
-
 /** Bookmark ribbon SVG — outline (not bookmarked) vs filled (bookmarked). */
 function bookmarkRibbonSvg(filled = false) {
   const fillAttr = filled ? 'currentColor' : 'none';
@@ -6148,21 +6150,6 @@ function renderCard(opp, group, showStagePill) {
   const actions = document.createElement("div");
   actions.className = "card-actions";
 
-  const previewBtn = document.createElement("button");
-  previewBtn.type = "button";
-  previewBtn.className = "card-preview-btn";
-  previewBtn.title = "Preview deal";
-  previewBtn.setAttribute("aria-label", "Preview deal");
-  previewBtn.innerHTML = CARD_ICON_PREVIEW_SCREEN;
-  previewBtn.addEventListener("click", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const id = opp.id ?? opp.ID;
-    openOpportunityPreviewModal(id, opp.title || opp.Title || "", group).catch((err) =>
-      showToast(err.message, true)
-    );
-  });
-
   const editBtn = document.createElement("button");
   editBtn.type = "button";
   editBtn.className = "card-edit-btn";
@@ -6175,7 +6162,6 @@ function renderCard(opp, group, showStagePill) {
     openDealEditModal(opp, group).catch((err) => showToast(err.message, true));
   });
 
-  actions.appendChild(previewBtn);
   actions.appendChild(editBtn);
   card.appendChild(actions);
 
@@ -6183,10 +6169,16 @@ function renderCard(opp, group, showStagePill) {
   title.className = "card-title";
   const link = document.createElement("a");
   link.className = "card-title-link";
-  link.href = crmOpportunityUrl(opp.id);
-  link.target = "_blank";
-  link.rel = "noopener noreferrer";
+  link.href = "#";
   link.textContent = opp.title || "(Untitled)";
+  link.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const id = opp.id ?? opp.ID;
+    openOpportunityPreviewModal(id, opp.title || opp.Title || "", group).catch((err) =>
+      showToast(err.message, true)
+    );
+  });
   title.appendChild(link);
 
   const meta = document.createElement("div");
@@ -7791,16 +7783,16 @@ async function loadPortalUsers() {
     const params = new URLSearchParams({
       startIndex: "0",
       count: "300",
-      employeeStatus: "Active",
     });
     const data = await api(`/api/v2/users?${params}`);
     state.portalUsers = unwrap(data)
       .map((u) => ({
         id: u.id ?? u.ID,
         displayName: u.displayName || u.DisplayName || u.userName || u.UserName || u.id,
+        isActive: u.isActive !== false && u.is_active !== false,
       }))
       .filter((u) => u.id);
-    state.portalUsers.sort((a, b) => (a.displayName || "").localeCompare(b.displayName || ""));
+    state.portalUsers.sort((a, b) => String(a.displayName || "").localeCompare(String(b.displayName || "")));
   } catch {
     state.portalUsers = [];
   }
@@ -7824,10 +7816,13 @@ function renderFeedNotificationItem(it) {
   const body = document.createElement("div");
   body.className = "feed-item-body";
   const a = document.createElement("a");
-  a.href = crmOpportunityUrl(it.id);
-  a.target = "_blank";
-  a.rel = "noopener noreferrer";
+  a.href = "#";
   a.textContent = it.title;
+  a.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openOpportunityPreviewModal(it.id, it.title);
+  });
   const meta = document.createElement("span");
   meta.className = "feed-meta";
   const when = it.date ? new Date(it.date).toLocaleString() : "";
@@ -7852,17 +7847,6 @@ function renderFeedNotificationItem(it) {
   });
 
   row.appendChild(body);
-  const previewBtn = document.createElement("button");
-  previewBtn.type = "button";
-  previewBtn.className = "card-preview-btn";
-  previewBtn.title = "Preview deal";
-  previewBtn.setAttribute("aria-label", "Preview deal");
-  previewBtn.innerHTML = CARD_ICON_PREVIEW_SCREEN;
-  previewBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    openOpportunityPreviewModal(it.id, it.title);
-  });
-  row.appendChild(previewBtn);
   row.appendChild(hideBtn);
   li.appendChild(row);
   return li;
@@ -11144,7 +11128,9 @@ function renderPresenceUserList(container, snapshot, usersCache, onUserClick) {
 
   // Base the list on the CRM portalUsers (same list used for "notify user" selects in notes/quick note/deal edit).
   // This guarantees all users (online or offline) are shown.
-  let baseUsers = state.portalUsers && state.portalUsers.length ? state.portalUsers : [];
+  let baseUsers = state.portalUsers && state.portalUsers.length
+    ? state.portalUsers.filter((u) => u.isActive !== false)
+    : [];
   if (!baseUsers.length) {
     baseUsers = usersCache || (state.presenceUsersCache ? state.presenceUsersCache.users : []);
   }
@@ -13894,7 +13880,7 @@ async function searchOpportunitiesByTitle(query, { limit = 30 } = {}) {
     }
   }
 
-  return local.sort((a, b) => a.title.localeCompare(b.title)).slice(0, limit);
+  return local.sort((a, b) => String(a.title || "").localeCompare(String(b.title || ""))).slice(0, limit);
 }
 
 async function searchOpportunitiesForTaskPicker(query) {

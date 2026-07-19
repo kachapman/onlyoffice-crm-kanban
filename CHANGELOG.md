@@ -2,6 +2,15 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Unreleased (Phase 1 follow-up)
+
+- Fixed kanban display: projects now appear in correct stage columns. `stageId` and `stageType` are now read from top-level fields on opportunity objects (server returns them at root; frontend was looking inside `opp.stage`).
+- Fixed `localeCompare` errors: all string comparisons now coerce to `String(...)` defensively.
+- Card interactions: removed the per-card "Preview" button. Clicking the project title now opens the preview modal (edit button remains).
+- Fixed branding save: `POST /api/branding` moved from the GET handler to the POST/PUT handler (`_handle_api_post_put`).
+- Team tile / presence: server already filters inactive users; added `isActive` to `portalUsers` mapping and defensive active-user filter in the presence modal roster.
+- Added `db.query_one()` helper and module-level logger for consistent error reporting.
+
 ## [3.0.0] — 2026-07-18
 
 ### Major Changes
