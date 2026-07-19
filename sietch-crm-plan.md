@@ -102,7 +102,137 @@ Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local 
 | 2E: Photo gallery | 🔲 | Backend + DB + quota/EXIF/folders ready; no frontend UI (no Photos tab in preview, no gallery/lightbox). |
 | 2F: Notification drawer | 🔲 | Feed tile + keyword filter exists; no slide-out drawer with inline replies. |
 | 2G: User profile/account modal | 🔲 | /api/user-profile exists for sync; no dedicated modal for edit (name/email/pw/prefs/pic). |
-| 2H: Documents modal | 🔲 | New shared-folder file manager modal: lists all shared documents, upload, delete, rename, copy, move, open in Document Server editor. Button in header bar (files icon). Storage: server filesystem + DB table. Document Server used only as editor (no built-in file manager API). |
+| 2H: Documents modal | 🔲 | Full file manager: three scopes (project/personal/company), list+upload+delete+rename+move+copy+batch ops+search, header button with files icon, overhauled per-project docs tab with same UI. Document Server used only as editor (no built-in file manager API). |
+
+### Phase 2H Details: Documents Modal
+
+#### Goal
+A unified Documents experience across three scopes — **per-project**, **personal (per user)**, and **company common** — with batch operations, search across all project documents, and an overhauled in-project file manager. The Document Server is used purely as an embedded editor; it has no file management API of its own.
+
+#### Data Model
+
+**Table: `project_documents`** — add three columns via migration:
+
+```sql
+ALTER TABLE project_documents
+  ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  ADD COLUMN company_scope BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN notes TEXT;
+CREATE INDEX idx_documents_user ON project_documents(user_id) WHERE user_id IS NOT NULL;
+CREATE INDEX idx_documents_company ON project_documents(company_scope) WHERE company_scope = TRUE;
+```
+
+**Scope derived from columns:**
+- `opportunity_id IS NOT NULL` → **project document** (belongs to that project)
+- `user_id IS NOT NULL AND opportunity_id IS NULL AND company_scope = FALSE` → **personal document**
+- `company_scope = TRUE` → **company document**
+
+**File storage paths:**
+- Project: `DOCUMENT_STORAGE_PATH / shared / project / {opp_id} / {filename}`
+- Personal: `DOCUMENT_STORAGE_PATH / shared / personal / {user_id} / {filename}`
+- Company: `DOCUMENT_STORAGE_PATH / shared / company / {filename}`
+
+#### Backend API
+
+**New endpoints:**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/v2/documents/personal` | List current user's personal docs |
+| `GET` | `/api/v2/documents/company` | List all company-shared docs |
+| `GET` | `/api/v2/documents/search?q=&project_id=` | Search all project docs; `project_id` optional; results grouped by project |
+| `PATCH` | `/api/v2/documents/{id}` | Rename (`{title, notes}`) or move to project (`{opportunity_id}`) |
+| `POST` | `/api/v2/documents/{id}/copy` | Copy doc; body: `{opportunity_id?, user_id?, company_scope?}` |
+| `POST` | `/api/v2/documents/batch-delete` | Batch soft-delete; body: `{ids: []}` |
+| `POST` | `/api/v2/documents/batch-move` | Batch move; body: `{ids: [], opportunity_id}` |
+| `POST` | `/api/v2/documents/batch-copy` | Batch copy; body: `{ids: [], opportunity_id?, user_id?, company_scope?}` |
+| `GET` | `/api/v2/projects/simple` | Lightweight project list for picker (id, title, stage) — recent 20 |
+
+**Keep existing:** download, editor-config, per-project list/upload, single delete.
+
+**Permissions:**
+- Delete: own doc OR admin → can delete; company doc by non-owner → 403
+- Rename/Move: own doc OR admin → can modify
+- Copy: any authenticated user
+- Upload to company: any authenticated user
+
+#### Frontend: Documents Modal
+
+**Trigger:** Header button with files icon (`icon-tabler-files`), next to email inbox button.
+
+**Modal layout** (Google Drive / OneDrive inspired, 900px wide, 80vh tall):
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Documents                              [Search...🔍]  [×] │
+├──────────────┬──────────────────────────────────────────────┤
+│ SCOPES      │  [Upload]  [Delete]  [Move]  [Copy]           │
+│              │  ──────────────────────────────────────────    │
+│ ○ Projects >│  ☐ 📄 estimate_v2.docx  Project A  2MB  Jul 15 │
+│   Project A │  ☐ 📄 photo.jpg         Project A  340KB Jul 12 │
+│   Project B │  ☐ 📄 claim-form.pdf    Project B  120KB Jul 10 │
+│   ...       │  ...                                            │
+│ ○ My Docs   │                                                 │
+│ ○ Company   │                                                 │
+└──────────────┴──────────────────────────────────────────────┘
+```
+
+**Scope sidebar (200px, left):**
+- **Projects** (expandable): shows 5 most-recent projects; clicking a project shows its docs in main area; "Search all projects" at bottom → activates search mode
+- **My Docs**: flat list of current user's personal docs
+- **Company**: flat list of company-shared docs
+
+**Main area toolbar** (appears when ≥1 item checked):
+`"3 selected"  [Delete]  [Move to Project]  [Copy to...]  [× Clear selection]`
+
+**List view columns:** `☐` checkbox, icon, title, size, modified date (hover for uploader)
+
+**Right-click context menu:** Open in editor · Download · Rename · Move to Project... · Copy to... · Delete
+
+**Project picker modal** (for Move/Copy): searchable list of all projects, recent 5 pinned at top, then alphabetical. Shows project name + stage.
+
+**Upload:** drag-and-drop zone overlay (highlight entire modal on dragover) + "+ Upload" button opens file picker. Per-file progress bar.
+
+**Search mode** (Projects → Search all, or typing in global search): results grouped under each project header, collapsible. Project headers are bold section titles.
+
+**Empty states:**
+- Project (no docs): "No documents in this project. Upload files or drag them here."
+- My Docs (empty): "No personal documents yet. Upload files or copy from a project."
+- Company (empty): "No company documents yet. Upload shared resources here."
+- Search (no results): "No documents match your search."
+
+#### Frontend: Overhaul Existing Documents Tab
+
+The Documents tab inside the opportunity preview modal gets the same file manager list UI:
+- Same list columns: checkbox, icon, title, size, date
+- Same batch toolbar when items selected
+- Upload button visible
+- "Open in editor" link per document
+- Right-click context menu
+- Search within project (simple filter input)
+
+#### UI/UX Patterns (per modern file manager research)
+
+- **Selection**: Checkbox on hover, Shift+click range, Ctrl+click toggle
+- **Batch toolbar**: Sticky top bar appears when items selected, shows count
+- **Context menu**: Right-click on row (or "..." button for touch/accessibility)
+- **Drag & drop**: Upload by dragging files onto the modal
+- **List columns**: Name, Project (in search/all scopes), Size, Modified, Owner
+- **Sort**: Click column headers, asc/desc toggle
+- **Loading**: Skeleton rows on initial load and during operations
+- **Errors**: Toast notifications for success, inline errors for failures
+
+#### Implementation Order
+
+1. DB migration (add columns + indexes)
+2. Backend: personal list, company list, rename, batch-delete, batch-move, batch-copy, search (grouped), project/simple endpoint
+3. Header button (files icon) + Documents modal shell (open/close, scope sidebar, basic list render)
+4. My Docs list + upload + delete
+5. Company Docs list + upload + delete
+6. Project Docs list in modal + search-all mode
+7. Batch operations: Delete, Move, Copy
+8. Context menu
+9. Overhaul existing Documents tab in project preview modal (same list UI + batch ops)
 
 ### Phase 3: Email + IMAP
 
