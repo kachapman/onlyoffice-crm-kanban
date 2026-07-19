@@ -819,22 +819,20 @@
     <div class="modal-card modal-card-search-popup">
       <!-- Tab bar -->
       <div class="search-popup-tabs" id="search-popup-tabs">
-        <button type="button" class="search-popup-tab search-popup-tab-search active" data-tab="search" title="Search">
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-          <span>Search</span>
+        <button type="button" class="search-popup-tab search-popup-tab-projects active" data-tab="projects" title="Projects">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          <span>Projects</span>
+        </button>
+        <button type="button" class="search-popup-tab search-popup-tab-tags" data-tab="tags" title="Filter by Tag">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h.01"/><path d="M3.5 11.5l6.5 6.5h9l2-2V7l-2-2h-9L3.5 11.5z"/></svg>
+          <span>Tags</span>
         </button>
       </div>
 
-      <!-- Search tab content -->
-      <div class="search-popup-tab-content" data-tab-content="search">
+      <!-- Projects tab content -->
+      <div class="search-popup-tab-content" data-tab-content="projects">
         <div class="search-popup-input-wrap">
           <input type="search" id="search-popup-input" class="search-popup-input" placeholder="Search open deals… (press Enter)" autocomplete="off" />
-        </div>
-        <div class="search-popup-tag-wrap">
-          <select id="search-popup-tag-select" class="search-popup-tag-select">
-            <option value="">— Select tag —</option>
-          </select>
-          <button type="button" id="search-popup-tag-search" class="btn btn-secondary btn-sm">Search by Tag</button>
         </div>
         <div class="search-popup-filter-bar">
           <select id="search-popup-stage-filter" class="search-popup-filter-select">
@@ -862,6 +860,18 @@
         </div>
         <div id="search-popup-results" class="search-popup-results"></div>
         <div id="search-popup-error" class="search-popup-error hidden"></div>
+      </div>
+
+      <!-- Tags tab content -->
+      <div class="search-popup-tab-content" data-tab-content="tags" style="display:none;">
+        <div class="search-popup-tag-wrap">
+          <select id="search-popup-tag-select" class="search-popup-tag-select">
+            <option value="">— Select tag —</option>
+          </select>
+          <button type="button" id="search-popup-tag-search" class="btn btn-secondary btn-sm">Search by Tag</button>
+        </div>
+        <div id="search-popup-tag-results" class="search-popup-results"></div>
+        <div id="search-popup-tag-error" class="search-popup-error hidden"></div>
       </div>
 
       <!-- Preview tab containers injected dynamically -->

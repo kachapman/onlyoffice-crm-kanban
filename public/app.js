@@ -15935,7 +15935,6 @@ async function openSearchPopupModal() {
     return;
   }
   modal.classList.remove("hidden");
-  activateSearchPopupTab("search");
   const input = $("#search-popup-input");
   if (input) {
     input.focus();
@@ -15945,6 +15944,7 @@ async function openSearchPopupModal() {
   populateSearchFilterDropdowns();
   if (!state.portalUsers.length) await loadPortalUsers();
   populateSearchFilterDropdowns();
+  activateSearchPopupTab("projects");
 }
 
 function populateSearchTagDropdown() {
@@ -16050,19 +16050,26 @@ function restoreMinimizedSearchTabs() {
 }
 
 function showSearchPopupError(msg) {
-  const el = $("#search-popup-error");
+  const tabs = document.querySelectorAll("#search-popup-modal .search-popup-tab-content");
+  let el = $("#search-popup-error");
+  for (const tab of tabs) {
+    if (tab.style.display !== "none" && !tab.classList.contains("hidden")) {
+      const err = tab.querySelector(".search-popup-error");
+      if (err) { el = err; break; }
+    }
+  }
   if (!el) return;
   el.textContent = msg;
   el.classList.remove("hidden");
-  // Auto-hide after 5 seconds
   setTimeout(() => hideSearchPopupError(), 5000);
 }
 
 function hideSearchPopupError() {
-  const el = $("#search-popup-error");
-  if (!el) return;
-  el.classList.add("hidden");
-  el.textContent = "";
+  const els = document.querySelectorAll("#search-popup-modal .search-popup-error");
+  for (const el of els) {
+    el.classList.add("hidden");
+    el.textContent = "";
+  }
 }
 
 function bindSearchPopupModal() {
@@ -16105,6 +16112,17 @@ function bindSearchPopupModal() {
     tagSearchBtn.addEventListener("click", (e) => {
       e.preventDefault();
       performSearchPopupTagQuery();
+    });
+  }
+
+  // Tag select Enter key
+  const tagSelect = $("#search-popup-tag-select");
+  if (tagSelect) {
+    tagSelect.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        performSearchPopupTagQuery();
+      }
     });
   }
 
@@ -16197,7 +16215,7 @@ async function performSearchPopupQuery() {
     searchPopupSelected.clear();
     updateSearchPopupBatchBar();
     const filtered = applySearchPopupFilters(opps);
-    renderSearchPopupResults(filtered);
+    renderSearchPopupResults(filtered, null, results);
   } catch (err) {
     results.innerHTML = `<p class="search-popup-results-empty">${escapeHtml(err.message)}</p>`;
   }
@@ -16205,7 +16223,7 @@ async function performSearchPopupQuery() {
 
 async function performSearchPopupTagQuery() {
   const select = $("#search-popup-tag-select");
-  const results = $("#search-popup-results");
+  const results = $("#search-popup-tag-results");
   if (!select || !results) return;
   hideSearchPopupError();
   const tagTitle = select.value.trim();
@@ -16231,16 +16249,15 @@ async function performSearchPopupTagQuery() {
     searchPopupCurrentOpps = opps;
     searchPopupCurrentTagLabel = tagTitle;
     searchPopupSelected.clear();
-    updateSearchPopupBatchBar();
-    const filtered = applySearchPopupFilters(opps);
-    renderSearchPopupResults(filtered, tagTitle);
+    // Tags tab doesn't show batch bar
+    renderSearchPopupResults(opps, tagTitle, results);
   } catch (err) {
     results.innerHTML = `<p class="search-popup-results-empty">${escapeHtml(err.message)}</p>`;
   }
 }
 
-function renderSearchPopupResults(opps, tagFilterLabel = null) {
-  const results = $("#search-popup-results");
+function renderSearchPopupResults(opps, tagFilterLabel = null, container) {
+  const results = container || $("#search-popup-results");
   if (!results) return;
   results.innerHTML = "";
   if (!opps.length) {
@@ -16456,7 +16473,7 @@ function applySearchPopupFilters(opps) {
 
 function refreshSearchPopupFilters() {
   const filtered = applySearchPopupFilters(searchPopupCurrentOpps);
-  renderSearchPopupResults(filtered, searchPopupCurrentTagLabel);
+  renderSearchPopupResults(filtered, searchPopupCurrentTagLabel, $("#search-popup-results"));
 }
 
 function updateSearchPopupBatchBar() {
@@ -16719,11 +16736,11 @@ function closeSearchPreviewTab(oppId) {
   tab.container.remove();
   searchPopupPreviewTabs.delete(id);
 
-  // If this was the active tab, switch to search
+  // If this was the active tab, switch to projects
   const tabBar = $("#search-popup-tabs");
   const activeBtn = tabBar?.querySelector(".search-popup-tab.active");
   if (!activeBtn || activeBtn.dataset.tab === `preview-${id}`) {
-    activateSearchPopupTab("search");
+    activateSearchPopupTab("projects");
   }
 }
 
@@ -16743,10 +16760,19 @@ function activateSearchPopupTab(tabId) {
     el.style.display = isMatch ? "" : "none";
   });
 
-  // Hide preview containers wrapper when search tab is active so it doesn't take up flex space
+  // Hide preview containers wrapper when projects or tags tab is active so it doesn't take up flex space
   const previewContainers = $("#search-popup-preview-containers");
   if (previewContainers) {
-    previewContainers.style.display = tabId === "search" ? "none" : "";
+    const isStaticTab = tabId === "projects" || tabId === "tags";
+    previewContainers.style.display = isStaticTab ? "none" : "";
+  }
+
+  // Load data for static tabs
+  if (tabId === "projects") {
+    performSearchPopupQuery();
+  } else if (tabId === "tags") {
+    populateSearchTagDropdown();
+    performSearchPopupTagQuery();
   }
 }
 
