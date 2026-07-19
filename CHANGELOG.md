@@ -8,7 +8,9 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - Admin console: button moved to right of header (left of sign out); no separate branding/bot/event-log buttons; tabs keep current order with exact same SVGs next to titles for Branding, Bot Customers, Event Log. Added Contacts tab stub.
 - Header: static "Sietch CRM" to left of version number (under header, static not changeable).
 - Logos: footer, favicon, "Sietch CRM" name static/hardcoded (using new assets); ship watermarks remain customizable via branding.
-- Flashing on deal tiles: restored original production hover (simple border light-up on mouseover, no re-render); disabled card observer/enrich replaceWith that caused flash on visible/hover.
+- Flashing on deal tiles: restored original production hover (simple border light-up on mouseover, no re-render); disabled card observer/enrich replaceWith that caused flash on visible/hover (compared to main branch code).
+- Branding form moved into admin tab (separate modal removed to consolidate).
+- Header static "Sietch CRM" text added left of version.
 - Started consolidating branding/bot/logs into admin tabs (stubs; full move next).
 - Updated docs with non-negotiables per user direction.
 
