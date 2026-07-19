@@ -37,10 +37,8 @@ function setAccentColor(color) {
         const watermark = document.querySelector(".login-watermark");
         if (watermark) watermark.src = branding.watermarkPath;
       }
-      if (branding.faviconPath) {
-        const favicon = document.querySelector('link[rel="shortcut icon"]');
-        if (favicon) favicon.href = branding.faviconPath;
-      }
+      // favicon is static (not overridable per non-negotiables); branding watermark/logo still customizable
+      // if (branding.faviconPath) { ... }
       if (branding.primaryColor) {
         setAccentColor(branding.primaryColor);
       }
@@ -17138,6 +17136,13 @@ async function renderEventLogAdminTab() {
 }
 
 async function openEventLogModal() {
+  // Consolidated into admin console per plan: no separate modal/button
+  const adminModal = $("#admin-console-modal");
+  if (adminModal) {
+    adminModal.classList.remove("hidden");
+    switchAdminTab("logs");
+  }
+  return;
   const modal = $("#event-log-modal");
   if (!modal) return;
   await loadEventLogFromServer();
@@ -17324,6 +17329,13 @@ let _botCustomersDraft = null;
 let _botCustomersMappings = [];
 
 async function openBotCustomersModal() {
+  // Consolidated into admin console per plan: no separate modal/button
+  const adminModal = $("#admin-console-modal");
+  if (adminModal) {
+    adminModal.classList.remove("hidden");
+    switchAdminTab("bot");
+  }
+  return;
   const modal = $("#bot-customers-modal");
   if (!modal) return;
 
@@ -19312,11 +19324,8 @@ function applyBranding(branding) {
     const logo = $(".hero-logo");
     if (logo) logo.src = branding.logoPath;
   }
-  // Apply custom favicon
-  if (branding.faviconPath) {
-    const favicon = $('link[rel="shortcut icon"]');
-    if (favicon) favicon.href = branding.faviconPath;
-  }
+  // favicon is static (not overridable per non-negotiables); branding watermark/logo still customizable
+  // if (branding.faviconPath) { ... }
   // Apply primary color
   if (branding.primaryColor) {
     setAccentColor(branding.primaryColor);
@@ -19328,6 +19337,13 @@ function applyBranding(branding) {
 let _brandingData = null;
 
 async function openBrandingModal() {
+  // Consolidated into admin console per plan: no separate modal/button
+  const adminModal = $("#admin-console-modal");
+  if (adminModal) {
+    adminModal.classList.remove("hidden");
+    switchAdminTab("branding");
+  }
+  return; // old branding modal deprecated
   const modal = $("#branding-modal");
   if (!modal) return;
 
