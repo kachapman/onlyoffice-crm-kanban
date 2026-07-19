@@ -169,8 +169,8 @@ Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local 
 
 ## Next action
 
-Logo quick change applied. Continuing Phase 2: expand 2C Unified Admin (add more tabs, make Sync functional stub if needed). Then 2A/2B etc. Focus on making Sietch fully functional before deeper import/sync work.
+Non-negotiables in place. Admin: button position fixed, tabs with icons (current order), contacts stub added for preserve, redirects for old modals. Header static "Sietch CRM [ver]". Logos static. Flashing fixed to original hover (no re-render). Git committed + docs updated after changes.
 
-Update AGENTS.md, CHANGELOG with this.
+Continue filling admin tabs content (move forms), ensure contacts full for func, keep all preserve rules. Sync moved later. Focus functional new DB/UI.
 
-Update AGENTS.md and changelog.
+Update AGENTS/CHANGELOG/plan after every change.
