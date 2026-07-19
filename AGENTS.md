@@ -1,7 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** Phase 2 importer heavily improved: added full tasks import, enhanced history w/ category mapping+create, custom field defs, opp tag attachments, better JSON unwrap, dry-run, counts, notes for follow-ups. Script now ready to deploy/run for migration (after export JSON transfer). Updated plan/AGENTS. See sietch-crm-plan.md.
+**Last session summary (for next resume):** Added docs/ROUNDTRIP_EXPORT_IMPORT_TEST.md with exact commands to (1) get the scripts onto the OnlyOffice droplet / chapmanserver / new CRM host via git or scp, (2) run --export-only on a host that can reach the live CRM with bot creds, (3) scp the JSON dir, (4) run import_json_export.py against the target Postgres, (5) optional migrate_dashboard_data.py remap, (6) verification queries + dashboard smoke test. Importer is considered ready for a real round-trip test. See docs/ROUNDTRIP_EXPORT_IMPORT_TEST.md and sietch-crm-plan.md.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 
