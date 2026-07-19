@@ -28,7 +28,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-# psycopg2 is only required for non-export runs
+# psycopg2 is only required for non-export runs.
+# We set it to None here so --export-only works even if the package is not installed.
 psycopg2 = None
 
 
@@ -388,7 +389,7 @@ def _migrate_contacts(conn, portal: str, token: str) -> int:
 def _migrate_opportunities(conn, portal: str, token: str) -> tuple[int, int, int]:
     """Step 6: Pull all opportunities (all stages) with tags, custom fields, history, files."""
     print("\n[Step 6] Migrating opportunities (all stages)...")
-    crm_opps = _paginate(portal, token, "/api/2.0/crm/opportunity/filter?stageType=-1&sortBy=date_created&sortOrder=descending")
+    crm_opps = _paginate(portal, token, "/api/2.0/crm/opportunity/filter?count=500")
 
     opp_count = 0
     history_count = 0
@@ -723,29 +724,48 @@ def _do_export_only(portal: str, token: str, out_dir: Path) -> None:
     except Exception as e:
         print(f"  [warn] custom_fields: {e}")
 
-    # Contacts
+    # Contacts (working /filter query)
     print("Exporting contacts...")
     try:
-        contacts = _paginate(portal, token, "/api/2.0/crm/contact")
+        contacts = _paginate(portal, token, "/api/2.0/crm/contact/filter?count=500")
         _write_json(out_dir, "contacts", contacts)
     except Exception as e:
         print(f"  [warn] contacts: {e}")
 
-    # Opportunities (all stages)
-    print("Exporting opportunities (all stages)...")
+    # Opportunities (working query)
+    print("Exporting opportunities...")
     try:
-        opps = _paginate(portal, token, "/api/2.0/crm/opportunity/filter?stageType=-1&sortBy=date_created&sortOrder=descending")
+        opps = _paginate(portal, token, "/api/2.0/crm/opportunity/filter?count=500")
         _write_json(out_dir, "opportunities", opps)
     except Exception as e:
         print(f"  [warn] opportunities: {e}")
 
-    # History (large)
+    # History — per-opportunity (the only pattern that works)
     print("Exporting history events...")
+    history = []
     try:
-        history = _paginate(portal, token, "/api/2.0/crm/history/filter?entityType=opportunity&count=500")
+        opps = json.load(open(out_dir / "opportunities.json")) or []
+        total = len(opps)
+        for idx, opp in enumerate(opps):
+            if not isinstance(opp, dict): continue
+            oid = opp.get("id") or opp.get("ID")
+            if not oid: continue
+            try:
+                hlist = _unwrap(_crm_get(portal, token, f"/api/2.0/crm/history/filter?entityType=opportunity&entityId={oid}&count=500"))
+                if isinstance(hlist, list):
+                    for h in hlist:
+                        if isinstance(h, dict):
+                            h["entityId"] = oid
+                    history.extend(hlist)
+            except Exception:
+                pass
+            if (idx + 1) % 100 == 0:
+                print(f"  ... {idx+1}/{total} opportunities")
         _write_json(out_dir, "history", history)
+        print(f"  → {len(history)} history events")
     except Exception as e:
         print(f"  [warn] history: {e}")
+        _write_json(out_dir, "history", history)
 
     # Tasks
     print("Exporting tasks...")

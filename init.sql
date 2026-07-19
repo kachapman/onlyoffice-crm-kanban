@@ -53,7 +53,7 @@ CREATE TABLE password_reset_tokens (
 
 CREATE TABLE stages (
     id SERIAL PRIMARY KEY,
-    title TEXT NOT NULL,
+    title TEXT NOT NULL UNIQUE,
     color TEXT,
     sort_order INTEGER DEFAULT 0,
     stage_type SMALLINT DEFAULT 0,
@@ -587,7 +587,7 @@ CREATE TABLE user_profiles (
 CREATE TABLE branding (
     id SERIAL PRIMARY KEY,
     company_name TEXT DEFAULT 'Sietch CRM',
-    logo_path TEXT DEFAULT '/assets/sietch-logo.png',
+    logo_path TEXT DEFAULT '/assets/sietch-logo-2-nobg2.png',
     watermark_path TEXT,
     login_title TEXT DEFAULT 'Sietch CRM',
     header_eyebrow TEXT DEFAULT 'Sietch CRM',

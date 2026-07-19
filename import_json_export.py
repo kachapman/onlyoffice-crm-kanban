@@ -101,34 +101,42 @@ def _insert_tags(conn, tags: list[dict]) -> dict[str, int]:
 
 
 def _insert_custom_fields(conn, cfs: list[dict]) -> dict[str, int]:
-    """Import custom field definitions."""
+    """Import custom field definitions (updated for current schema)."""
     if not cfs:
         return {}
     cur = conn.cursor()
     crm_to_v3: dict[str, int] = {}
     count = 0
+    type_map = {
+        "text": "text", "textarea": "textarea", "htmleditor": "textarea",
+        "select": "select", "combobox": "select", "checkbox": "checkbox",
+        "date": "date", "datetime": "date", "number": "number",
+        "money": "currency", "currency": "currency",
+    }
     for cf in cfs:
         if not isinstance(cf, dict):
             continue
-        title = str(cf.get("label") or cf.get("title") or cf.get("name") or cf.get("fieldTitle") or "").strip()
-        if not title:
+        label = str(cf.get("label") or cf.get("title") or cf.get("name") or cf.get("fieldTitle") or "").strip()
+        if not label:
             continue
-        field_type = cf.get("fieldType") or cf.get("type") or 0
-        try:
-            field_type = int(field_type)
-        except:
-            field_type = 0
+        crm_id = str(cf.get("id") or cf.get("ID") or "")
+        field_key = str(cf.get("key") or cf.get("fieldKey") or "").strip() or f"field_{crm_id or label.lower().replace(' ', '_')}"
+        field_type = str(cf.get("fieldType") or cf.get("type") or cf.get("Type") or "text").strip().lower()
+        mapped_type = type_map.get(field_type, "text")
+        is_required = bool(cf.get("isRequired") or cf.get("IsRequired"))
+        sort_order = int(cf.get("sortOrder") or cf.get("position") or 0)
         cur.execute(
-            """INSERT INTO custom_field_definitions (title, field_type, sort_order)
-               VALUES (%s, %s, %s)
-               ON CONFLICT (title) DO NOTHING
+            """INSERT INTO custom_field_definitions (field_key, label, field_type, is_required, sort_order)
+               VALUES (%s, %s, %s, %s, %s)
+               ON CONFLICT (field_key) DO UPDATE SET
+                   label = EXCLUDED.label, field_type = EXCLUDED.field_type
                RETURNING id""",
-            (title, field_type, cf.get("sortOrder") or 0),
+            (field_key, label, mapped_type, is_required, sort_order),
         )
         row = cur.fetchone()
         if row:
-            crm_id = str(cf.get("id") or cf.get("ID") or title)
-            crm_to_v3[crm_id] = row[0]
+            if crm_id:
+                crm_to_v3[crm_id] = row[0]
             count += 1
     conn.commit()
     print(f"  custom fields: {count}")
@@ -181,26 +189,28 @@ def _insert_contacts(conn, contacts: list[dict], user_map: dict) -> dict[str, in
         return {}
     cur = conn.cursor()
     crm_to_v3: dict[str, int] = {}
+    count = 0
     for c in contacts:
         if not isinstance(c, dict):
             continue
         crm_id = str(c.get("id") or c.get("ID") or "")
-        name = c.get("displayName") or c.get("title") or "Contact"
-        email = c.get("email") or ""
-        # Minimal insert
+        first_name = str(c.get("firstName") or c.get("FirstName") or "").strip() or None
+        last_name = str(c.get("lastName") or c.get("LastName") or "").strip() or None
+        email = str(c.get("email") or c.get("Email") or "").strip() or None
+        phone = str(c.get("phone") or c.get("Phone") or "").strip() or None
+        company = str(c.get("companyName") or c.get("CompanyName") or c.get("displayName") or "").strip() or None
         cur.execute(
-            """INSERT INTO contacts (display_name, email, created_at)
-               VALUES (%s, %s, NOW())
-               ON CONFLICT (email) DO NOTHING
+            """INSERT INTO contacts (first_name, last_name, email, phone, company)
+               VALUES (%s, %s, %s, %s, %s)
                RETURNING id""",
-            (name, email or None),
+            (first_name, last_name, email, phone, company),
         )
-        row = cur.fetchone()
-        if row:
-            vid = row[0]
-            if crm_id:
-                crm_to_v3[crm_id] = vid
+        vid = cur.fetchone()[0]
+        if crm_id:
+            crm_to_v3[crm_id] = vid
+        count += 1
     conn.commit()
+    print(f"  contacts: {count}")
     return crm_to_v3
 
 

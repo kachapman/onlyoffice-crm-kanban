@@ -15,5 +15,8 @@ if command -v fuser >/dev/null 2>&1; then
 fi
 
 echo "Portal: ${ONLYOFFICE_PORTAL_URL:-<enter at login>}"
-echo "Open:   http://127.0.0.1:${PORT}"
-exec python3 server.py
+PY="python3"
+if [[ -x .venv/bin/python3 ]]; then
+  PY=".venv/bin/python3"
+fi
+exec "$PY" server.py

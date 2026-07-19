@@ -1,7 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** Added docs/ROUNDTRIP_EXPORT_IMPORT_TEST.md with exact commands to (1) get the scripts onto the OnlyOffice droplet / chapmanserver / new CRM host via git or scp, (2) run --export-only on a host that can reach the live CRM with bot creds, (3) scp the JSON dir, (4) run import_json_export.py against the target Postgres, (5) optional migrate_dashboard_data.py remap, (6) verification queries + dashboard smoke test. Importer is considered ready for a real round-trip test. See docs/ROUNDTRIP_EXPORT_IMPORT_TEST.md and sietch-crm-plan.md.
+**Last session summary (for next resume):** Updated plan/AGENTS with non-negotiables (preserve data/layout like OO API, contacts support, refer to prod/main for tiles/preview, git+docs after changes, focus functional first). Started admin console consolidation (icons in tabs, no separate btns), header "Sietch CRM [ver]" static, logos static for footer/favicon/name. Fix flashing by original hover (no re-render on mouseover). Sync later. Go.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 
@@ -9,6 +9,22 @@ This file is auto-loaded by Grok into the system prompt for every session in thi
 - Resume prior work via TUI welcome screen (recent sessions for this cwd), `/load`, `grok --resume <id>`, or `-c` (continue most recent). Chat history + prior state is preserved in `~/.grok/sessions/...`.
 - Still use tools (list_dir / read_file / grep / run_terminal_command for git etc.) to inspect *current* code state — files + docs are the source of truth.
 - For new sessions: `cd <project-root>` (sets workspace/cwd for rules + session grouping).
+
+## Non-negotiables (ALWAYS FOLLOW - prevent breaking)
+- Preserve ALL current CRM data and layout **as if we are still using the OnlyOffice API**.
+  - Same note types (history_categories), opportunities, note history (embedded emails in history events), contacts, tasks, stages, tags, custom/user fields, etc.
+  - When in doubt, refer to last known production version details (git show main:...) to see what user is displaying/using in deal tiles and preview modals.
+  - Make sure links, data, functionality still work exactly.
+- **Do not change anything that does not explicitly need to be changed.**
+- Implement/replace **all** functionality/fields/modals that required OO API calls with local DB/v2 equivalents.
+- Example: Add contacts support (section/tile/admin) so old contacts data imports and contact-based func (deals, bot modal, etc.) works.
+- Focus functional first with new DB/UI. Move full data sync/import to later phase.
+- After every change: run git status --short && git diff --stat; update AGENTS.md last summary + CHANGELOG; commit with git.
+- For admin: icons in tabs (exact same SVGs next to titles), no separate buttons. Keep current tab order.
+- Hover on tiles: exact original production (mouse over lights borders, no re-render/flash).
+- Sync: timestamp based (full + delta), bot creds (show fields default hidden), pull all via history etc.
+- Header: static "Sietch CRM [version]". Footer/logo/favicon/name static (overwrite old). Watermark/header logo = customizable.
+- Git version + docs after changes.
 
 ## Project Overview & Architecture (high level, reuse these)
 - Vanilla JS dashboard (no framework) + Python backend for Sietch CRM.
@@ -80,7 +96,7 @@ Legacy open items (lower priority unless asked): FEAT-003 attachments, new toast
 - **Production shared-hosting note:** The dashboard droplet also runs other web apps. As of 2026-07, public traffic for `dashboard.publicadjustermidwest.com` is handled by the **host's nginx** (systemd service at `/etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com`), **not** the Docker `estimate-nginx` container. The dashboard container binds to `127.0.0.1:8765`. The dashboard is in a separate Compose project but joins `estimate-enhancer_estimate-network` (harmless). **Required for uploads:** `client_max_body_size 100m; proxy_request_buffering off; proxy_read_timeout 120s;` in the host site file. Always read `docs/DASHBOARD_INFRASTRUCTURE.md` (especially the 2026-07 section) before touching nginx on the host. The old `/opt/estimate-enhancer/nginx.conf` is historical for this domain.
 
 ## How to Run / Test / Deploy
-- **Dev (normal):** `cd ~/crm-kanban && cp -n config.example.env .env && ./start.sh` (or `python3 server.py`). Opens http://127.0.0.1:8766. Login with your credentials (session-cookie auth).
+- **Dev (normal):** `cd ~/crm-kanban && cp -n config.example.env .env && ./start.sh` (or `DB_HOST=127.0.0.1 ./.venv/bin/python3 server.py` if needed). Server prints LAN URLs on start (binds 0.0.0.0). Login with your credentials (session-cookie auth).
 - **Special test server (for chaos/failure testing):** `python test-server.py`. Supports controllable chaos mode via `/api/test/chaos`.
 - **Test changes:** Browser + DevTools (Network tab for API calls, Application → Local Storage for profile). Always test both happy path and failure scenarios.
 - **No tests:** No automated suite; manual + visual testing.

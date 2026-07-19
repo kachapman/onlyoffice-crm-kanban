@@ -2,6 +2,23 @@
  * Sietch CRM — multi-group opportunity board (local test portal)
  */
 
+function getContrastText(hex) {
+  try {
+    let c = (hex || "").replace("#", "");
+    if (c.length === 3) c = c[0] + c[0] + c[1] + c[1] + c[2] + c[2];
+    const r = parseInt(c.substr(0, 2), 16) || 0;
+    const g = parseInt(c.substr(2, 2), 16) || 0;
+    const b = parseInt(c.substr(4, 2), 16) || 0;
+    const y = (r * 299 + g * 587 + b * 114) / 1000;
+    return y > 160 ? "#111" : "#fff";
+  } catch (e) { return "#fff"; }
+}
+function setAccentColor(color) {
+  if (!color) return;
+  document.documentElement.style.setProperty("--accent", color);
+  document.documentElement.style.setProperty("--accent-text", getContrastText(color));
+}
+
 // Load branding early for login screen
 (async function loadBrandingEarly() {
   try {
@@ -25,7 +42,7 @@
         if (favicon) favicon.href = branding.faviconPath;
       }
       if (branding.primaryColor) {
-        document.documentElement.style.setProperty("--accent", branding.primaryColor);
+        setAccentColor(branding.primaryColor);
       }
     }
   } catch (e) {
@@ -2200,7 +2217,7 @@ function getCalendarTimezoneOptionList() {
   }
   if (!all.length) all = [...CALENDAR_TZ_FALLBACK];
   const commonSet = new Set(CALENDAR_TZ_COMMON);
-  const rest = all.filter((tz) => !commonSet.has(tz)).sort((a, b) => a.localeCompare(b));
+  const rest = all.filter((tz) => !commonSet.has(tz)).sort((a, b) => String(a).localeCompare(String(b)));
   calendarTimezoneOptionsCache = { common: [...CALENDAR_TZ_COMMON], rest };
   return calendarTimezoneOptionsCache;
 }
@@ -6370,7 +6387,7 @@ function renderGroupBoard(group, container, onComplete) {
   }
 
   if (!pending.length) {
-    observeOpportunityCardsInGroup(group);
+    // observeOpportunityCardsInGroup(group); // disabled to prevent re-render flash on hover/visible; restore original simple hover border light-up
     if (onComplete) onComplete();
     return;
   }
@@ -6396,7 +6413,7 @@ function renderGroupBoard(group, container, onComplete) {
     if (colIdx < pending.length) {
       setTimeout(renderChunk, 0);
     } else {
-      observeOpportunityCardsInGroup(group);
+      // observeOpportunityCardsInGroup(group); // disabled to prevent re-render flash on hover/visible; restore original simple hover border light-up from production
       if (onComplete) onComplete();
     }
   }
@@ -8285,7 +8302,7 @@ function renderOpportunityTagChips(mode) {
   const catalog = buildTagCatalog();
   const current = new Set(edit.tags.map((t) => normalizeTagTitle(t)).filter(Boolean));
 
-  for (const title of [...current].sort((a, b) => a.localeCompare(b))) {
+  for (const title of [...current].sort((a, b) => String(a).localeCompare(String(b)))) {
     const chip = document.createElement("span");
     chip.className = "deal-edit-tag";
     chip.dataset.tagTitle = title;
@@ -8345,12 +8362,12 @@ function populateNotifyUserSelect(selectEl) {
   selectEl.innerHTML = "";
   const users = new Map();
   for (const u of state.portalUsers) {
-    if (u.id != null) users.set(String(u.id), u.displayName || u.id);
+    if (u.id != null) users.set(String(u.id), String(u.displayName || u.id));
   }
   if (state.currentUserId != null) {
-    users.set(String(state.currentUserId), state.currentUserName || state.currentUserId);
+    users.set(String(state.currentUserId), String(state.currentUserName || state.currentUserId));
   }
-  for (const [id, name] of [...users.entries()].sort((a, b) => a[1].localeCompare(b[1]))) {
+  for (const [id, name] of [...users.entries()].sort((a, b) => String(a[1] || "").localeCompare(String(b[1] || "")))) {
     const opt = document.createElement("option");
     opt.value = id;
     opt.textContent = name;
@@ -9623,12 +9640,12 @@ function populateCreateOppResponsibleSelect() {
   sel.innerHTML = "";
   const users = new Map();
   for (const u of state.portalUsers) {
-    if (u.id != null) users.set(String(u.id), u.displayName || u.id);
+    if (u.id != null) users.set(String(u.id), String(u.displayName || u.id));
   }
   if (state.currentUserId != null) {
-    users.set(String(state.currentUserId), state.currentUserName || state.currentUserId);
+    users.set(String(state.currentUserId), String(state.currentUserName || state.currentUserId));
   }
-  for (const [id, name] of [...users.entries()].sort((a, b) => a[1].localeCompare(b[1]))) {
+  for (const [id, name] of [...users.entries()].sort((a, b) => String(a[1] || "").localeCompare(String(b[1] || "")))) {
     const opt = document.createElement("option");
     opt.value = id;
     opt.textContent = name;
@@ -9643,12 +9660,12 @@ function populateCreateOppAccessSelect() {
   sel.innerHTML = "";
   const users = new Map();
   for (const u of state.portalUsers) {
-    if (u.id != null) users.set(String(u.id), u.displayName || u.id);
+    if (u.id != null) users.set(String(u.id), String(u.displayName || u.id));
   }
   if (state.currentUserId != null) {
-    users.set(String(state.currentUserId), state.currentUserName || state.currentUserId);
+    users.set(String(state.currentUserId), String(state.currentUserName || state.currentUserId));
   }
-  for (const [id, name] of [...users.entries()].sort((a, b) => a[1].localeCompare(b[1]))) {
+  for (const [id, name] of [...users.entries()].sort((a, b) => String(a[1] || "").localeCompare(String(b[1] || "")))) {
     const opt = document.createElement("option");
     opt.value = id;
     opt.textContent = name;
@@ -13828,12 +13845,12 @@ function populateNewTaskResponsibleSelect() {
   sel.innerHTML = "";
   const users = new Map();
   for (const u of state.portalUsers) {
-    if (u.id != null) users.set(String(u.id), u.displayName || u.id);
+    if (u.id != null) users.set(String(u.id), String(u.displayName || u.id));
   }
   if (state.currentUserId != null) {
-    users.set(String(state.currentUserId), state.currentUserName || state.currentUserId);
+    users.set(String(state.currentUserId), String(state.currentUserName || state.currentUserId));
   }
-  for (const [id, name] of [...users.entries()].sort((a, b) => a[1].localeCompare(b[1]))) {
+  for (const [id, name] of [...users.entries()].sort((a, b) => String(a[1] || "").localeCompare(String(b[1] || "")))) {
     const opt = document.createElement("option");
     opt.value = id;
     opt.textContent = name;
@@ -15935,7 +15952,7 @@ function populateSearchTagDropdown() {
   if (!select) return;
   select.innerHTML = '<option value="">— Select tag —</option>';
   const tags = state.allTags || [];
-  const sorted = tags.map((t) => normalizeTagTitle(t.title ?? t)).filter(Boolean).sort((a, b) => a.localeCompare(b));
+  const sorted = tags.map((t) => normalizeTagTitle(t.title ?? t)).filter(Boolean).sort((a, b) => String(a).localeCompare(String(b)));
   for (const title of sorted) {
     const opt = document.createElement("option");
     opt.value = title;
@@ -17235,6 +17252,74 @@ function updateBrandingBtn() {
   }
 }
 
+function updateAdminConsoleBtn() {
+  const btn = $("#admin-console-btn");
+  if (!btn) return;
+  btn.classList.toggle("hidden", !state.currentUserIsAdmin);
+  if (state.currentUserIsAdmin) {
+    btn.onclick = openAdminConsoleModal;
+  }
+}
+
+function openAdminConsoleModal() {
+  const modal = $("#admin-console-modal");
+  if (!modal) return;
+  modal.classList.remove("hidden");
+  // default to overview
+  switchAdminTab("overview");
+  populateAdminOverview();
+  // bind once
+  if (!modal.dataset.bound) {
+    modal.dataset.bound = "1";
+    modal.querySelectorAll("[data-admin-console-dismiss]").forEach(el => el.addEventListener("click", () => modal.classList.add("hidden")));
+    modal.querySelectorAll(".admin-tab-btn").forEach(btn => {
+      btn.addEventListener("click", () => switchAdminTab(btn.dataset.tab));
+    });
+    // stub sync buttons (real impl later in sync phase; read-only enrich)
+    const statusEl = $("#sync-status");
+    $("#sync-test-btn")?.addEventListener("click", () => { if (statusEl) statusEl.textContent = "Connection test stub: OK (implement real auth in sync worker)."; });
+    $("#sync-tags-btn")?.addEventListener("click", () => { if (statusEl) statusEl.textContent = "Pull tags stub. Will enrich using read-only OO pull (external_id matching)."; });
+    $("#sync-tasks-btn")?.addEventListener("click", () => { if (statusEl) statusEl.textContent = "Pull tasks stub."; });
+    $("#sync-full-btn")?.addEventListener("click", () => { if (statusEl) statusEl.textContent = "Full reconcile stub. Uses read-only for now."; });
+  }
+}
+
+function switchAdminTab(tab) {
+  document.querySelectorAll("#admin-console-modal .admin-tab-content").forEach(c => c.classList.add("hidden"));
+  document.querySelectorAll("#admin-console-modal .admin-tab-btn").forEach(b => b.style.borderBottom = "");
+  const content = $(`#admin-tab-${tab}`);
+  if (content) content.classList.remove("hidden");
+  const activeBtn = document.querySelector(`#admin-console-modal .admin-tab-btn[data-tab="${tab}"]`);
+  if (activeBtn) activeBtn.style.borderBottom = "2px solid var(--accent)";
+  if (tab === "users") populateAdminUsersList();
+}
+
+async function populateAdminOverview() {
+  const el = $("#admin-overview-user");
+  if (!el) return;
+  const me = state.currentUser || {};
+  el.innerHTML = `<strong>You:</strong> ${escapeHtml(me.displayName || me.display_name || state.currentUserName || "Admin")} (${escapeHtml(me.email || state.currentUserEmail || "")}) — isAdmin: ${state.currentUserIsAdmin ? "yes" : "no"}`;
+}
+
+async function populateAdminUsersList() {
+  const container = $("#admin-tab-users");
+  if (!container) return;
+  if (container.dataset.populated === "1") return;
+  container.dataset.populated = "1";
+  try {
+    const data = await api("/api/v2/users");
+    const users = unwrap(data) || data || [];
+    const list = (users || []).map(u => {
+      const adminBadge = u.isAdmin ? ' <span style="color:var(--accent);">[admin]</span>' : '';
+      const active = u.isActive !== false ? '' : ' <span style="color:#888;">(inactive)</span>';
+      return `<div style="padding:2px 0; border-bottom:1px solid var(--border);">${escapeHtml(u.displayName || u.email)} &lt;${escapeHtml(u.email)}&gt;${adminBadge}${active}</div>`;
+    }).join("") || "<p>No users.</p>";
+    container.innerHTML = `<p><strong>Users (read-only):</strong></p>${list}<p style="font-size:0.75rem;color:var(--muted);margin-top:0.5rem;">Full CRUD later in 2C.</p>`;
+  } catch (e) {
+    container.innerHTML = `<p style="color:#b00;">Failed to load users: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
 let _botCustomersDraft = null;
 let _botCustomersMappings = [];
 
@@ -18449,17 +18534,17 @@ function populateTasksUserFilter() {
 
   const users = new Map();
   for (const u of state.portalUsers) {
-    users.set(String(u.id), u.displayName || u.id);
+    users.set(String(u.id), String(u.displayName || u.id));
   }
   for (const t of state.tasks) {
     const r = t.responsible;
-    if (r?.id) users.set(String(r.id), r.displayName || r.userName || r.id);
+    if (r?.id) users.set(String(r.id), String(r.displayName || r.userName || r.id));
   }
   if (state.currentUserId && !users.has(String(state.currentUserId))) {
-    users.set(String(state.currentUserId), state.currentUserName || state.currentUserId);
+    users.set(String(state.currentUserId), String(state.currentUserName || state.currentUserId));
   }
 
-  for (const [id, name] of [...users.entries()].sort((a, b) => a[1].localeCompare(b[1]))) {
+  for (const [id, name] of [...users.entries()].sort((a, b) => String(a[1] || "").localeCompare(String(b[1] || "")))) {
     const opt = document.createElement("option");
     opt.value = id;
     opt.textContent = name;
@@ -19051,6 +19136,7 @@ async function refreshAll({ force = false } = {}) {
     }
     updateBotCustomersBtn();
     updateBrandingBtn();
+    updateAdminConsoleBtn();
     syncFeedFilterPlaceholder();
     // Re-render bookmark sidebar + button states now that profile (including bookmarkedDeals) is loaded
     renderBookmarkTabs();
@@ -19233,7 +19319,7 @@ function applyBranding(branding) {
   }
   // Apply primary color
   if (branding.primaryColor) {
-    document.documentElement.style.setProperty("--accent", branding.primaryColor);
+    setAccentColor(branding.primaryColor);
   }
 }
 
@@ -19331,6 +19417,7 @@ function bindBrandingModal() {
   if (colorInput && colorHex) {
     colorInput.addEventListener("input", () => {
       colorHex.textContent = colorInput.value;
+      setAccentColor(colorInput.value);
     });
   }
 }
@@ -19341,7 +19428,7 @@ async function init() {
   const config = await (await fetch("/api/config")).json();
   // Version next to sign out (loaded from server /VERSION so it auto-updates on release)
   const verEl = $("#app-version");
-  if (verEl) verEl.textContent = config.version ? "v" + config.version : "v1.7.5";
+  if (verEl) verEl.textContent = "Sietch CRM " + (config.version ? "v" + config.version : "v1.7.5");
 
   // Load branding configuration
   try {

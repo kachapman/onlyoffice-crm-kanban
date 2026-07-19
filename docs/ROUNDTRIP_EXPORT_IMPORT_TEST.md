@@ -25,6 +25,7 @@ cd sietch-migration
 git fetch origin
 git checkout new-crm
 git pull origin new-crm
+# If the migrate script is still missing --export-only, the patches below will add it in-place.
 ```
 
 If you only want the scripts, you can also just scp them:

@@ -4,12 +4,28 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 ## Unreleased (Phase 1 follow-up)
 
+- Non-negotiables added to plan/AGENTS: preserve data/layout as if using OO API (note types, history with embedded emails, contacts, etc.); refer to main/prod for tiles/preview; implement contacts support; all OO API funcs replaced; focus functional first (sync later); git+docs after changes.
+- Admin console: button moved to right of header (left of sign out); no separate branding/bot/event-log buttons; tabs keep current order with exact same SVGs next to titles for Branding, Bot Customers, Event Log.
+- Header: static "Sietch CRM [version]" (under header, left of version; not changeable).
+- Logos: footer, favicon, "Sietch CRM" name static/hardcoded (using new assets); ship watermarks remain customizable.
+- Flashing on deal tiles: restored original production hover (simple border light-up on mouseover, no re-render); disabled card observer/enrich replaceWith that caused flash on visible/hover.
+- Started consolidating branding/bot/logs into admin tabs (stubs; full move next).
+- Updated docs with non-negotiables per user direction. 
+
+- OnlyOffice->Sietch data import completed and verified (1191 opps, 38898 history events, 16 contacts, 11 users) into sietch_crm; bot login + filtered API queries work.
+- Added legacy query param support (filterValue, stageType, opportunityStagesid, contactid) in server.py:_handle_projects_list so frontend group kanbans and search continue to filter correctly after import.
+- Skipped dashboard notes/profiles import (start fresh per-user); direct venv run with DB override for testing.
+- Quick logo update: dashboard now uses new sietch-logo-2-nobg2.png (pure logo) for header/branding defaults and sietch-logo-2-nobg1.png (logo+name) for footers (where logo was beside "Sietch CRM" text). Updated references in code, HTML, init.sql, README, defaults. (Issues: none major; kept ship logos for watermark/header hero.)
+- Phase 2C progress: /api/v2/me now returns camelCase consistent with login; Admin Console Overview shows live current user; Users tab now renders live list of users (read-only, with [admin] badges).
 - Fixed kanban display: projects now appear in correct stage columns. `stageId` and `stageType` are now read from top-level fields on opportunity objects (server returns them at root; frontend was looking inside `opp.stage`).
 - Fixed `localeCompare` errors: all string comparisons now coerce to `String(...)` defensively.
 - Card interactions: removed the per-card "Preview" button. Clicking the project title now opens the preview modal (edit button remains).
 - Fixed branding save: `POST /api/branding` moved from the GET handler to the POST/PUT handler (`_handle_api_post_put`).
 - Team tile / presence: server already filters inactive users; added `isActive` to `portalUsers` mapping and defensive active-user filter in the presence modal roster.
 - Added `db.query_one()` helper and module-level logger for consistent error reporting.
+- Fixed remaining `a[1].localeCompare` crashes in user select populates (create/edit/notify/task filters) by ensuring String coercion; server create now accepts stageType. This unblocks creating/editing deals in Sietch standalone.
+- Started Phase 2C: added Admin Console button (auto-visible to isAdmin users like bot/kenc via session, no extra login) + tabbed modal stub (Overview + OnlyOffice Sync read-only enrich section + placeholders).
+- Per user direction: keep imported data; read-only enrich/sync later via admin (title matching concern noted; will use external_id + richer match or fresh-to-empty if needed). Focus moved to making Sietch functional + next phases per plan (deprioritized further import diagnosis).
 
 ## [3.0.0] — 2026-07-18
 

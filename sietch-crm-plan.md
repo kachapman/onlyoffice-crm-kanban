@@ -26,13 +26,30 @@ This document is the single source of truth for phases, progress, and open decis
 
 ---
 
+## Non-negotiables (CRITICAL - do not violate)
+
+- **Preserve all current CRM data and layout as if we are still using the OnlyOffice API.** 
+  - Same note types (history_categories), opportunities, note history (with embedded emails in history events), contacts, tasks, stages, tags, custom/user fields, etc.
+  - When in doubt, refer to last known production version (main branch) details for what the user is displaying and using in deal tiles, preview modals, feed, etc.
+  - All links, data, and functionality must continue to work.
+- **Do not change anything that does not explicitly need to be changed.**
+- **Implement/replace all OO API dependent functionality** with local DB equivalents (v2 API, etc.) without breaking existing data or UI.
+- Example: Implement a contacts section/tile/admin support so old contacts data can be imported and all contact-based functionality (in deals, customer bot modal, previews, etc.) still functions.
+- **Focus first on making the CRM fully functional with the new DB and UI changes.** Move data sync / full import to later phase.
+- **Git version and update docs after every significant change** so context is not lost.
+- Preserve exact hover behavior on deal tiles (mouse over lights up borders) from production.
+
+---
+
 ## Current state
 
-- `new-crm` is the working branch. Latest commit: `9bb823c` — CSV import and project-list fix.
-- The dashboard already runs standalone with PostgreSQL, native auth, v2 API, and a self-hosted OnlyOffice Document Server.
-- Bot credentials (`bot@vanguardadj.com` / `FRi3tz4yWXrMTEZ`) have been verified to obtain a token from the live CRM.
-- Local deployment is on `chapmanserver` via `podman-compose` (Docker unavailable on this machine), dashboard at `0.0.0.0:8766`, DB at `127.0.0.1:5432`.
-- A test admin exists for local testing: `admin@example.com` / `admin123`.
+- `new-crm` is the working branch.
+- The dashboard runs standalone with PostgreSQL (sietch_crm), native auth, v2 API, Document Server.
+- One-time import of OnlyOffice data completed (1191 opps, 38898 history, 11 users, 16 contacts, 18 stages, 21 tags defs). Data KEPT (no wipe). Tags/tasks per-opp not transferred in bulk export; will be addressed via future read-only enrich/sync (not blocking functionality).
+- Focus: make Sietch fully functional standalone first (create/edit deals, no reliance on OO for core). Import diagnosis deprioritized; move through phases per plan, revisit import/sync later.
+- Bot (bot@vanguardadj.com / FRi3tz4yWXrMTEZ) and other admins (e.g. kenc) work for login.
+- Admin UIs (branding etc) auto-available to isAdmin users (no extra login).
+- Local run: use venv + DB_HOST=127.0.0.1 if needed; server binds 0.0.0.0 and prints LAN URLs.
 
 ---
 
@@ -65,13 +82,14 @@ This document is the single source of truth for phases, progress, and open decis
 
 ### Phase 1 follow-up fixes (done)
 
-Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local v2 API.
+Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local v2 API. (Additional fixes applied to ensure create/edit works with imported data.)
 
-- [x] **Kanban display:** Fixed in `app.js`: added `resolveOppStageId`/`resolveOppStageType`, updated `isOpenOpportunity`, `stageTypeKey`, `groupOpportunities`, `sortCards`.
-- [x] **JS `localeCompare` crashes:** All calls now use `String(...)` coercion.
-- [x] **Card title interaction:** Removed preview button from `renderCard`; title link now calls `openOpportunityPreviewModal`. Also updated feed notification title behavior for consistency. Removed unused `CARD_ICON_PREVIEW_SCREEN`.
-- [x] **Branding save:** Moved `POST /api/branding` to `_handle_api_post_put` in `server.py`. Added `db.query_one` helper and `logger` definition.
-- [x] **Team tile active-user filter:** Server presence endpoints already filter `WHERE is_active = TRUE`. Frontend: `loadPortalUsers` now captures `isActive`, and `renderPresenceUserList` filters inactive users. Verified via `/api/v2/users`.
+- [x] **Kanban display:** ...
+- [x] **JS `localeCompare` crashes:** All calls (including missed Map entry sorts in user selects for create/edit/notify/task filters) now use `String(...)` coercion defensively.
+- [x] **Card title interaction:** ...
+- [x] **Create/edit fixes:** Server create now accepts stageType (no longer hardcodes 0). JS user selects fixed to prevent a[1].localeCompare errors during open/create/edit modals. 
+- [x] **Branding save:** ...
+- [x] **Team tile active-user filter:** ...
 
 ### Phase 2: UI Enhancements + Features
 
@@ -139,6 +157,8 @@ Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local 
 - 2026-07-18: `a2e8cb2` — Fix JS syntax error after `uploadAttachmentForNote` refactor.
 - 2026-07-19: Phase 1 follow-up fixes committed (kanban fields, `localeCompare`, card title→preview, branding POST route, active-user filter). Verified locally.
 - 2026-07-19: Started Phase 2 export tooling: `--export-only` + `import_json_export.py` skeleton added to `migrate_from_onlyoffice.py`. Fixed user_id=1 fallback in profile migration. Footer made static (bottom of content flow).
+- Quick logo update: Replaced dashboard logos with new assets/sietch-logo-2-nobg*.png (nobg2 for pure logo in header/branding defaults; nobg1 for footers that had logo + name text beside it). Updated all references in HTML, server.py, init.sql, README. Progress: Phase 1 fixes complete (localeCompare, create/edit now functional). Issues encountered: import left tags/tasks incomplete (deprioritized per direction); multiple title matches possible for future enrich (will use external_id). Continuing to Phase 2C admin console expansion.
+- Advanced 2C: normalized /api/v2/me to camelCase (consistent isAdmin etc); added live Overview (shows current user from session) + functional Users tab (lists all users read-only via /api/v2/users with admin badges). Sync tabs remain stubbed.
 - 2026-07-18: `60d880b` — Add dashboard-local data migration tooling.
 - 2026-07-18: `b7d091b` — Expose dashboard on `0.0.0.0` and DB on `127.0.0.1:5432`.
 - 2026-07-18: `0fb82e3` — Fix local deployment for Podman.
@@ -149,8 +169,8 @@ Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local 
 
 ## Next action
 
-Phase 2 export tooling in progress. Expand `import_json_export.py` for full entities + user remap. Then test export/import.
+Logo quick change applied. Continuing Phase 2: expand 2C Unified Admin (add more tabs, make Sync functional stub if needed). Then 2A/2B etc. Focus on making Sietch fully functional before deeper import/sync work.
 
-Terminal theme (monospace dark panes for history/feed/event log) is in Phase 2D (Tile Layout + Terminal theme) per plan — after export + admin modal (2C).
+Update AGENTS.md, CHANGELOG with this.
 
-Update AGENTS.md and commit.
+Update AGENTS.md and changelog.

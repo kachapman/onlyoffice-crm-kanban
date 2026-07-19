@@ -15,6 +15,7 @@ import io
 import json
 import os
 import re
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -513,7 +514,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 if row:
                     _json_response(self, 200, {
                         "companyName": row["company_name"] or "Sietch CRM",
-                        "logoPath": row["logo_path"] or "/assets/sietch-logo.png",
+                        "logoPath": row["logo_path"] or "/assets/sietch-logo-2-nobg2.png",
                         "watermarkPath": row["watermark_path"],
                         "loginTitle": row["login_title"] or "Sietch CRM",
                         "headerEyebrow": row["header_eyebrow"] or "Sietch CRM",
@@ -524,7 +525,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 else:
                     _json_response(self, 200, {
                         "companyName": "Sietch CRM",
-                        "logoPath": "/assets/sietch-logo.png",
+                        "logoPath": "/assets/sietch-logo-2-nobg2.png",
                         "watermarkPath": None,
                         "loginTitle": "Sietch CRM",
                         "headerEyebrow": "Sietch CRM",
@@ -536,7 +537,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 logger.exception("Failed to load branding")
                 _json_response(self, 200, {
                     "companyName": "Sietch CRM",
-                    "logoPath": "/assets/sietch-logo.png",
+                    "logoPath": "/assets/sietch-logo-2-nobg2.png",
                     "watermarkPath": None,
                     "loginTitle": "Sietch CRM",
                     "headerEyebrow": "Sietch CRM",
@@ -788,7 +789,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                             login_title, header_eyebrow, header_title, primary_color, favicon_path)
                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
                         (payload.get("companyName", "Sietch CRM"),
-                         payload.get("logoPath", "/assets/sietch-logo.png"),
+                         payload.get("logoPath", "/assets/sietch-logo-2-nobg2.png"),
                          payload.get("watermarkPath"),
                          payload.get("loginTitle", "Sietch CRM"),
                          payload.get("headerEyebrow", "Sietch CRM"),
@@ -944,20 +945,34 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_auth(self)
         if not user:
             return
+        def qval(*keys):
+            for k in keys:
+                if k in qs and qs[k]:
+                    v = qs[k][0] if isinstance(qs[k], (list, tuple)) else qs[k]
+                    return v
+            return None
         where = ["1=1"]
         params: list = []
-        if "stage_type" in qs:
-            where.append("o.stage_type = %s")
-            params.append(int(qs["stage_type"][0]))
-        if "contact_id" in qs:
-            where.append("o.contact_id = %s")
-            params.append(int(qs["contact_id"][0]))
-        if "responsible_user_id" in qs:
-            where.append("o.responsible_user_id = %s")
-            params.append(int(qs["responsible_user_id"][0]))
-        if "search" in qs:
+        search = qval("search", "filterValue")
+        if search:
             where.append("o.title ILIKE %s")
-            params.append(f"%{qs['search'][0]}%")
+            params.append(f"%{search}%")
+        st = qval("stage_type", "stageType")
+        if st is not None and str(st).strip() != "":
+            where.append("o.stage_type = %s")
+            params.append(int(st))
+        sid = qval("stageId", "opportunityStagesid")
+        if sid:
+            where.append("o.stage_id = %s")
+            params.append(int(sid))
+        cid = qval("contact_id", "contactid")
+        if cid:
+            where.append("o.contact_id = %s")
+            params.append(int(cid))
+        rid = qval("responsible_user_id", "responsibleUserId")
+        if rid:
+            where.append("o.responsible_user_id = %s")
+            params.append(int(rid))
         if "tag_id" in qs:
             where.append("o.id IN (SELECT opportunity_id FROM opportunity_tags WHERE tag_id = %s)")
             params.append(int(qs["tag_id"][0]))
@@ -1045,6 +1060,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": "Title is required"})
             return
         stage_id = payload.get("stageId")
+        stage_type = payload.get("stageType") or 0
         bid_value = payload.get("bidValue")
         contact_id = payload.get("contactId")
         responsible_user_id = payload.get("responsibleUserId") or user["id"]
@@ -1055,9 +1071,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         opp_id = db.insert_returning(
             """INSERT INTO opportunities (title, description, stage_id, stage_type, bid_value,
                    expected_close_date, contact_id, responsible_user_id, created_by, is_private)
-               VALUES (%s, %s, %s, 0, %s, %s, %s, %s, %s, %s)
-               RETURNING id""",
-            (title, description, stage_id, bid_value, expected_close, contact_id, responsible_user_id, user["id"], is_private),
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id""",
+            (title, description, stage_id, stage_type, bid_value, expected_close, contact_id, responsible_user_id, user["id"], is_private),
         )
         _json_response(self, 201, {"id": opp_id, "ok": True})
 
@@ -1611,7 +1627,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_auth(self)
         if not user:
             return
-        _json_response(self, 200, user)
+        _json_response(self, 200, {
+            "id": user.get("id"),
+            "email": user.get("email"),
+            "displayName": user.get("display_name"),
+            "firstName": user.get("first_name"),
+            "lastName": user.get("last_name"),
+            "isAdmin": user.get("is_admin", False),
+            "mustChangePassword": user.get("must_change_password", False),
+        })
 
     def _handle_user_create(self) -> None:
         admin = _require_admin(self)
@@ -2582,9 +2606,31 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
+def _lan_urls(port):
+    addrs = ["127.0.0.1"]
+    try:
+        h = socket.gethostname()
+        for a in socket.gethostbyname_ex(h)[2]:
+            if a and not a.startswith("127."):
+                addrs.append(a)
+    except:
+        pass
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        a = s.getsockname()[0]
+        if a and not a.startswith("127.") and a not in addrs:
+            addrs.append(a)
+        s.close()
+    except:
+        pass
+    return [f"http://{a}:{port}" for a in sorted(set(addrs))]
+
 def main() -> None:
     server = ThreadingHTTPServer(("0.0.0.0", PORT), KanbanHandler)
     print(f"Sietch CRM v3.0 starting on port {PORT}")
+    for u in _lan_urls(PORT):
+        print(f"Open: {u}")
     print(f"Version: {APP_VERSION}")
     dispatcher_stop = start_dispatcher()
     try:
