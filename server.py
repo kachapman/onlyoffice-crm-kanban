@@ -986,8 +986,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "expectedCloseDate": str(r[6]) if r[6] else None, "probability": r[7],
                 "contactId": r[8], "responsibleUserId": r[9], "isPrivate": r[10],
                 "created": r[11].isoformat() if r[11] else None,
-                "stage": {"title": r[15], "color": r[16]} if r[15] else None,
-                "contact": {"displayName": f"{r[17] or ''} {r[18] or ''}".strip(), "company": r[19]} if r[17] or r[18] else None,
+                "stage": {"title": r[14], "color": r[15]} if r[14] else None,
+                "contact": {"displayName": f"{r[16] or ''} {r[17] or ''}".strip(), "company": r[18]} if r[16] or r[17] else None,
             })
         _json_response(self, 200, projects)
 
