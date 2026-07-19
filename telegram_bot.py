@@ -1118,7 +1118,7 @@ def main() -> None:
                     await _reply_html(
                         update,
                         "That code wasn't recognized or has expired. "
-                        "Please check with Vanguard Adjusting for a new invite code.",
+                        "Please check with your administrator for a new invite code.",
                     )
         except Exception:
             logger.exception("Unhandled error in handle_message for chat %d", chat_id)
@@ -1127,11 +1127,68 @@ def main() -> None:
             except Exception:
                 pass
 
+    async def handle_reply(update: Update, _ctx) -> None:
+        """Handle replies to notification messages — post note on project."""
+        if not update.message or not update.message.reply_to_message:
+            return
+        if not update.message.text:
+            return
+
+        chat_id = update.effective_chat.id
+        reply_to = update.message.reply_to_message
+        parent_message_id = reply_to.message_id
+
+        # Look up notification from telegram_notification_log via dashboard
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"{DASHBOARD_URL}/api/bot/notification-by-message",
+                    headers=_auth_headers(),
+                    params={"chatId": chat_id, "messageId": parent_message_id},
+                )
+                if resp.status_code != 200:
+                    return  # Not a notification reply
+                data = resp.json()
+        except Exception:
+            logger.exception("Failed to look up notification for message %s", parent_message_id)
+            return
+
+        notification_id = data.get("notificationId")
+        opp_id = data.get("opportunityId")
+        project_title = data.get("projectTitle", "Unknown Project")
+        if not notification_id or not opp_id:
+            return
+
+        # Post note to project
+        content = update.message.text
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    f"{DASHBOARD_URL}/api/bot/note",
+                    headers=_auth_headers(),
+                    json={
+                        "opportunityId": opp_id,
+                        "content": content,
+                        "categoryId": 1,  # Note category
+                    },
+                )
+                if resp.status_code == 200:
+                    await _reply_html(
+                        update,
+                        f"\u2705 <b>Note added</b>\nProject: {_escape_html(project_title)}",
+                    )
+                else:
+                    await _reply_html(update, "Failed to add note. Please try again.")
+        except Exception:
+            logger.exception("Failed to post note for reply to notification %s", notification_id)
+            await _reply_html(update, "Something went wrong. Please try again.")
+
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("tag", tag_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_handler(MessageHandler(filters.REPLY & ~filters.COMMAND, handle_reply))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("Bot polling...")

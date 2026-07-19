@@ -275,6 +275,8 @@ CREATE TABLE notifications (
     message TEXT,
     payload JSONB,
     is_read BOOLEAN DEFAULT FALSE,
+    telegram_sent BOOLEAN DEFAULT FALSE,
+    telegram_sent_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -286,6 +288,18 @@ CREATE TABLE notification_preferences (
     enabled BOOLEAN DEFAULT TRUE,
     PRIMARY KEY (user_id, notification_type)
 );
+
+-- Track Telegram messages sent for notifications (enables reply detection)
+CREATE TABLE telegram_notification_log (
+    id SERIAL PRIMARY KEY,
+    notification_id INTEGER REFERENCES notifications(id) ON DELETE CASCADE,
+    chat_id BIGINT NOT NULL,
+    message_id BIGINT NOT NULL,
+    sent_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_telegram_notification_log_notification ON telegram_notification_log(notification_id);
+CREATE INDEX idx_telegram_notification_log_chat ON telegram_notification_log(chat_id, sent_at DESC);
 
 -- Auto-create notifications when users are tagged in notes
 CREATE OR REPLACE FUNCTION create_tag_notifications()
@@ -312,6 +326,31 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trigger_create_tag_notifications
     AFTER INSERT ON history_events
     FOR EACH ROW EXECUTE FUNCTION create_tag_notifications();
+
+-- Auto-create notifications when tasks are assigned
+CREATE OR REPLACE FUNCTION create_task_notifications()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.responsible_user_id IS NOT NULL 
+       AND NEW.responsible_user_id IS DISTINCT FROM NEW.created_by THEN
+        INSERT INTO notifications (user_id, type, opportunity_id, actor_user_id, message, payload)
+        VALUES (
+            NEW.responsible_user_id,
+            'task_assigned',
+            NEW.opportunity_id,
+            NEW.created_by,
+            (SELECT u.display_name || ' assigned you a task: ' || NEW.title
+             FROM users u WHERE u.id = NEW.created_by),
+            jsonb_build_object('task_id', NEW.id, 'task_title', NEW.title, 'due_date', NEW.due_date)
+        );
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_create_task_notifications
+    AFTER INSERT ON tasks
+    FOR EACH ROW EXECUTE FUNCTION create_task_notifications();
 
 -- ============================================================================
 -- 7.11 Photo Gallery

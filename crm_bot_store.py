@@ -56,7 +56,7 @@ def list_mappings(portal: str) -> list[dict[str, Any]]:
 
 def add_mapping(portal: str, chat_id: int, contact_id: int | None, contact_name: str,
                 notes_category_id: int | None, nickname: str = "",
-                employee: bool = False) -> dict[str, Any] | str:
+                employee: bool = False, user_id: int | None = None) -> dict[str, Any] | str:
     """Add a bot mapping. Returns the mapping dict on success, or an error string on failure."""
     path = _store_path(portal)
     store = _load_file(path)
@@ -86,6 +86,7 @@ def add_mapping(portal: str, chat_id: int, contact_id: int | None, contact_name:
         "notesCategoryId": notes_category_id,
         "nickname": nickname,
         "employee": employee,
+        "userId": user_id,
         "createdAt": now,
         "updatedAt": now,
     }

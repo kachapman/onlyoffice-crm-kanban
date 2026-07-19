@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Vanguard CRM v3.0 — Standalone server with PostgreSQL backend.
+"""Sietch CRM v3.0 — Standalone server with PostgreSQL backend.
 
 Replaces OnlyOffice CRM proxy with direct database queries.
 All data owned locally. Zero external API calls.
@@ -48,6 +48,7 @@ from presence_store import (
     mark_messages_read, save_user_presence, set_last_read_dm,
     set_status, touch_crm_activity, touch_heartbeat,
 )
+from notification_dispatcher import start_dispatcher, stop_dispatcher
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parent
@@ -1911,13 +1912,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             opp_id = payload.get("opportunityId")
             content = str(payload.get("content") or "").strip()
             category_id = int(payload.get("categoryId") or 1)
+            created_by = payload.get("createdBy")
             if not opp_id or not content:
                 _json_response(self, 400, {"error": "opportunityId and content are required"})
                 return
             event_id = db.insert_returning(
                 """INSERT INTO history_events (opportunity_id, category_id, content, created_by)
-                   VALUES (%s, %s, %s, NULL) RETURNING id""",
-                (int(opp_id), category_id, content),
+                   VALUES (%s, %s, %s, %s) RETURNING id""",
+                (int(opp_id), category_id, content, int(created_by) if created_by else None),
             )
             _json_response(self, 200, {"ok": True, "eventId": event_id})
             return
@@ -1926,8 +1928,68 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             user = _require_admin(self)
             if not user:
                 return
-            # TODO: send Telegram message (Phase 1G)
-            _json_response(self, 501, {"error": "Telegram send not yet implemented"})
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON body"})
+                return
+            chat_id = payload.get("chatId")
+            text = str(payload.get("text") or "").strip()
+            if not chat_id or not text:
+                _json_response(self, 400, {"error": "chatId and text are required"})
+                return
+            reply_to = payload.get("replyToMessageId")
+            parse_mode = payload.get("parseMode", "HTML")
+            try:
+                import httpx as _httpx
+                bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+                if not bot_token:
+                    _json_response(self, 500, {"error": "TELEGRAM_BOT_TOKEN not configured"})
+                    return
+                url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+                body: dict = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+                if reply_to:
+                    body["reply_to_message_id"] = reply_to
+                resp = _httpx.post(url, json=body, timeout=10)
+                data = resp.json()
+                if data.get("ok"):
+                    _json_response(self, 200, {"ok": True, "messageId": data["result"]["message_id"]})
+                else:
+                    _json_response(self, 502, {"error": data.get("description", "Telegram API error")})
+            except Exception as exc:
+                logger.exception("Failed to send Telegram message")
+                _json_response(self, 500, {"error": str(exc)})
+            return
+
+        if api_path == "/api/bot/notification-by-message" and method == "GET":
+            if not bot_token or auth_header != f"Bearer {bot_token}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
+            chat_id = _qp.get("chatId", [""])[0]
+            message_id = _qp.get("messageId", [""])[0]
+            if not chat_id or not message_id:
+                _json_response(self, 400, {"error": "chatId and messageId are required"})
+                return
+            try:
+                row = db.query_one(
+                    """SELECT n.id AS notification_id, n.opportunity_id, o.title AS project_title
+                       FROM telegram_notification_log tnl
+                       JOIN notifications n ON n.id = tnl.notification_id
+                       LEFT JOIN opportunities o ON o.id = n.opportunity_id
+                       WHERE tnl.chat_id = %s AND tnl.message_id = %s""",
+                    (int(chat_id), int(message_id)),
+                )
+                if row:
+                    _json_response(self, 200, {
+                        "notificationId": row["notification_id"],
+                        "opportunityId": row["opportunity_id"],
+                        "projectTitle": row.get("project_title") or "Unknown Project",
+                    })
+                else:
+                    _json_response(self, 404, {"error": "Notification not found"})
+            except Exception:
+                logger.exception("Failed to look up notification by message")
+                _json_response(self, 500, {"error": "Internal error"})
             return
 
         self.send_error(404)
@@ -2082,12 +2144,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer(("0.0.0.0", PORT), KanbanHandler)
-    print(f"Vanguard CRM v3.0 starting on port {PORT}")
+    print(f"Sietch CRM v3.0 starting on port {PORT}")
     print(f"Version: {APP_VERSION}")
+    dispatcher_stop = start_dispatcher()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down...")
+        stop_dispatcher(dispatcher_stop)
         server.shutdown()
 
 
