@@ -543,7 +543,7 @@ function unwrap(data) {
   return [];
 }
 
-/** GET /api/2.0/crm/opportunity/tag/{id} returns plain tag title strings. */
+/** GET /api/v2/projects/{id}/tags returns tag objects for a project. */
 function unwrapEntityTags(data) {
   const raw = unwrap(data);
   if (!raw.length && typeof data?.response === "string") {
@@ -5264,7 +5264,7 @@ async function enrichOpportunitiesTags(items, force = false) {
         const id = opp.id ?? opp.ID;
         if (id == null) return;
         try {
-          const tagPath = `/api/2.0/crm/opportunity/tag/${id}`;
+          const tagPath = `/api/v2/projects/${id}/tags`;
           const tags = unwrapEntityTags(await api(tagPath, tagOpts));
           if (tags.length) {
             opp.tags = tags;
@@ -5304,7 +5304,7 @@ async function fetchOpportunitiesForGroup(group, opts = {}) {
   if (force) {
     state.filterResultCache?.delete(cacheKey);
   }
-  const url = `/api/2.0/crm/opportunity/filter?${baseQs}`;
+  const url = `/api/v2/projects?${baseQs}`;
   const useBypass = force && _manualGroupTileRefresh;
   const data = await api(url, useBypass ? { cache: "reload", headers: { "X-Force-Refresh": "1" } } : {});
   const rawItems = unwrap(data);
@@ -5387,7 +5387,7 @@ function serializeCrmTimestamp(dateInputValue) {
 }
 
 async function fetchOpportunityForUpdate(oppId) {
-  const data = await api(`/api/2.0/crm/opportunity/${oppId}`);
+  const data = await api(`/api/v2/projects/${oppId}`);
   return data?.response ?? data?.result ?? data;
 }
 
@@ -5449,7 +5449,7 @@ async function updateOpportunityDueDate(oppId, dateInputValue) {
     expectedCloseDate: dateInputValue ? serializeCrmTimestamp(dateInputValue) : null,
   });
   const res = await withCrmQueueOnTransient(
-    () => api(`/api/2.0/crm/opportunity/${oppId}`, {
+    () => api(`/api/v2/projects/${oppId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -5457,7 +5457,7 @@ async function updateOpportunityDueDate(oppId, dateInputValue) {
     }),
     {
       method: "PUT",
-      path: `/api/2.0/crm/opportunity/${oppId}`,
+      path: `/api/v2/projects/${oppId}`,
       body: JSON.stringify(body),
       description: `Update due date for opportunity ${oppId}`,
       opType: "due",
@@ -5481,7 +5481,7 @@ async function updateOpportunityStage(oppId, stageId) {
 
   const body = buildOpportunityPutBody(opp, overrides);
   const res = await withCrmQueueOnTransient(
-    () => api(`/api/2.0/crm/opportunity/${oppId}`, {
+    () => api(`/api/v2/projects/${oppId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -5489,7 +5489,7 @@ async function updateOpportunityStage(oppId, stageId) {
     }),
     {
       method: "PUT",
-      path: `/api/2.0/crm/opportunity/${oppId}`,
+      path: `/api/v2/projects/${oppId}`,
       body: JSON.stringify(body),
       description: `Change stage for opportunity ${oppId}`,
       opType: "stage",
@@ -5518,7 +5518,7 @@ async function updateOpportunityBulk(oppId, { dueDate, stageId, customFieldValue
     body.customFieldList = buildCustomFieldListForApi(merged);
   }
   return withCrmQueueOnTransient(
-    () => api(`/api/2.0/crm/opportunity/${oppId}`, {
+    () => api(`/api/v2/projects/${oppId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -5526,7 +5526,7 @@ async function updateOpportunityBulk(oppId, { dueDate, stageId, customFieldValue
     }),
     {
       method: "PUT",
-      path: `/api/2.0/crm/opportunity/${oppId}`,
+      path: `/api/v2/projects/${oppId}`,
       body: JSON.stringify(body),
       description: `Update opportunity ${oppId}`,
       opType: "oppUpdate",
@@ -5538,9 +5538,9 @@ async function updateOpportunityBulk(oppId, { dueDate, stageId, customFieldValue
 async function addOpportunityTag(oppId, tagTitle) {
   const tagName = normalizeTagTitle(tagTitle);
   if (!tagName) return;
-  const body = JSON.stringify({ tagName });
+  const body = JSON.stringify({ title: tagName });
   const res = await withCrmQueueOnTransient(
-    () => api(`/api/2.0/crm/opportunity/${oppId}/tag`, {
+    () => api(`/api/v2/projects/${oppId}/tags`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body,
@@ -5548,7 +5548,7 @@ async function addOpportunityTag(oppId, tagTitle) {
     }),
     {
       method: "POST",
-      path: `/api/2.0/crm/opportunity/${oppId}/tag`,
+      path: `/api/v2/projects/${oppId}/tags`,
       body,
       description: `Add tag to opportunity ${oppId}`,
       opType: "tag",
@@ -5561,18 +5561,18 @@ async function addOpportunityTag(oppId, tagTitle) {
 async function removeOpportunityTag(oppId, tagTitle) {
   const tagName = normalizeTagTitle(tagTitle);
   if (!tagName) return;
-  const body = JSON.stringify({ tagName });
+  const catalog = buildTagCatalog();
+  const tagEntry = catalog.byTitleLower.get(tagName.toLowerCase());
+  const tagId = tagEntry?.id;
+  if (tagId == null) return;
   const res = await withCrmQueueOnTransient(
-    () => api(`/api/2.0/crm/opportunity/${oppId}/tag`, {
+    () => api(`/api/v2/projects/${oppId}/tags/${tagId}`, {
       method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body,
       showCrashBanner: false,
     }),
     {
       method: "DELETE",
-      path: `/api/2.0/crm/opportunity/${oppId}/tag`,
-      body,
+      path: `/api/v2/projects/${oppId}/tags/${tagId}`,
       description: `Remove tag from opportunity ${oppId}`,
       opType: "tag",
       targetId: String(oppId),
@@ -5584,7 +5584,7 @@ async function removeOpportunityTag(oppId, tagTitle) {
 async function loadHistoryCategories() {
   if (state.historyCategories.length) return state.historyCategories;
   try {
-    const data = await api("/api/2.0/crm/history/category");
+    const data = await api("/api/v2/history-categories");
     state.historyCategories = unwrap(data);
   } catch {
     state.historyCategories = [];
@@ -5597,7 +5597,7 @@ async function loadHistoryCategories() {
         count: "80",
         entityType: "opportunity",
       });
-      const data = await api(`/api/2.0/crm/history/filter?${params}`);
+      const data = await api(`/api/v2/projects/${params.get("entityId") || "0"}/history?${params}`);
       const byId = new Map();
       for (const ev of unwrapHistoryEvents(data)) {
         const cat = ev.category ?? ev.Category;
@@ -5990,7 +5990,7 @@ async function loadOpportunityCustomFieldDefs(force = false) {
   state.customFieldDefs = [];
   state.customFieldById = new Map();
   // Only opportunity definitions IDs are valid Keys for create/update (see CRMApi.Deals.cs).
-  const paths = ["/api/2.0/crm/opportunity/customfield/definitions"];
+  const paths = ["/api/v2/custom-fields"];
   for (const path of paths) {
     try {
       const list = unwrap(await api(path));
@@ -6570,7 +6570,7 @@ async function searchContacts(query) {
     filterValue: query,
     contactListView: "WithOpportunity",
   });
-  const data = await api(`/api/2.0/crm/contact/filter?${params}`);
+  const data = await api(`/api/v2/contacts?${params}`);
   return unwrap(data);
 }
 
@@ -6866,18 +6866,18 @@ function debounceForGroup(group, fn) {
 }
 
 async function loadStages() {
-  const data = await api("/api/2.0/crm/opportunity/stage");
+  const data = await api("/api/v2/stages");
   state.stages = unwrap(data).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
 }
 
 async function loadAllTags() {
-  const data = await api("/api/2.0/crm/opportunity/tag");
+  const data = await api("/api/v2/tags");
   state.allTags = unwrap(data);
 }
 
 async function loadCurrentUser() {
   try {
-    const data = await api("/api/2.0/people/@self");
+    const data = await api("/api/v2/me");
     const me = data.response ?? data.result ?? data;
     state.currentUser = me && typeof me === "object" ? me : null;
     state.currentUserId =
@@ -7325,7 +7325,7 @@ async function fetchFeedHistoryBatch(periodFrom, pagination, force = false) {
     entityType: "opportunity",
   });
 
-  const path = `/api/2.0/crm/history/filter?${params}`;
+  const path = `/api/v2/projects/0/history?${params}`;
   let rows = [];
   try {
     rows = unwrapHistoryEvents(await api(path));
@@ -7340,7 +7340,7 @@ async function fetchFeedHistoryBatch(periodFrom, pagination, force = false) {
         startIndex: "0",
         count: String(FEED_HISTORY_PAGE_SIZE),
       });
-      const fbPath = `/api/2.0/crm/history/filter?${fallback}`;
+      const fbPath = `/api/v2/projects/0/history?${fallback}`;
       rows = unwrapHistoryEvents(await api(fbPath));
     } catch {
       pagination.historyExhausted = true;
@@ -7366,7 +7366,7 @@ async function loadCrmRelationshipNotifyEventsBulk(periodFrom, pagination, force
     count: String(FEED_MAX_EVENTS),
     entityType: "opportunity",
   });
-  const primaryPath = `/api/2.0/crm/history/filter?${primary}`;
+  const primaryPath = `/api/v2/projects/0/history?${primary}`;
   try {
     const rows = unwrapHistoryEvents(await api(primaryPath));
     maxRows = rows.length;
@@ -7380,7 +7380,7 @@ async function loadCrmRelationshipNotifyEventsBulk(periodFrom, pagination, force
   if (!maxRows) {
     try {
       const fallback = new URLSearchParams({ startIndex: "0", count: String(FEED_MAX_EVENTS) });
-      const fallbackPath = `/api/2.0/crm/history/filter?${fallback}`;
+      const fallbackPath = `/api/v2/projects/0/history?${fallback}`;
       const rows = unwrapHistoryEvents(await api(fallbackPath));
       maxRows = rows.length;
       for (const ev of rows) {
@@ -7398,93 +7398,11 @@ async function loadCrmRelationshipNotifyEventsBulk(periodFrom, pagination, force
 }
 
 async function fetchFeedMailInitial(periodFrom, existingRaw = []) {
-  const items = [];
-  const seen = new Set();
-  const myUserName = (state.currentUser?.userName || state.currentUser?.UserName || "").toLowerCase();
-  const queries = [];
-  const mailPageSize = Math.min(FEED_MAIL_PAGE_SIZE, FEED_MAX_EVENTS);
-
-  for (const search of FEED_MAIL_SEARCHES) {
-    queries.push(
-      new URLSearchParams({
-        search,
-        page_size: String(mailPageSize),
-        sortorder: "descending",
-        page: "1",
-        period_from: new Date(periodFrom).toISOString(),
-      }),
-      new URLSearchParams({
-        search,
-        page_size: String(mailPageSize),
-        sortorder: "descending",
-        page: "1",
-      })
-    );
-  }
-
-  const atFeedCap = () => buildFeedNotificationList([...existingRaw, ...items]).length >= FEED_MAX_EVENTS;
-
-  for (const q of queries) {
-    if (atFeedCap()) break;
-    try {
-      const rows = unwrap(await api(`/api/2.0/mail/messages?${q}`));
-      for (const mail of rows) {
-        if (atFeedCap()) break;
-        const parsed = parseMailNotifyMessage(mail);
-        if (!parsed) continue;
-        if (!isWithinFeedWindow(parsed.date)) continue;
-        const fromAddr = String(
-          (typeof mail.from === "string" ? mail.from : mail.from?.email || mail.from?.Email) || ""
-        ).toLowerCase();
-        if (myUserName && fromAddr && fromAddr === myUserName) continue;
-        const dedupe = `${parsed.id}-${parsed.text}-${parsed.author}-${parsed.date || ""}`;
-        if (seen.has(dedupe)) continue;
-        seen.add(dedupe);
-        items.push(parsed);
-      }
-    } catch {
-      /* try next query */
-    }
-  }
-
-  return items;
+  return [];
 }
 
 async function fetchFeedMailBatch(periodFrom, pagination) {
-  const items = [];
-  if (!pagination || pagination.mailExhausted) return items;
-
-  const myUserName = (state.currentUser?.userName || state.currentUser?.UserName || "").toLowerCase();
-  const q = new URLSearchParams({
-    search: FEED_MAIL_SEARCH,
-    page_size: String(FEED_MAIL_PAGE_SIZE),
-    sortorder: "descending",
-    page: String(pagination.mailPage),
-    period_from: new Date(periodFrom).toISOString(),
-  });
-
-  let rows = [];
-  try {
-    rows = unwrap(await api(`/api/2.0/mail/messages?${q}`));
-  } catch {
-    pagination.mailExhausted = true;
-    return items;
-  }
-
-  for (const mail of rows) {
-    const parsed = parseMailNotifyMessage(mail);
-    if (!parsed) continue;
-    if (!isWithinFeedWindow(parsed.date)) continue;
-    const fromAddr = String(
-      (typeof mail.from === "string" ? mail.from : mail.from?.email || mail.from?.Email) || ""
-    ).toLowerCase();
-    if (myUserName && fromAddr && fromAddr === myUserName) continue;
-    items.push(parsed);
-  }
-
-  pagination.mailPage += 1;
-  if (rows.length < FEED_MAIL_PAGE_SIZE) pagination.mailExhausted = true;
-  return items;
+  return [];
 }
 
 function commitFeedRawItems(rawItems) {
@@ -7872,7 +7790,7 @@ async function loadPortalUsers() {
       count: "300",
       employeeStatus: "Active",
     });
-    const data = await api(`/api/2.0/people/filter?${params}`);
+    const data = await api(`/api/v2/users?${params}`);
     state.portalUsers = unwrap(data)
       .map((u) => ({
         id: u.id ?? u.ID,
@@ -8466,7 +8384,7 @@ async function loadDealEditTags(opp) {
   const id = opp.id ?? opp.ID;
   if (!tags.length && id != null) {
     try {
-      const path = `/api/2.0/crm/opportunity/tag/${id}`;
+      const path = `/api/v2/projects/${id}/tags`;
       tags = unwrapEntityTags(await api(path));
       opp.tags = tags;
     } catch {
@@ -8639,29 +8557,21 @@ async function uploadAttachmentForNote(file) {
     // Ensure we have it (safe to call; it is idempotent-ish)
     try { await loadCurrentUser(); } catch {}
   }
-  const userId = state.currentUserId || "";
-  const submit = "ASC.Web.CRM.Classes.FileUploaderHandler, ASC.Web.CRM";
-  const url = `/api/proxy/Products/CRM/UploadProgress.ashx?submit=${encodeURIComponent(submit)}&UserID=${encodeURIComponent(userId)}`;
+  throw new Error("File upload not yet implemented (Phase 2E). Use the photo gallery after upload support is added.");
 
+  // Placeholder — upload not yet supported on v2 backend
   const fd = new FormData();
   fd.append("file", file);
 
-  const uploadHeaders = {};
-
-  const res = await fetch(url, {
+  const res = await fetch("/api/v2/projects/0/photos", {
     method: "POST",
     body: fd,
     credentials: "same-origin",
-    headers: uploadHeaders,
   });
   if (!res.ok) throw new Error(`Upload failed for ${file.name} (${res.status})`);
   const text = await res.text();
-  // The handler returns a small object literal (may be HTML-wrapped or raw JSON).
-  // Try multiple extraction strategies in order of robustness.
   let data = null;
-  // Strategy 1: raw JSON parse (if server returns clean JSON)
   try { data = JSON.parse(text); } catch {}
-  // Strategy 2: extract outermost {...} block (handles HTML-wrapped responses)
   if (!data || !data.Success) {
     try {
       const m = text.match(/\{[\s\S]*\}/);
@@ -8709,7 +8619,7 @@ async function createOpportunityHistoryEvent(oppId, { content, categoryId, notif
   if (validFileIds && validFileIds.length > 0) {
     // Use exact native form-urlencoded shape for attachments (from capture)
     // Use .json suffix for the history endpoint when sending attachments (matches native capture)
-    const historyPath = "/api/2.0/crm/history.json";
+    const historyPath = `/api/v2/projects/${oppId}/history`;
     const params = new URLSearchParams();
     params.set("content", html);
     params.set("categoryId", String(categoryId || 0));
@@ -8744,7 +8654,7 @@ async function createOpportunityHistoryEvent(oppId, { content, categoryId, notif
     descriptorBody = JSON.stringify(body);
     descriptorHeaders = { "Content-Type": "application/json" };
 
-    apiCall = () => api("/api/2.0/crm/history", {
+    apiCall = () => api(`/api/v2/projects/${oppId}/history`, {
       method: "POST",
       headers: descriptorHeaders,
       body: descriptorBody,
@@ -8752,7 +8662,7 @@ async function createOpportunityHistoryEvent(oppId, { content, categoryId, notif
     });
   }
 
-  const historyDescriptorPath = (validFileIds && validFileIds.length > 0) ? "/api/2.0/crm/history.json" : "/api/2.0/crm/history";
+  const historyDescriptorPath = `/api/v2/projects/${oppId}/history`;
 
   const res = await withCrmQueueOnTransient(apiCall, {
     method: "POST",
@@ -9998,8 +9908,7 @@ function mergeCustomFieldValues(existing, incoming) {
 
 async function fetchOpportunityCustomFieldValues(oppId) {
   const paths = [
-    `/api/2.0/crm/opportunity/${oppId}/customfield`,
-    `/api/2.0/crm/opportunity/${oppId}/customfields`,
+    `/api/v2/projects/${oppId}/custom-fields`,
   ];
   for (const path of paths) {
     try {
@@ -10031,21 +9940,19 @@ function customFieldValuesMatch(want, got) {
 
 async function setOpportunityCustomFieldValue(oppId, fieldId, fieldValue) {
   const val = String(fieldValue ?? "");
-  const qs = new URLSearchParams({ fieldValue: val }).toString();
-  const path = `/api/2.0/crm/opportunity/${oppId}/customfield/${fieldId}`;
+  const path = `/api/v2/projects/${oppId}/custom-fields`;
   const attempts = [
-    () => api(`${path}?${qs}`, { method: "POST" }),
     () =>
       api(path, {
-        method: "POST",
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fieldValue: val }),
+        body: JSON.stringify({ fields: [{ fieldId, value: val }] }),
       }),
     () =>
       api(path, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ fieldValue: val }).toString(),
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fieldValue: val }),
       }),
   ];
   let lastErr;
@@ -10066,7 +9973,7 @@ async function updateOpportunityCustomFieldsViaPut(oppId, fieldValues) {
   const merged = mergeCustomFieldValues(existing, fieldValues);
   const body = buildOpportunityPutBody(opp);
   body.customFieldList = buildCustomFieldListForApi(merged);
-  await api(`/api/2.0/crm/opportunity/${oppId}`, {
+  await api(`/api/v2/projects/${oppId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -10278,7 +10185,7 @@ function buildOpportunityCreateBody(form) {
 
 async function createCrmOpportunity(body) {
   const res = await withCrmQueueOnTransient(
-    () => api("/api/2.0/crm/opportunity", {
+    () => api("/api/v2/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -10286,7 +10193,7 @@ async function createCrmOpportunity(body) {
     }),
     {
       method: "POST",
-      path: "/api/2.0/crm/opportunity",
+      path: "/api/v2/projects",
       body: JSON.stringify(body),
       description: `Create opportunity "${body?.title || body?.Title || 'untitled'}"`,
       opType: "opp",
@@ -10710,7 +10617,7 @@ function getPresenceUserId(u) {
   return String(u.id ?? u.ID ?? u.userId ?? u.UserId ?? "");
 }
 
-// Helper for direct API calls (bypass the /api/proxy wrapper).
+// Helper for direct local API calls.
 function presenceFetch(path, init = {}) {
   const headers = { ...(init.headers || {}) };
   return fetch(path, { credentials: "same-origin", ...init, cache: "no-cache", headers });
@@ -10891,7 +10798,7 @@ function setupPresenceIdleAndAutoLogout() {
     if (idleMs >= PRESENCE_AUTO_LOGOUT_3H_MS) {
       (async () => {
         try {
-          await fetch("/api/logout", { method: "POST", credentials: "same-origin" });
+          await fetch("/api/v2/auth/logout", { method: "POST", credentials: "same-origin" });
         } catch {}
         try { showToast("Logged out due to 3 hours of inactivity"); } catch {}
         try { showLogin(); } catch {}
@@ -13520,139 +13427,69 @@ function attachMailModalListeners() {
     });
   }
 
-  // mark read // uses PUT /api/2.0/mail/conversations/mark.json (conversation-level, matching native CRM)
+  // mark read // Mail API removed in v2 — local only
   const markBtn = $("#mail-mark-read");
   if (markBtn) {
     markBtn.addEventListener("click", async () => {
       if (!mailState.selected.size) return;
       const ids = Array.from(mailState.selected);
       const idsStr = ids.map(String);
-      try {
-        const params = new URLSearchParams();
-        ids.forEach(id => params.append('ids[]', id));
-        params.append('status', 'read');
-        await api('/api/2.0/mail/conversations/mark.json', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: params.toString()
-        });
-        // Local visual update
-        idsStr.forEach(sid => mailDashboardReadIds.add(sid));
-        saveMailDashboardReadIds();
-        mailState.messages.forEach(m => {
-          const mid = String(m.id || m.ID);
-          if (idsStr.includes(mid)) m.read = true;
-        });
-        mailState.selected.clear();
-        renderMailList(mailState.messages);
-        updateMailSelectedInfo();
-        showToast(`Marked ${ids.length} conversation(s) as read`);
-      } catch (e) {
-        // Fallback: local only
-        idsStr.forEach(sid => mailDashboardReadIds.add(sid));
-        saveMailDashboardReadIds();
-        mailState.messages.forEach(m => {
-          const mid = String(m.id || m.ID);
-          if (idsStr.includes(mid)) m.read = true;
-        });
-        mailState.selected.clear();
-        renderMailList(mailState.messages);
-        updateMailSelectedInfo();
-        showToast("Marked as read (local; server push failed: " + String(e.message || e).slice(0, 80) + ")", true);
-      }
+      idsStr.forEach(sid => mailDashboardReadIds.add(sid));
+      saveMailDashboardReadIds();
+      mailState.messages.forEach(m => {
+        const mid = String(m.id || m.ID);
+        if (idsStr.includes(mid)) m.read = true;
+      });
+      mailState.selected.clear();
+      renderMailList(mailState.messages);
+      updateMailSelectedInfo();
+      showToast(`Marked ${ids.length} conversation(s) as read (local only)`);
     });
   }
 
-  // mark unread // uses PUT /api/2.0/mail/conversations/mark.json with status=unread
+  // mark unread // Mail API removed in v2 — local only
   const markUnreadBtn = $("#mail-mark-unread");
   if (markUnreadBtn) {
     markUnreadBtn.addEventListener("click", async () => {
       if (!mailState.selected.size) return;
       const ids = Array.from(mailState.selected);
       const idsStr = ids.map(String);
-      try {
-        const params = new URLSearchParams();
-        ids.forEach(id => params.append('ids[]', id));
-        params.append('status', 'unread');
-        await api('/api/2.0/mail/conversations/mark.json', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: params.toString()
-        });
-        idsStr.forEach(sid => mailDashboardReadIds.delete(sid));
-        saveMailDashboardReadIds();
-        mailState.messages.forEach(m => {
-          const mid = String(m.id || m.ID);
-          if (idsStr.includes(mid)) m.read = false;
-        });
-        mailState.selected.clear();
-        renderMailList(mailState.messages);
-        updateMailSelectedInfo();
-        showToast(`Marked ${ids.length} conversation(s) as unread`);
-      } catch (e) {
-        // Fallback: local only
-        idsStr.forEach(sid => mailDashboardReadIds.delete(sid));
-        saveMailDashboardReadIds();
-        mailState.messages.forEach(m => {
-          const mid = String(m.id || m.ID);
-          if (idsStr.includes(mid)) m.read = false;
-        });
-        mailState.selected.clear();
-        renderMailList(mailState.messages);
-        updateMailSelectedInfo();
-        showToast("Marked as unread (local; server push failed: " + String(e.message || e).slice(0, 80) + ")", true);
-      }
+      idsStr.forEach(sid => mailDashboardReadIds.delete(sid));
+      saveMailDashboardReadIds();
+      mailState.messages.forEach(m => {
+        const mid = String(m.id || m.ID);
+        if (idsStr.includes(mid)) m.read = false;
+      });
+      mailState.selected.clear();
+      renderMailList(mailState.messages);
+      updateMailSelectedInfo();
+      showToast(`Marked ${ids.length} conversation(s) as unread (local only)`);
     });
   }
 
-  // delete // uses PUT /api/2.0/mail/conversations/move.json with folder=4 (trash)
+  // delete // Mail API removed in v2 — local only
   const delBtn = $("#mail-delete");
   if (delBtn) {
     delBtn.addEventListener("click", async () => {
       if (!mailState.selected.size) return;
       if (!confirm(`Delete ${mailState.selected.size} conversation(s)?`)) return;
-      try {
-        const ids = Array.from(mailState.selected);
-        const params = new URLSearchParams();
-        ids.forEach(id => params.append('ids[]', id));
-        params.append('folder', '4');
-        await api('/api/2.0/mail/conversations/move.json', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: params.toString()
-        });
-        showToast(`Deleted ${ids.length} conversation(s)`);
-        mailState.selected.clear();
-        await loadMailMessagesForModal();
-      } catch (e) {
-        showToast("Delete failed: " + (e.message || e), true);
-      }
+      const ids = Array.from(mailState.selected);
+      showToast(`Removed ${ids.length} conversation(s) from view (local only)`);
+      mailState.selected.clear();
     });
   }
 
-  // mark all loaded as read
+  // mark all loaded as read // Mail API removed in v2 — local only
   const markAllBtn = $("#mail-mark-all-read");
   if (markAllBtn) {
     markAllBtn.addEventListener("click", async () => {
       const ids = mailState.messages.map(m => String(m.id || m.ID)).filter(Boolean);
       if (!ids.length) return;
-      try {
-        const params = new URLSearchParams();
-        ids.forEach(id => params.append('ids[]', id));
-        params.append('status', 'read');
-        await api('/api/2.0/mail/conversations/mark.json', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: params.toString()
-        });
-        ids.forEach(sid => mailDashboardReadIds.add(sid));
-        saveMailDashboardReadIds();
-        mailState.messages.forEach(m => { m.read = true; });
-        renderMailList(mailState.messages);
-        showToast(`Marked all ${ids.length} loaded as read`);
-      } catch (e) {
-        showToast("Mark all read failed: " + String(e.message || e).slice(0, 60), true);
-      }
+      ids.forEach(sid => mailDashboardReadIds.add(sid));
+      saveMailDashboardReadIds();
+      mailState.messages.forEach(m => { m.read = true; });
+      renderMailList(mailState.messages);
+      showToast(`Marked all ${ids.length} loaded as read (local only)`);
     });
   }
 
@@ -13682,17 +13519,8 @@ function attachMailModalListeners() {
       let ok = 0;
       for (const mid of ids) {
         try {
-          // Native CRM endpoint: PUT /api/2.0/mail/conversations/crm/link.json
-          // form-urlencoded: id_message=<convId>&crm_contact_ids[0][Id]=<dealId>&crm_contact_ids[0][Type]=3
-          const params = new URLSearchParams();
-          params.append('id_message', String(Number(mid)));
-          params.append('crm_contact_ids[0][Id]', String(Number(dealId)));
-          params.append('crm_contact_ids[0][Type]', '3');
-          await api('/api/2.0/mail/conversations/crm/link.json', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
-            body: params.toString()
-          });
+          // Mail CRM link API removed in v2
+          console.warn('[mail-inbox] CRM link not available in v2 API');
           ok++;
         } catch (e) {
           const msg = (e.message || e || "").toString().toLowerCase();
@@ -13733,65 +13561,13 @@ function attachMailModalListeners() {
 async function loadMailAccountsForModal() {
   const sel = $("#mail-account-select");
   if (!sel) return;
-  sel.innerHTML = '<option value="">Default / All accounts</option>';
-  try {
-    const data = await api("/api/2.0/mail/accounts");
-    const accts = unwrap(data) || [];
-    mailState.accounts = accts;
-    const seen = new Set();
-    accts.forEach(a => {
-      const accId = a.id || a.accountId;
-      const emailAddr = a.email || a.name || a.title || accId;
-      if (!emailAddr || seen.has(emailAddr)) return;
-      seen.add(emailAddr);
-      const opt = document.createElement("option");
-      opt.value = accId || emailAddr;  // prefer numeric id for accountId param in messages query
-      opt.textContent = emailAddr;  // full address
-      sel.appendChild(opt);
-    });
-  } catch (e) {
-    // non-fatal
-  }
+  sel.innerHTML = '<option value="">Mail not available in v2</option>';
 }
 
 async function loadMailMessagesForModal() {
   const list = $("#mail-list");
   if (!list) return;
-  list.innerHTML = '<div class="mail-loading">Loading emails…</div>';
-
-  const searchVal = ($("#mail-search-input")?.value || "").trim();
-  let q = `folder=1&page_size=50&sort=date&sortorder=descending`;
-  if (searchVal) q += `&search=${encodeURIComponent(searchVal)}`;
-
-  try {
-    const data = unwrap(await api(`/api/2.0/mail/conversations.json?${q}`));
-    const items = Array.isArray(data) ? data : (data?.conversations ?? data?.items ?? []);
-    if (items.length) {
-      console.debug('[mail-inbox] conversation keys:', Object.keys(items[0]).join(', '));
-    }
-
-    // Apply read status
-    items.forEach(m => {
-      const mid = String(m.id || m.ID);
-      if (getMailMessageIsRead(m)) mailDashboardReadIds.add(mid);
-      if (mailDashboardReadIds.has(mid)) m.read = true;
-    });
-
-    mailState.messages = items;
-    renderMailList(items);
-    // Update today counter
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const todayCount = items.filter(m => {
-      const d = m.date || m.receivedDate || m.Date;
-      return d && new Date(d) >= todayStart;
-    }).length;
-    const tc = $("#mail-today-count");
-    if (tc) tc.textContent = `${todayCount} (Today)`;
-  } catch (e) {
-    list.innerHTML = `<div class="mail-empty">Could not load mail: ${escapeHtml(e.message || e)}</div>`;
-  }
-  updateMailSelectedInfo();
+  list.innerHTML = '<div class="mail-empty">Mail not available in v2 API.</div>';
 }
 
 function renderMailList(msgs) {
@@ -13958,20 +13734,7 @@ async function markMailMessageRead(messageId) {
       if (String(m.id || m.ID) === id) m.read = true;
     });
   }
-  // Push to server (best-effort, non-blocking)
-  try {
-    const params = new URLSearchParams();
-    params.append('ids[]', id);
-    params.append('status', 'read');
-    await api('/api/2.0/mail/conversations/mark.json', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: params.toString(),
-      showCrashBanner: false
-    });
-  } catch {
-    // non-fatal
-  }
+  // Mail API removed in v2 — local only
 }
 
 async function searchDealsForMailLink(query) {
@@ -14113,7 +13876,7 @@ async function loadTaskCategories({ force = false } = {}) {
   if (!force && state.taskCategories.length) return;
 
   try {
-    const data = await api("/api/2.0/crm/task/category");
+    const data = await api("/api/v2/history-categories");
     state.taskCategories = unwrap(data);
     try {
       localStorage.setItem(TASK_CATEGORIES_KEY, JSON.stringify(state.taskCategories));
@@ -14187,7 +13950,7 @@ async function searchOpportunitiesByTitle(query, { limit = 30 } = {}) {
   if (q.length >= 2) {
     try {
       const params = new URLSearchParams({ startIndex: "0", count: "40", filterValue: q, stageType: "0" });
-      const data = await api(`/api/2.0/crm/opportunity/filter?${params}`);
+      const data = await api(`/api/v2/projects?${params}`);
       for (const o of unwrap(data)) {
         const id = o.id ?? o.ID;
         if (id == null) continue;
@@ -15156,15 +14919,7 @@ function renderHistoryNoteBody(container, ev) {
 }
 
 async function fetchMailMessage(messageId) {
-  const id = Number(messageId);
-  if (!Number.isFinite(id) || id <= 0) throw new Error("Invalid mail message id");
-  if (oppPreviewMailCache.has(id)) return oppPreviewMailCache.get(id);
-
-  // Use the server-side endpoint that fetches via filehandler.ashx (same as CRM MailViewer)
-  const data = await api(`/api/mail/message/${id}`);
-  const mail = data?.response ?? data?.result ?? data;
-  oppPreviewMailCache.set(id, mail);
-  return mail;
+  throw new Error("Mail not available in v2 API");
 }
 
 function normalizeMailMessage(mail) {
@@ -15371,7 +15126,7 @@ function renderHistoryEventItem(ev) {
       });
       if (!ok) return;
       try {
-        await api(`/api/2.0/crm/history/${encodeURIComponent(histId)}`, {
+        await api(`/api/v2/history/${encodeURIComponent(histId)}`, {
           method: "DELETE",
           showCrashBanner: false,
         });
@@ -15627,7 +15382,7 @@ async function fetchAllOpportunityHistory(oppId, maxPages) {
       entityType: "opportunity",
       entityId: String(oppId),
     });
-    const path = `/api/2.0/crm/history/filter?${params}`;
+  const path = `/api/v2/projects/${oppId}/history?${params}`;
     const data = await api(path);
     const page = unwrapHistoryEvents(data);
     if (!page.length) break;
@@ -15671,7 +15426,7 @@ async function fetchOpportunityDocuments(oppId) {
   if (!Number.isFinite(id) || id <= 0) return [];
   try {
     // CRM opportunity attached files endpoint (proxy will forward)
-    const path = `/api/2.0/crm/opportunity/${id}/files`;
+    const path = `/api/v2/projects/${id}/photos`;
     const data = await api(path);
     return unwrap(data);
   } catch {
@@ -16486,7 +16241,7 @@ async function performSearchPopupQuery() {
       filterValue: q,
       stageType: "0",
     });
-    const data = await api(`/api/2.0/crm/opportunity/filter?${params}`);
+    const data = await api(`/api/v2/projects?${params}`);
     let opps = unwrap(data);
     if (opps.length) {
       opps = await enrichOpportunitiesTags(opps);
@@ -16515,7 +16270,7 @@ async function performSearchPopupTagQuery() {
       count: "100",
       stageType: "0",
     });
-    const data = await api(`/api/2.0/crm/opportunity/filter?${params}`);
+    const data = await api(`/api/v2/projects?${params}`);
     let opps = unwrap(data);
     if (opps.length) {
       opps = await enrichOpportunitiesTags(opps);
@@ -18371,7 +18126,7 @@ function unwrapCreatedEntity(data) {
 
 async function createCrmTask(body) {
   const res = await withCrmQueueOnTransient(
-    () => api("/api/2.0/crm/task", {
+    () => api("/api/v2/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -18379,7 +18134,7 @@ async function createCrmTask(body) {
     }),
     {
       method: "POST",
-      path: "/api/2.0/crm/task",
+      path: "/api/v2/tasks",
       body: JSON.stringify(body),
       description: `Create task "${body?.title || body?.Title || 'untitled'}"`,
       opType: "task",
@@ -18394,15 +18149,7 @@ async function createCrmTask(body) {
 }
 
 async function notifyCrmTaskResponsible(taskId) {
-  try {
-    await api(`/api/2.0/crm/task/${taskId}/notify`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    });
-  } catch {
-    /* optional */
-  }
+  // No v2 equivalent — no-op
 }
 
 async function submitNewTaskForm(e) {
@@ -18523,11 +18270,11 @@ async function loadTasks({ force = false } = {}) {
     return;
   }
   renderTasksTile();
-  const params = new URLSearchParams({ startIndex: "0", count: "200", isClosed: "false" });
+  const params = new URLSearchParams({ startIndex: "0", count: "200", closed: "false" });
   const filterUser = $("#tasks-user-filter")?.value;
   if (filterUser) params.set("responsibleid", filterUser);
 
-  const path = `/api/2.0/crm/task/filter?${params}`;
+  const path = `/api/v2/tasks?${params}`;
   try {
     const data = await api(path);
     state.tasks = unwrap(data).filter((t) => !t.isClosed);
@@ -18565,11 +18312,11 @@ async function openTasksListModal() {
   let allTasks = [];
 
   const fetchAll = async () => {
-    const paramsOpen = new URLSearchParams({ startIndex: "0", count: "500", isClosed: "false" });
-    const paramsClosed = new URLSearchParams({ startIndex: "0", count: "500", isClosed: "true" });
+    const paramsOpen = new URLSearchParams({ startIndex: "0", count: "500", closed: "false" });
+    const paramsClosed = new URLSearchParams({ startIndex: "0", count: "500", closed: "true" });
     const [openData, closedData] = await Promise.all([
-      api(`/api/2.0/crm/task/filter?${paramsOpen}`),
-      api(`/api/2.0/crm/task/filter?${paramsClosed}`),
+      api(`/api/v2/tasks?${paramsOpen}`),
+      api(`/api/v2/tasks?${paramsClosed}`),
     ]);
     const opens = unwrap(openData);
     const closeds = unwrap(closedData);
@@ -18598,16 +18345,16 @@ async function openTasksListModal() {
         try {
           if (cb.checked && !wasClosed) {
             const res = await withCrmQueueOnTransient(
-              () => api(`/api/2.0/crm/task/${task.id}/close`, {
+              () => api(`/api/v2/tasks/${task.id}`, {
                 method: "PUT",
                 headers: { "Content-Type": "application/json" },
-                body: "{}",
+                body: JSON.stringify({ isClosed: true }),
                 showCrashBanner: false,
               }),
               {
                 method: "PUT",
-                path: `/api/2.0/crm/task/${task.id}/close`,
-                body: "{}",
+                path: `/api/v2/tasks/${task.id}`,
+                body: JSON.stringify({ isClosed: true }),
                 description: `Close task ${task.id}`,
                 opType: "task",
                 targetId: String(task.id),
@@ -18620,16 +18367,16 @@ async function openTasksListModal() {
             }
           } else if (!cb.checked && wasClosed) {
             const res = await withCrmQueueOnTransient(
-              () => api(`/api/2.0/crm/task/${task.id}/reopen`, {
+              () => api(`/api/v2/tasks/${task.id}`, {
                 method: "PUT",
                 headers: { "Content-Type": "application/json" },
-                body: "{}",
+                body: JSON.stringify({ isClosed: false }),
                 showCrashBanner: false,
               }),
               {
                 method: "PUT",
-                path: `/api/2.0/crm/task/${task.id}/reopen`,
-                body: "{}",
+                path: `/api/v2/tasks/${task.id}`,
+                body: JSON.stringify({ isClosed: false }),
                 description: `Reopen task ${task.id}`,
                 opType: "task",
                 targetId: String(task.id),
@@ -18841,10 +18588,10 @@ function createTaskRow(task) {
     if (!cb.checked) return;
     cb.disabled = true;
     try {
-      await api(`/api/2.0/crm/task/${task.id}/close`, {
+      await api(`/api/v2/tasks/${task.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: "{}",
+        body: JSON.stringify({ isClosed: true }),
       });
       row.classList.add("done");
       showToast("Task marked complete");
@@ -19022,9 +18769,7 @@ async function fetchOpportunityCustomFields(opp) {
   const id = opp.id ?? opp.ID;
   if (id == null) return false;
   const paths = [
-    `/api/2.0/crm/opportunity/${id}/customfield`,
-    `/api/2.0/crm/opportunity/${id}/customfields`,
-    `/api/2.0/crm/opportunity/${id}/customfield/`,
+    `/api/v2/projects/${id}/custom-fields`,
   ];
   for (const path of paths) {
     try {
@@ -19589,7 +19334,7 @@ async function init() {
 
   $("#refresh-btn").addEventListener("click", () => refreshAll({ force: true }));
   $("#logout-btn").addEventListener("click", async () => {
-    await fetch("/api/logout", { method: "POST", credentials: "same-origin" });
+    await fetch("/api/v2/auth/logout", { method: "POST", credentials: "same-origin" });
     // Clean presence cache on explicit logout (the "until next login" contract)
     try { clearPresenceUsersCache(); } catch {}
     showLogin();
@@ -19611,7 +19356,7 @@ async function init() {
       controller.abort();
     }, 30000);
     try {
-      const res = await fetch("/api/login", {
+      const res = await fetch("/api/v2/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
