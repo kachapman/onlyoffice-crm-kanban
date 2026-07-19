@@ -66,29 +66,15 @@ body {
 /* Login */
 .login-screen {
   min-height: 100vh;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 2rem;
   background:
     radial-gradient(ellipse 80% 60% at 50% -10%, rgba(79, 140, 255, 0.25), transparent),
     var(--bg);
   position: relative;
   overflow: hidden;
-}
-
-.login-watermark {
-  position: absolute;
-  left: 50%;
-  top: 45%;
-  transform: translate(-50%, -50%);
-  width: 1040px;
-  max-width: 85vw;
-  height: auto;
-  opacity: 0.07;
-  z-index: 0;
-  pointer-events: none;
-  user-select: none;
-  filter: grayscale(0.2);
 }
 
 .login-card {
@@ -111,26 +97,6 @@ body {
   margin: 0 0 1.5rem;
   color: var(--muted);
   font-size: 0.9rem;
-}
-
-.login-footer {
-  margin-top: 1.25rem;
-  text-align: center;
-}
-
-.login-old-crm-link {
-  font-size: 0.75rem;
-  color: var(--muted);
-  text-decoration: underline;
-  opacity: 0.7;
-  transition: opacity 0.15s, color 0.15s;
-}
-
-.login-old-crm-link:hover,
-.login-old-crm-link:focus-visible {
-  color: var(--text);
-  opacity: 1;
-  outline: none;
 }
 
 .login-card label {
@@ -254,8 +220,15 @@ body {
   z-index: 3;
 }
 
+.admin-console-btn {
+  position: absolute;
+  top: 1rem;
+  right: 9rem;
+  z-index: 3;
+}
+
 .app-version {
-  margin-left: 0.6rem;
+  margin-left: 0.2em;
   font-size: 0.72rem;
   color: var(--muted);
   opacity: 0.65;
@@ -265,13 +238,19 @@ body {
 }
 
 .sietch-name {
-  margin-left: 0.6rem;
+  margin-left: 0.3rem;
   font-size: 0.72rem;
   color: var(--muted);
   opacity: 0.65;
   vertical-align: middle;
   user-select: none;
   pointer-events: none;
+}
+
+.sietch-name .app-version {
+  margin-left: 0.2em;
+  font-size: inherit;
+  opacity: inherit;
 }
 
 .hero-inner {
@@ -6043,6 +6022,11 @@ body {
     padding: 0.35rem 0.55rem;
   }
 
+  .admin-console-btn {
+    top: 0.65rem;
+    right: 3.5rem;
+  }
+
   .modal-card-opp-preview {
     width: 100%;
   }
@@ -6309,6 +6293,109 @@ body {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+.search-popup-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.search-popup-filter-bar select {
+  flex: 1;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-family: var(--font);
+}
+
+.search-popup-filter-bar select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+.search-popup-filter-bar .btn {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+}
+
+.search-popup-batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  flex-wrap: wrap;
+}
+
+.search-popup-batch-bar.hidden {
+  display: none;
+}
+
+.search-popup-batch-bar select {
+  flex: 1 1 auto;
+  min-width: 6rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-family: var(--font);
+}
+
+.search-popup-batch-bar select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+.search-popup-batch-bar .btn {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+}
+
+.search-popup-batch-count {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-right: auto;
+  white-space: nowrap;
+}
+
+.search-popup-select-all {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.search-popup-select-all label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+}
+
+.search-popup-select-all input,
+.search-popup-result-checkbox {
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.search-popup-result-row {
+  gap: 0.5rem;
 }
 
 .btn-sm {
@@ -7693,6 +7780,23 @@ body {
   object-fit: contain;
 }
 
+.login-sietch-footer {
+  pointer-events: none;
+  position: absolute;
+  bottom: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+}
+
+.login-sietch-footer .sietch-footer-logo {
+  height: 96px;
+}
+
+.login-sietch-footer:hover {
+  opacity: 1;
+}
+
 .sietch-footer-text {
   font-size: 0.75rem;
   color: var(--text-muted, #6b7280);
@@ -7752,5 +7856,79 @@ body {
   font-family: monospace;
   font-size: 0.85rem;
   color: var(--muted);
+}
+
+/* ── Admin Console Modal ─────────────────────────────────────────────────────── */
+#admin-console-modal .modal-card,
+.admin-modal-card {
+  width: 980px;
+  max-width: 95vw;
+  height: 560px;
+  display: flex;
+  flex-direction: column;
+}
+
+#admin-console-modal .admin-body {
+  display: flex;
+  gap: 1rem;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#admin-console-modal .admin-tabs {
+  width: 170px;
+  flex: 0 0 170px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+#admin-console-modal .admin-main {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+}
+
+#admin-console-modal .admin-tab-btn {
+  width: 100%;
+  justify-content: flex-start;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  font-size: 0.82rem;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  text-align: left;
+}
+
+#admin-console-modal .admin-tab-btn:hover {
+  background: var(--bg-elevated);
+}
+
+#admin-console-modal .admin-tab-btn.active {
+  border: 2px solid var(--accent);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+@media (max-width: 640px) {
+  .admin-modal-card {
+    width: 95vw;
+    max-width: 95vw;
+  }
+  .admin-tabs {
+    width: 130px;
+    flex: 0 0 130px;
+  }
+  .admin-main {
+    max-height: 60vh;
+  }
 }
 

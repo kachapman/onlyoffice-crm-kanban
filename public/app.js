@@ -33,10 +33,6 @@ function setAccentColor(color) {
         const noscript = document.querySelector("noscript div");
         if (noscript) noscript.textContent = `JavaScript is required for the ${branding.companyName}. Please enable it and reload.`;
       }
-      if (branding.watermarkPath) {
-        const watermark = document.querySelector(".login-watermark");
-        if (watermark) watermark.src = branding.watermarkPath;
-      }
       // favicon is static (not overridable per non-negotiables); branding watermark/logo still customizable
       // if (branding.faviconPath) { ... }
       if (branding.primaryColor) {
@@ -10428,7 +10424,7 @@ function bindAddTileModal() {
   if (!modal || modal.dataset.bound) return;
   modal.dataset.bound = "1";
 
-  $("#add-tile-btn")?.addEventListener("click", openAddTileModal);
+  // #add-tile-btn attached early in init()
   $("#add-tile-cancel")?.addEventListener("click", closeAddTileModal);
   modal.querySelectorAll("[data-add-tile-dismiss]").forEach((el) => {
     el.addEventListener("click", closeAddTileModal);
@@ -13281,12 +13277,9 @@ function getMailMessageIsRead(m) {
 }
 
 function bindMailInboxButton() {
+  // Header btn attached early in init() for robustness; this function now only ensures other setup if needed.
   const btn = $("#mail-inbox-btn");
-  if (!btn || btn.dataset.bound) return;
-  btn.dataset.bound = "1";
-  btn.addEventListener("click", () => {
-    openMailInboxModal().catch(err => showToast(err.message || 'Could not open mail inbox', true));
-  });
+  if (btn) btn.dataset.bound = "1";  // mark as done
 }
 
 function resetQuickLinkSidebar() {
@@ -13915,6 +13908,9 @@ const MAX_SEARCH_PREVIEW_TABS = 10;
 let searchPopupPreviewTabs = new Map(); // oppId -> { title, data, container, button }
 let minimizedSearchTabs = []; // [{ oppId: number, title: string }] — parked tabs, persisted like bookmarks
 const SEARCH_MINIMIZED_STORAGE_KEY = "oo_board_search_minimized_v1";
+let searchPopupCurrentOpps = []; // latest unfiltered results (used for stage/owner filters)
+let searchPopupCurrentTagLabel = null; // current tag header label
+let searchPopupSelected = new Set(); // selected opp ids for batch ops
 
 function createCrmOpenLink(oppId, { className = "crm-open-external", title = "Open in CRM" } = {}) {
   const a = document.createElement("a");
@@ -15923,7 +15919,7 @@ function bindSearchPopupBtn() {
   btn.addEventListener("click", () => openSearchPopupModal());
 }
 
-function openSearchPopupModal() {
+async function openSearchPopupModal() {
   const modal = $("#search-popup-modal");
   if (!modal) return;
   // If modal is closed, no live tabs exist, and we have parked tabs — restore them
@@ -15933,6 +15929,9 @@ function openSearchPopupModal() {
     const input = $("#search-popup-input");
     if (input) { input.focus(); input.select(); }
     populateSearchTagDropdown();
+    populateSearchFilterDropdowns();
+    if (!state.portalUsers.length) await loadPortalUsers();
+    populateSearchFilterDropdowns();
     return;
   }
   modal.classList.remove("hidden");
@@ -15943,6 +15942,9 @@ function openSearchPopupModal() {
     input.select();
   }
   populateSearchTagDropdown();
+  populateSearchFilterDropdowns();
+  if (!state.portalUsers.length) await loadPortalUsers();
+  populateSearchFilterDropdowns();
 }
 
 function populateSearchTagDropdown() {
@@ -15971,9 +15973,16 @@ function closeSearchPopupModal() {
   if (input) input.value = "";
   const tagSelect = $("#search-popup-tag-select");
   if (tagSelect) tagSelect.value = "";
+  const stageFilter = $("#search-popup-stage-filter");
+  if (stageFilter) stageFilter.value = "";
+  const respFilter = $("#search-popup-responsible-filter");
+  if (respFilter) respFilter.value = "";
   const results = $("#search-popup-results");
   if (results) results.innerHTML = "";
   hideSearchPopupError();
+  searchPopupCurrentOpps = [];
+  searchPopupCurrentTagLabel = null;
+  clearSearchPopupSelection();
   // Also clear parked/minimized tabs (close = discard)
   clearMinimizedSearchTabs();
 }
@@ -16124,6 +16133,20 @@ function bindSearchPopupModal() {
 
   // Minimize button — save tabs and hide modal
   $("#search-popup-minimize")?.addEventListener("click", minimizeSearchPopup);
+
+  // Filters
+  $("#search-popup-stage-filter")?.addEventListener("change", refreshSearchPopupFilters);
+  $("#search-popup-responsible-filter")?.addEventListener("change", refreshSearchPopupFilters);
+  $("#search-popup-clear-filters")?.addEventListener("click", () => {
+    const sf = $("#search-popup-stage-filter"); if (sf) sf.value = "";
+    const rf = $("#search-popup-responsible-filter"); if (rf) rf.value = "";
+    refreshSearchPopupFilters();
+  });
+
+  // Batch ops
+  $("#search-popup-batch-apply")?.addEventListener("click", applySearchPopupBatchAction);
+  $("#search-popup-batch-export")?.addEventListener("click", exportSearchPopupSelected);
+  $("#search-popup-batch-clear")?.addEventListener("click", clearSearchPopupSelection);
 }
 
 /* ── Search trigger (right-side vertical tab, shown when search is minimized) ─ */
@@ -16135,16 +16158,7 @@ function initSearchTrigger() {
 
   trigger.addEventListener("click", () => {
     trigger.classList.add("trigger-hidden");
-    const modal = $("#search-popup-modal");
-    if (!modal) return;
-    // Restore parked tabs if any
-    if (searchPopupPreviewTabs.size === 0 && hasMinimizedSearchTabs()) {
-      restoreMinimizedSearchTabs();
-    }
-    modal.classList.remove("hidden");
-    const input = $("#search-popup-input");
-    if (input) { input.focus(); input.select(); }
-    populateSearchTagDropdown();
+    openSearchPopupModal();
   });
 
   // Initial visibility: show if parked tabs exist and sidebar is hidden
@@ -16178,7 +16192,12 @@ async function performSearchPopupQuery() {
     if (opps.length) {
       opps = await enrichOpportunitiesTags(opps);
     }
-    renderSearchPopupResults(opps);
+    searchPopupCurrentOpps = opps;
+    searchPopupCurrentTagLabel = null;
+    searchPopupSelected.clear();
+    updateSearchPopupBatchBar();
+    const filtered = applySearchPopupFilters(opps);
+    renderSearchPopupResults(filtered);
   } catch (err) {
     results.innerHTML = `<p class="search-popup-results-empty">${escapeHtml(err.message)}</p>`;
   }
@@ -16209,7 +16228,12 @@ async function performSearchPopupTagQuery() {
       const catalog = buildTagCatalog();
       opps = opps.filter((o) => oppMatchesSelectedTags(o, [tagTitle], catalog));
     }
-    renderSearchPopupResults(opps, tagTitle);
+    searchPopupCurrentOpps = opps;
+    searchPopupCurrentTagLabel = tagTitle;
+    searchPopupSelected.clear();
+    updateSearchPopupBatchBar();
+    const filtered = applySearchPopupFilters(opps);
+    renderSearchPopupResults(filtered, tagTitle);
   } catch (err) {
     results.innerHTML = `<p class="search-popup-results-empty">${escapeHtml(err.message)}</p>`;
   }
@@ -16233,6 +16257,21 @@ function renderSearchPopupResults(opps, tagFilterLabel = null) {
     results.appendChild(header);
   }
 
+  const selectAll = document.createElement("div");
+  selectAll.className = "search-popup-select-all";
+  selectAll.innerHTML = `<label><input type="checkbox" id="search-popup-select-all"> Select all</label>`;
+  results.appendChild(selectAll);
+  const selAllCb = selectAll.querySelector("input");
+  selAllCb.addEventListener("change", () => {
+    for (const o of opps) {
+      const id = Number(o.id ?? o.ID);
+      if (selAllCb.checked) searchPopupSelected.add(id);
+      else searchPopupSelected.delete(id);
+    }
+    document.querySelectorAll(".search-popup-result-checkbox").forEach((cb) => { cb.checked = selAllCb.checked; });
+    updateSearchPopupBatchBar();
+  });
+
   for (const o of opps) {
     const id = Number(o.id ?? o.ID);
     const title = (o.title || o.Title || `Deal #${id}`).trim();
@@ -16246,6 +16285,17 @@ function renderSearchPopupResults(opps, tagFilterLabel = null) {
 
     const row = document.createElement("div");
     row.className = "search-popup-result-row";
+
+    const chk = document.createElement("input");
+    chk.type = "checkbox";
+    chk.className = "search-popup-result-checkbox";
+    chk.checked = searchPopupSelected.has(id);
+    chk.title = "Select for batch action";
+    chk.addEventListener("change", () => {
+      if (chk.checked) searchPopupSelected.add(id);
+      else searchPopupSelected.delete(id);
+      updateSearchPopupBatchBar();
+    });
 
     const titleEl = document.createElement("span");
     titleEl.className = "search-popup-result-title";
@@ -16294,9 +16344,15 @@ function renderSearchPopupResults(opps, tagFilterLabel = null) {
       title: "Open in CRM",
     });
 
+    row.addEventListener("click", (e) => {
+      if (e.target.closest(".search-popup-result-checkbox") || e.target.closest(".search-popup-result-actions")) return;
+      openSearchPreviewTab(id, title);
+    });
+
     actions.appendChild(bookmarkBtn);
     actions.appendChild(previewBtn);
     actions.appendChild(crmLink);
+    row.appendChild(chk);
     row.appendChild(titleEl);
     row.appendChild(metaEl);
     row.appendChild(actions);
@@ -16314,6 +16370,151 @@ function renderSearchPopupResults(opps, tagFilterLabel = null) {
   exportBtn.addEventListener("click", () => exportSearchResultsToCsv(opps));
   exportBar.appendChild(exportBtn);
   results.appendChild(exportBar);
+}
+
+function populateSearchFilterDropdowns() {
+  const stageSel = $('#search-popup-stage-filter');
+  if (stageSel) {
+    const val = stageSel.value;
+    stageSel.innerHTML = '<option value=\'\'>All stages</option>';
+    for (const s of state.stages || []) {
+      const opt = document.createElement('option');
+      opt.value = String(s.id ?? s.ID);
+      opt.textContent = s.title || s.Title || `Stage ${s.id ?? s.ID}`;
+      stageSel.appendChild(opt);
+    }
+    stageSel.value = val;
+  }
+  const respSel = $('#search-popup-responsible-filter');
+  if (respSel) {
+    const val = respSel.value;
+    respSel.innerHTML = '<option value=\'\'>All owners</option>';
+    if (!state.portalUsers.length) loadPortalUsers().then(populateSearchFilterDropdowns);
+    for (const u of state.portalUsers || []) {
+      const opt = document.createElement('option');
+      opt.value = String(u.id);
+      opt.textContent = u.displayName || u.id;
+      respSel.appendChild(opt);
+    }
+    respSel.value = val;
+  }
+  const addTag = $('#search-popup-batch-add-tag');
+  const remTag = $('#search-popup-batch-remove-tag');
+  const tagOptions = () => {
+    const frag = document.createDocumentFragment();
+    for (const t of state.allTags || []) {
+      const title = normalizeTagTitle(t.title ?? t);
+      if (!title) continue;
+      const opt = document.createElement('option');
+      opt.value = title;
+      opt.textContent = title;
+      frag.appendChild(opt);
+    }
+    return frag;
+  };
+  if (addTag) {
+    const val = addTag.value;
+    addTag.innerHTML = '<option value=\'\'>Add tag…</option>';
+    addTag.appendChild(tagOptions());
+    addTag.value = val;
+  }
+  if (remTag) {
+    const val = remTag.value;
+    remTag.innerHTML = '<option value=\'\'>Remove tag…</option>';
+    remTag.appendChild(tagOptions());
+    remTag.value = val;
+  }
+  const stageSet = $('#search-popup-batch-set-stage');
+  if (stageSet) {
+    const val = stageSet.value;
+    stageSet.innerHTML = '<option value=\'\'>Set stage…</option>';
+    for (const s of state.stages || []) {
+      const opt = document.createElement('option');
+      opt.value = String(s.id ?? s.ID);
+      opt.textContent = s.title || s.Title || `Stage ${s.id ?? s.ID}`;
+      stageSet.appendChild(opt);
+    }
+    stageSet.value = val;
+  }
+}
+
+function applySearchPopupFilters(opps) {
+  const stageFilter = $('#search-popup-stage-filter')?.value;
+  const respFilter = $('#search-popup-responsible-filter')?.value;
+  return opps.filter((o) => {
+    if (stageFilter) {
+      const sid = String(o.stage?.id ?? o.stage?.ID ?? o.Stage?.id ?? o.Stage?.ID ?? o.stageId ?? '');
+      if (sid !== String(stageFilter)) return false;
+    }
+    if (respFilter) {
+      const rid = String(o.responsible?.id ?? o.responsible?.ID ?? o.responsibleId ?? o.responsibleID ?? '');
+      if (rid !== String(respFilter)) return false;
+    }
+    return true;
+  });
+}
+
+function refreshSearchPopupFilters() {
+  const filtered = applySearchPopupFilters(searchPopupCurrentOpps);
+  renderSearchPopupResults(filtered, searchPopupCurrentTagLabel);
+}
+
+function updateSearchPopupBatchBar() {
+  const bar = $('#search-popup-batch-bar');
+  const count = $('#search-popup-selected-count');
+  if (!bar || !count) return;
+  const n = searchPopupSelected.size;
+  count.textContent = `${n} selected`;
+  bar.classList.toggle('hidden', n === 0);
+}
+
+async function applySearchPopupBatchAction() {
+  const addTag = $('#search-popup-batch-add-tag')?.value;
+  const remTag = $('#search-popup-batch-remove-tag')?.value;
+  const stageId = $('#search-popup-batch-set-stage')?.value;
+  const ids = Array.from(searchPopupSelected).map(Number).filter((id) => id > 0);
+  if (!ids.length) return;
+  if (!addTag && !remTag && !stageId) {
+    showSearchPopupError('Choose a batch action first');
+    return;
+  }
+  let done = 0;
+  for (const id of ids) {
+    try {
+      if (addTag) await addOpportunityTag(id, addTag);
+      if (remTag) await removeOpportunityTag(id, remTag);
+      if (stageId) await updateOpportunityStage(id, Number(stageId));
+      done++;
+    } catch (e) {
+      showToast(`Batch failed on deal #${id}: ${e.message || e}`, true);
+    }
+  }
+  showToast(`${done} deal(s) updated`);
+  const a = $('#search-popup-batch-add-tag'); if (a) a.value = '';
+  const r = $('#search-popup-batch-remove-tag'); if (r) r.value = '';
+  const s = $('#search-popup-batch-set-stage'); if (s) s.value = '';
+  clearSearchPopupSelection();
+  const input = $('#search-popup-input');
+  const tagSelect = $('#search-popup-tag-select');
+  if (input?.value.trim()) {
+    await performSearchPopupQuery();
+  } else if (tagSelect?.value.trim()) {
+    await performSearchPopupTagQuery();
+  }
+}
+
+function exportSearchPopupSelected() {
+  const opps = searchPopupCurrentOpps.filter((o) => searchPopupSelected.has(Number(o.id ?? o.ID)));
+  if (!opps.length) return;
+  exportSearchResultsToCsv(opps);
+}
+
+function clearSearchPopupSelection() {
+  searchPopupSelected.clear();
+  updateSearchPopupBatchBar();
+  const selAll = $('#search-popup-select-all');
+  if (selAll) selAll.checked = false;
+  document.querySelectorAll('.search-popup-result-checkbox').forEach((cb) => { cb.checked = false; });
 }
 
 function exportSearchResultsToCsv(opps) {
@@ -16588,8 +16789,8 @@ function initBookmarkSidebar() {
 
   renderBookmarkTabs();
 
-  // Trigger tab click — open the sidebar
-  if (trigger) {
+  // Trigger tab click — open the sidebar (attached early in init() for robustness; skip if already)
+  if (trigger && !trigger.dataset.earlyBound) {
     trigger.addEventListener("click", () => {
       sidebar.classList.remove("sidebar-hidden");
       trigger.classList.add("trigger-hidden");
@@ -17182,15 +17383,7 @@ function closeEventLogModal() {
 }
 
 function bindEventLogModal() {
-  const modal = $("#event-log-modal");
-  if (!modal || modal.dataset.bound) return;
-  modal.dataset.bound = "1";
-
-  $("#event-log-btn")?.addEventListener("click", () => {
-    openEventLogModal();
-  });
-
-  $("#event-log-close")?.addEventListener("click", closeEventLogModal);
+  // Consolidated: no separate modal, elements now in admin tab
   $("#event-log-clear")?.addEventListener("click", () => {
     state.eventLog = [];
     saveEventLogToStorage();
@@ -17198,7 +17391,8 @@ function bindEventLogModal() {
     showToast("Event log cleared");
   });
 
-  modal.querySelectorAll(".event-log-tab").forEach((btn) => {
+  // Internal event log tabs (mine/admin) - note: may need delegation if dynamic
+  document.querySelectorAll("#admin-console-modal .event-log-tab").forEach((btn) => {
     btn.addEventListener("click", () => {
       switchEventLogTab(btn.dataset.tab);
       if (btn.dataset.tab === "admin") renderEventLogAdminTab();
@@ -17280,6 +17474,9 @@ function openAdminConsoleModal() {
     modal.querySelectorAll(".admin-tab-btn").forEach(btn => {
       btn.addEventListener("click", () => switchAdminTab(btn.dataset.tab));
     });
+    bindAdminContacts();
+    bindAdminStages();
+    bindAdminTags();
     // stub sync buttons (real impl later in sync phase; read-only enrich)
     const statusEl = $("#sync-status");
     $("#sync-test-btn")?.addEventListener("click", () => { if (statusEl) statusEl.textContent = "Connection test stub: OK (implement real auth in sync worker)."; });
@@ -17298,13 +17495,46 @@ function openAdminConsoleModal() {
 
 function switchAdminTab(tab) {
   document.querySelectorAll("#admin-console-modal .admin-tab-content").forEach(c => c.classList.add("hidden"));
-  document.querySelectorAll("#admin-console-modal .admin-tab-btn").forEach(b => b.style.borderBottom = "");
+  document.querySelectorAll("#admin-console-modal .admin-tab-btn").forEach(b => b.classList.remove("active"));
   const content = $(`#admin-tab-${tab}`);
   if (content) content.classList.remove("hidden");
   const activeBtn = document.querySelector(`#admin-console-modal .admin-tab-btn[data-tab="${tab}"]`);
-  if (activeBtn) activeBtn.style.borderBottom = "2px solid var(--accent)";
+  if (activeBtn) activeBtn.classList.add("active");
   if (tab === "users") populateAdminUsersList();
-  if (tab === "contacts") populateAdminContactsList();
+  if (tab === "contacts") {
+    const s = $("#admin-contacts-search")?.value.trim() || "";
+    populateAdminContactsList(s);
+  }
+  if (tab === "stages") {
+    const s = $("#admin-stages-search")?.value.trim() || "";
+    populateAdminStagesList(s);
+  }
+  if (tab === "custom-fields") {
+    populateAdminCustomFieldsList();
+  }
+  if (tab === "tags") {
+    populateAdminTagsList();
+  }
+  if (tab === "logs") {
+    loadEventLogFromServer().then(() => {
+      renderEventLogModal();
+      const tabs = document.querySelector("#admin-console-modal #event-log-tabs");
+      if (tabs) {
+        tabs.classList.remove("hidden");
+      }
+    });
+  }
+  if (tab === "bot") {
+    // bot inits are bound at load, but ensure mappings
+    if (typeof loadBotCustomersFromServer === "function") {
+      loadBotCustomersFromServer().then(() => {
+        if (typeof renderBotCustomerMappings === "function") renderBotCustomerMappings();
+      });
+    }
+  }
+  if (tab === "branding") {
+    populateBrandingForm();
+  }
 }
 
 async function populateAdminOverview() {
@@ -17333,21 +17563,207 @@ async function populateAdminUsersList() {
   }
 }
 
-async function populateAdminContactsList() {
+async function populateAdminContactsList(search = "") {
   const container = $("#admin-tab-contacts");
-  if (!container) return;
-  if (container.dataset.populated === "1") return;
-  container.dataset.populated = "1";
+  const listEl = $("#admin-contacts-list");
+  if (!container || !listEl) return;
   try {
-    const data = await api("/api/v2/contacts");
+    const qs = search ? `?q=${encodeURIComponent(search)}` : "";
+    const data = await api(`/api/v2/contacts${qs}`);
     const contacts = unwrap(data) || data || [];
     const list = (contacts || []).map(c => {
       const name = [c.firstName, c.lastName].filter(Boolean).join(" ") || c.displayName || c.email || "Contact";
-      return `<div style="padding:2px 0; border-bottom:1px solid var(--border);">${escapeHtml(name)} &lt;${escapeHtml(c.email || "")}&gt; ${c.company ? escapeHtml(c.company) : ""}</div>`;
+      return `<div style="padding:3px 0; border-bottom:1px solid var(--border);">${escapeHtml(name)} &lt;${escapeHtml(c.email || "")}&gt; ${c.company ? escapeHtml(c.company) : ""}</div>`;
     }).join("") || "<p>No contacts.</p>";
-    container.innerHTML = `<p><strong>Contacts (read-only for import):</strong></p>${list}<p style="font-size:0.75rem;color:var(--muted);margin-top:0.5rem;">Required to preserve contact-based functionality (deals, bot modal etc). Full CRUD later.</p>`;
+    listEl.innerHTML = list;
   } catch (e) {
-    container.innerHTML = `<p style="color:#b00;">Failed to load contacts: ${escapeHtml(e.message)}</p>`;
+    listEl.innerHTML = `<p style="color:#b00;">Failed to load contacts: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function bindAdminContacts() {
+  const search = $("#admin-contacts-search");
+  if (search) {
+    let t;
+    search.addEventListener("input", () => {
+      clearTimeout(t);
+      t = setTimeout(() => populateAdminContactsList(search.value.trim()), 250);
+    });
+  }
+  const addBtn = $("#admin-add-contact");
+  const form = $("#admin-contact-form");
+  if (addBtn && form) {
+    addBtn.addEventListener("click", () => {
+      form.style.display = "block";
+      ["first","last","email","phone","company"].forEach(f => {
+        const el = $(`#admin-contact-${f}`);
+        if (el) el.value = "";
+      });
+    });
+  }
+  const cancel = $("#admin-contact-cancel");
+  if (cancel && form) cancel.addEventListener("click", () => { form.style.display = "none"; });
+  const save = $("#admin-contact-save");
+  if (save && form) {
+    save.addEventListener("click", async () => {
+      const payload = {
+        firstName: $("#admin-contact-first")?.value.trim() || null,
+        lastName: $("#admin-contact-last")?.value.trim() || null,
+        email: $("#admin-contact-email")?.value.trim() || null,
+        phone: $("#admin-contact-phone")?.value.trim() || null,
+        company: $("#admin-contact-company")?.value.trim() || null,
+      };
+      try {
+        await api("/api/v2/contacts", { method: "POST", body: JSON.stringify(payload) });
+        form.style.display = "none";
+        await populateAdminContactsList( $("#admin-contacts-search")?.value.trim() || "" );
+        showToast("Contact added");
+      } catch (e) {
+        showToast("Failed to add contact: " + (e.message || e), true);
+      }
+    });
+  }
+  // initial load on tab switch already calls populate
+}
+
+async function populateAdminStagesList(search = "") {
+  const listEl = $("#admin-stages-list");
+  if (!listEl) return;
+  try {
+    const data = await api("/api/v2/stages");
+    let stages = unwrap(data) || data || [];
+    if (search) {
+      const q = search.toLowerCase();
+      stages = stages.filter(s => (s.title || "").toLowerCase().includes(q));
+    }
+    const list = (stages || []).map(s => {
+      const color = s.color || "#888";
+      const prob = s.probability != null ? `${s.probability}%` : "";
+      return `<div style="padding:3px 0; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:6px;">
+        <span style="display:inline-block; width:14px; height:14px; background:${escapeHtml(color)}; border-radius:2px; border:1px solid var(--border);"></span>
+        ${escapeHtml(s.title || "Stage")} ${prob ? `<span style="color:var(--muted); font-size:0.75em;">(${escapeHtml(prob)})</span>` : ""}
+      </div>`;
+    }).join("") || "<p>No stages.</p>";
+    listEl.innerHTML = list;
+  } catch (e) {
+    listEl.innerHTML = `<p style="color:#b00;">Failed to load stages: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function bindAdminStages() {
+  const search = $("#admin-stages-search");
+  if (search) {
+    let t;
+    search.addEventListener("input", () => {
+      clearTimeout(t);
+      t = setTimeout(() => populateAdminStagesList(search.value.trim()), 250);
+    });
+  }
+  const addBtn = $("#admin-add-stage");
+  const form = $("#admin-stage-form");
+  if (addBtn && form) {
+    addBtn.addEventListener("click", () => {
+      form.style.display = "block";
+      const t = $("#admin-stage-title"); if (t) t.value = "";
+      const c = $("#admin-stage-color"); if (c) c.value = "#6d4aff";
+      const p = $("#admin-stage-prob"); if (p) p.value = "";
+    });
+  }
+  const cancel = $("#admin-stage-cancel");
+  if (cancel && form) cancel.addEventListener("click", () => { form.style.display = "none"; });
+  const save = $("#admin-stage-save");
+  if (save && form) {
+    save.addEventListener("click", async () => {
+      const title = $("#admin-stage-title")?.value.trim() || "";
+      if (!title) { showToast("Title required", true); return; }
+      const payload = {
+        title,
+        color: $("#admin-stage-color")?.value || "#6d4aff",
+        probability: parseInt($("#admin-stage-prob")?.value) || 0,
+        sort_order: 999,
+        stage_type: "Open",
+        is_active: true
+      };
+      try {
+        await api("/api/v2/stages", { method: "POST", body: JSON.stringify(payload) });
+        form.style.display = "none";
+        await populateAdminStagesList( $("#admin-stages-search")?.value.trim() || "" );
+        showToast("Stage added");
+        // refresh global stages for kanban etc.
+        if (typeof loadStages === "function") await loadStages();
+      } catch (e) {
+        showToast("Failed to add stage: " + (e.message || e), true);
+      }
+    });
+  }
+}
+
+async function populateAdminCustomFieldsList() {
+  const listEl = $('#admin-custom-fields-list');
+  if (!listEl) return;
+  try {
+    const data = await api('/api/v2/custom-fields');
+    const fields = unwrap(data) || data || [];
+    const list = fields.map((f) => {
+      const type = f.type || f.fieldType || 'text';
+      const req = f.isRequired ? 'required' : '';
+      return `<div style='padding:3px 0; border-bottom:1px solid var(--border);'>
+        <strong>${escapeHtml(f.label || f.key || 'Field')}</strong>
+        <span style='color:var(--muted); font-size:0.75em;'>(${escapeHtml(type)}${req ? ` · ${req}` : ''})</span>
+      </div>`;
+    }).join('') || '<p>No custom fields.</p>';
+    listEl.innerHTML = list;
+  } catch (e) {
+    listEl.innerHTML = `<p style='color:#b00;'>Failed to load custom fields: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+async function populateAdminTagsList() {
+  const listEl = $('#admin-tags-list');
+  if (!listEl) return;
+  try {
+    const data = await api('/api/v2/tags');
+    const tags = unwrap(data) || data || [];
+    const list = tags.map((t) => {
+      const color = t.color || '#888';
+      return `<div style='padding:3px 0; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:6px;'>
+        <span style='display:inline-block; width:14px; height:14px; background:${escapeHtml(color)}; border-radius:50%; border:1px solid var(--border);'></span>
+        ${escapeHtml(t.title || t.Title || 'Tag')}
+      </div>`;
+    }).join('') || '<p>No tags.</p>';
+    listEl.innerHTML = list;
+  } catch (e) {
+    listEl.innerHTML = `<p style='color:#b00;'>Failed to load tags: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function bindAdminTags() {
+  const addBtn = $('#admin-add-tag');
+  const form = $('#admin-tag-form');
+  if (addBtn && form) {
+    addBtn.addEventListener('click', () => {
+      form.style.display = 'block';
+      const t = $('#admin-tag-title'); if (t) t.value = '';
+      const c = $('#admin-tag-color'); if (c) c.value = '#6d4aff';
+    });
+  }
+  const cancel = $('#admin-tag-cancel');
+  if (cancel && form) cancel.addEventListener('click', () => { form.style.display = 'none'; });
+  const save = $('#admin-tag-save');
+  if (save && form) {
+    save.addEventListener('click', async () => {
+      const title = $('#admin-tag-title')?.value.trim() || '';
+      if (!title) { showToast('Tag name required', true); return; }
+      const payload = { title, color: $('#admin-tag-color')?.value || '#6d4aff' };
+      try {
+        await api('/api/v2/tags', { method: 'POST', body: JSON.stringify(payload) });
+        form.style.display = 'none';
+        await populateAdminTagsList();
+        showToast('Tag added');
+      } catch (e) {
+        showToast('Failed to add tag: ' + (e.message || e), true);
+      }
+    });
   }
 }
 
@@ -17719,20 +18135,7 @@ function updateBotCustomersEmployeeSection() {
 }
 
 function bindBotCustomersModal() {
-  const modal = $("#bot-customers-modal");
-  if (!modal || modal.dataset.bound) return;
-  modal.dataset.bound = "1";
-
-  $("#bot-customers-btn")?.addEventListener("click", () => {
-    openBotCustomersModal();
-  });
-
-  $("#bot-customers-close")?.addEventListener("click", closeBotCustomersModal);
-  modal.querySelector("[data-bot-customers-dismiss]")?.addEventListener("click", closeBotCustomersModal);
-  modal.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeBotCustomersModal();
-  });
-
+  // Consolidated: buttons now inside admin tab, always bind actions
   $("#bot-generate-code-btn")?.addEventListener("click", handleGenerateCode);
   $("#bot-code-cancel-btn")?.addEventListener("click", handleCancelCode);
   $("#bot-code-copy-btn")?.addEventListener("click", () => {
@@ -19204,8 +19607,18 @@ async function refreshAll({ force = false } = {}) {
 }
 
 function showApp() {
-  $("#login-screen").classList.add("hidden");
-  $("#app").classList.remove("hidden");
+  const login = $("#login-screen");
+  const app = $("#app");
+  if (login) {
+    login.classList.add("hidden");
+    login.style.visibility = "hidden";
+  }
+  if (app) {
+    app.classList.remove("hidden");
+    app.style.display = "";
+    app.style.visibility = "visible";
+    app.style.opacity = "1";
+  }
   renderDailyFocus();
   noteDashboardActivity();
   startPanelTileAutoRefresh();
@@ -19218,8 +19631,19 @@ function showLogin() {
   stopPanelTileAutoRefresh();
   if (presenceHeaderPollTimer) { clearInterval(presenceHeaderPollTimer); presenceHeaderPollTimer = null; }
   userProfileReady = false;
-  $("#app").classList.add("hidden");
-  $("#login-screen").classList.remove("hidden");
+  const app = $("#app");
+  const login = $("#login-screen");
+  if (app) {
+    app.classList.add("hidden");
+    app.style.display = "none";
+    app.style.visibility = "hidden";
+  }
+  if (login) {
+    login.classList.remove("hidden");
+    login.style.display = "flex";
+    login.style.visibility = "visible";
+    login.style.opacity = "1";
+  }
 }
 
 function getDailyQuote() {
@@ -19339,11 +19763,6 @@ function applyBranding(branding) {
     const noscript = $("noscript div");
     if (noscript) noscript.textContent = `JavaScript is required for the ${branding.companyName}. Please enable it and reload.`;
   }
-  // Apply custom watermark
-  if (branding.watermarkPath) {
-    const watermark = $(".login-watermark");
-    if (watermark) watermark.src = branding.watermarkPath;
-  }
   // Apply custom logo
   if (branding.logoPath) {
     const logo = $(".hero-logo");
@@ -19361,13 +19780,7 @@ function applyBranding(branding) {
 
 let _brandingData = null;
 
-async function openBrandingModal() {
-  // Consolidated into admin console per plan: no separate modal/button
-  const adminModal = $("#admin-console-modal");
-  if (adminModal) {
-    adminModal.classList.remove("hidden");
-    switchAdminTab("branding");
-  }
+async function populateBrandingForm() {
   // Load current branding for the form in tab
   try {
     const resp = await fetch("/api/branding");
@@ -19384,14 +19797,32 @@ async function openBrandingModal() {
   $("#branding-logo-path").value = _brandingData.logoPath || "";
   $("#branding-watermark-path").value = _brandingData.watermarkPath || "";
   $("#branding-favicon-path").value = _brandingData.faviconPath || "";
-  $("#branding-primary-color").value = _brandingData.primaryColor || "#3b82f6";
-  $("#branding-color-hex").textContent = _brandingData.primaryColor || "#3b82f6";
+  let color = _brandingData.primaryColor;
+  if (!color) {
+    try {
+      color = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+    } catch (_) {}
+    if (!color) color = "#4f8cff";
+  }
+  $("#branding-primary-color").value = color;
+  $("#branding-color-hex").textContent = color;
 
   $("#branding-error")?.classList.add("hidden");
 }
 
+async function openBrandingModal() {
+  // Consolidated into admin console per plan: no separate modal/button
+  const adminModal = $("#admin-console-modal");
+  if (adminModal) {
+    adminModal.classList.remove("hidden");
+    switchAdminTab("branding");
+  }
+  // populate happens via switchAdminTab
+}
+
 function closeBrandingModal() {
-  $("#branding-modal")?.classList.add("hidden");
+  // Now inside admin console; close the whole admin modal on branding actions
+  $("#admin-console-modal")?.classList.add("hidden");
 }
 
 async function saveBranding() {
@@ -19436,21 +19867,11 @@ async function saveBranding() {
 }
 
 function bindBrandingModal() {
-  const modal = $("#branding-modal");
-  if (!modal || modal.dataset.bound) return;
-  modal.dataset.bound = "1";
-
-  $("#branding-cancel")?.addEventListener("click", closeBrandingModal);
-  $("#branding-save")?.addEventListener("click", saveBranding);
-  modal.querySelector("[data-branding-dismiss]")?.addEventListener("click", closeBrandingModal);
-  modal.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeBrandingModal();
-  });
-
-  // Live color preview
+  // Note: branding is now inside admin console tab; this binds the shared save/cancel + color preview
   const colorInput = $("#branding-primary-color");
   const colorHex = $("#branding-color-hex");
-  if (colorInput && colorHex) {
+  if (colorInput && colorHex && !colorInput.dataset.colorBound) {
+    colorInput.dataset.colorBound = "1";
     colorInput.addEventListener("input", () => {
       colorHex.textContent = colorInput.value;
       setAccentColor(colorInput.value);
@@ -19459,6 +19880,112 @@ function bindBrandingModal() {
 }
 
 async function init() {
+  // Attach login handler as early as possible so form submit never causes native refresh
+  const loginForm = $("#login-form");
+  if (loginForm) {
+    loginForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const errEl = $("#login-error");
+      const loadingEl = $("#login-loading");
+      const submitBtn = $("#login-submit-btn");
+      errEl.classList.add("hidden");
+      if (loadingEl) loadingEl.classList.remove("hidden");
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Logging in…";
+      }
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+      }, 30000);
+      try {
+        const res = await fetch("/api/v2/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            userName: $("#username").value,
+            password: $("#password").value,
+          }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || data.detail || "Login failed");
+        showApp();
+        try { ensurePresenceOnLogin(); } catch {}
+        bindChangelogModal(config.version);
+        maybeShowChangelog(config.version);
+        setTimeout(async () => {
+          await initCaches();
+          await refreshAll();
+          try { ensurePresenceOnLogin(); } catch {}
+          loadTaskCategories({ force: true }).catch(() => {});
+        }, 0);
+      } catch (err) {
+        clearTimeout(timeoutId);
+        let msg = err.message || "Login failed";
+        if (err.name === "AbortError" || /aborted|timeout/i.test(msg)) {
+          msg = "Server unreachable, contact admin";
+        }
+        errEl.textContent = msg;
+        errEl.classList.remove("hidden");
+      } finally {
+        if (loadingEl) loadingEl.classList.add("hidden");
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Sign in";
+        }
+      }
+    });
+  }
+
+  // Attach critical header button handlers EARLY (right after login form) so they work even if later init code throws an error (prevents "does nothing" buttons and broken sign-out).
+  const logoutBtnEarly = $("#logout-btn");
+  if (logoutBtnEarly && !logoutBtnEarly.dataset.earlyBound) {
+    logoutBtnEarly.dataset.earlyBound = "1";
+    logoutBtnEarly.addEventListener("click", async () => {
+      try {
+        await fetch("/api/v2/auth/logout", { method: "POST", credentials: "same-origin" });
+      } catch (_) {
+        // still switch UI
+      }
+      try { clearPresenceUsersCache(); } catch {}
+      showLogin();
+    });
+  }
+
+  const mailBtnEarly = $("#mail-inbox-btn");
+  if (mailBtnEarly && !mailBtnEarly.dataset.earlyBound) {
+    mailBtnEarly.dataset.earlyBound = "1";
+    mailBtnEarly.addEventListener("click", () => {
+      openMailInboxModal().catch(err => showToast(err.message || 'Could not open mail inbox', true));
+    });
+  }
+
+  const addTileBtnEarly = $("#add-tile-btn");
+  if (addTileBtnEarly && !addTileBtnEarly.dataset.earlyBound) {
+    addTileBtnEarly.dataset.earlyBound = "1";
+    addTileBtnEarly.addEventListener("click", openAddTileModal);
+  }
+
+  const bmTriggerEarly = $("#bookmark-trigger");
+  if (bmTriggerEarly && !bmTriggerEarly.dataset.earlyBound) {
+    bmTriggerEarly.dataset.earlyBound = "1";
+    bmTriggerEarly.addEventListener("click", () => {
+      const sb = $("#bookmark-sidebar");
+      if (sb) {
+        sb.classList.remove("sidebar-hidden");
+        bmTriggerEarly.classList.add("trigger-hidden");
+        const st = $("#search-trigger");
+        if (st) st.classList.add("trigger-hidden");
+      }
+    });
+  }
+
+  // Call bookmark init early too (after its trigger early-attach) so render and other sidebar wiring happen reliably.
+  try { initBookmarkSidebar(); } catch {}
+
   loadEventLogFromStorage();
 
   const config = await (await fetch("/api/config")).json();
@@ -19497,7 +20024,6 @@ async function init() {
   bindEventLogModal();
   bindBotCustomersModal();
   bindBrandingModal();
-  initBookmarkSidebar();
   initSearchTrigger();
   initNoteEditorPasteHandlers();
 
@@ -19514,71 +20040,7 @@ async function init() {
   bindMailInboxButton();
 
   $("#refresh-btn").addEventListener("click", () => refreshAll({ force: true }));
-  $("#logout-btn").addEventListener("click", async () => {
-    await fetch("/api/v2/auth/logout", { method: "POST", credentials: "same-origin" });
-    // Clean presence cache on explicit logout (the "until next login" contract)
-    try { clearPresenceUsersCache(); } catch {}
-    showLogin();
-  });
-
-  $("#login-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const errEl = $("#login-error");
-    const loadingEl = $("#login-loading");
-    const submitBtn = $("#login-submit-btn");
-    errEl.classList.add("hidden");
-    if (loadingEl) loadingEl.classList.remove("hidden");
-    if (submitBtn) {
-      submitBtn.disabled = true;
-      submitBtn.textContent = "Logging in…";
-    }
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => {
-      controller.abort();
-    }, 30000);
-    try {
-      const res = await fetch("/api/v2/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({
-          userName: $("#username").value,
-          password: $("#password").value,
-        }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || data.detail || "Login failed");
-      showApp();
-      // Start presence (bind button, heartbeats for self-online, snapshot for indicators/badge) immediately.
-      // This makes the header icon show indicators right away, and button responsive without waiting for refreshAll.
-      try { ensurePresenceOnLogin(); } catch {}
-      bindChangelogModal(config.version);
-      maybeShowChangelog(config.version);
-      // Defer refreshAll to let the browser paint the app shell first.
-      setTimeout(async () => {
-        await initCaches();
-        await refreshAll();
-        try { ensurePresenceOnLogin(); } catch {}
-        loadTaskCategories({ force: true }).catch(() => {});
-      }, 0);
-    } catch (err) {
-      clearTimeout(timeoutId);
-      let msg = err.message || "Login failed";
-      if (err.name === "AbortError" || /aborted|timeout/i.test(msg)) {
-        msg = "Server unreachable, contact admin";
-      }
-      errEl.textContent = msg;
-      errEl.classList.remove("hidden");
-    } finally {
-      if (loadingEl) loadingEl.classList.add("hidden");
-      if (submitBtn) {
-        submitBtn.disabled = false;
-        submitBtn.textContent = "Sign in";
-      }
-    }
-  });
+  // logout-btn attached early in init() for robustness (prevents sign-out doing nothing if later code errors)
 
   // Show the correct screen immediately (paints login or app shell before heavy work).
   if (await checkSession()) {

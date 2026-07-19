@@ -73,6 +73,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import time
 from http import cookies
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -466,6 +467,26 @@ class TestChaosHandler(SimpleHTTPRequestHandler):
         super().end_headers()
 
 
+def _lan_urls(port):
+    addrs = ["127.0.0.1"]
+    try:
+        h = socket.gethostname()
+        for a in socket.gethostbyname_ex(h)[2]:
+            if a and not a.startswith("127."):
+                addrs.append(a)
+    except:
+        pass
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        a = s.getsockname()[0]
+        if a and not a.startswith("127.") and a not in addrs:
+            addrs.append(a)
+        s.close()
+    except:
+        pass
+    return [f"http://{a}:{port}" for a in sorted(set(addrs))]
+
 def main() -> None:
     if not PUBLIC.is_dir():
         raise SystemExit(f"Missing public/ directory: {PUBLIC}")
@@ -475,7 +496,10 @@ def main() -> None:
 
     server = ThreadingHTTPServer(("0.0.0.0", PORT), TestChaosHandler)
     print(f"CRM Kanban TEST server (chaos mode for queue testing)")
-    print(f"  URL:   http://127.0.0.1:{PORT}")
+    print(f"  Binds: 0.0.0.0:{PORT} (LAN accessible)")
+    for u in _lan_urls(PORT):
+        print(f"  Open: {u}")
+    print(f"  Login: Use any username/password (test mode fakes auth)")
     print(f"  Login: Use any username/password (test mode fakes auth)")
     print()
     print("Control chaos from browser console:")

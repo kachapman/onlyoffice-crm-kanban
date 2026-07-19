@@ -1,7 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** Static "Sietch CRM" left of version (header, static). Removed old separate buttons code. Git+docs updated. Non-neg added. Admin: right pos, icons in tabs, contacts stub, branding form moved into tab. Flash fixed (orig hover, observer disabled, compared to prod). Next: fill tabs, full contacts, functional first.
+**Last session summary (for next resume):** Completed Phase 2A + 2C. 2A: search popup now has stage/owner filters, select-all, batch ops (add/remove tag, set stage, export selected), row-click preview. 2C: admin tabs expanded/filled (Custom Fields read-only, Tags add, plus existing contacts/stages). Non-neg preserved (tab icons, no separate buttons, no reorder of existing tabs). Projects managed via search modal. Docs updated; git status/diff run. Next: Phase 2D/2E/2F/2G or explicit direction.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 

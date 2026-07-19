@@ -4,6 +4,24 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 ## Unreleased (Phase 1 follow-up)
 
+- Header buttons (mail-inbox, add-tile, bookmarks trigger) + sign-out now reliably work (previously did nothing or no UI switch). Attached all critical listeners EARLY in init() immediately after guarded login form (using dataset guards to avoid dups) + made showLogin/showApp force display+visibility. Late binds no longer duplicate header attaches.
+- Sign out: reliably switches the UI to the login screen immediately (no static dashboard until manual refresh). Wrapped logout fetch in try/catch (always proceed to showLogin); added explicit style.display toggles in showApp/showLogin for robustness.
+- Phase 2C admin: contacts tab enhanced with live search + basic add contact form; stages tab implemented with search + add form (POST to /api/v2/stages; refreshes global stages; mirrors contacts UX).
+- Phase 2A complete: search popup now has stage + owner filters, select-all checkboxes, batch actions (add tag, remove tag, set stage, export selected), and row-click to preview. Existing rich results + tabbed previews + CSV export retained.
+ - Phase 2C: admin tabs filled — Custom Fields (read-only definitions), Tags (list + add form). Existing Users, Stages, Contacts, Event Log, Bot, Branding, Sync retained. New tabs keep icons next to titles per non-neg. Projects managed via search modal (filters + batch ops).
+- Phase 2 audit complete (all sub-phases reviewed via code + plans): 2A/2B/2C/2D present; 2E/2F/2G UI not started (backend for photos ready). Updated sietch-crm-plan.md table.
+- Plan: added research item to OnlyOffice CRM import phase in sietch-crm-plan.md: continue using export script but capture/store each deal's unique OO numeric id (Deals.aspx?id=NNN) for reliable later sync matching by external id (instead of title); also capture per-deal tags + custom/user fields (currently missing from bulk export).
+- Login: removed "Old CRM link" and giant ship watermark (background image + all related CSS/JS application on login screen).
+- Admin branding: Primary color input now always shows the *current* color (fetched from /api/branding or falls back to computed --accent / CSS default; never hardcodes blue). Branding form auto-populates when switching to the Branding tab inside admin console. Live color preview bound for the admin tab.
+- Admin console: vertical left sidebar tabs (full border highlight when active), tab content displayed directly to the right in side-by-side layout. Large fixed 980px modal window (no dynamic resize on tab switch; mobile uses 95vw fill). Tabs styled as left-aligned buttons. Shortened names (Import Sync etc). Login logo 96px. Gear button overlap fixed. Git+docs.
+- Login footer (login page bottom): removed text, just larger sietch-logo-2-nobg1.png (includes name), no button/hover highlight (pointer-events:none + opacity override). Dashboard footer unchanged.
+- Hero/logo default: sietch-logo-2-nobg2.png (pure logo); ship hero kept as customizable branding.
+- Header: "Sietch CRM" + version number now use normal sentence spacing (nested in one span, reduced internal margin); no logo added to it.
+- Admin console button: absolute positioned right in header (left of "Sign out"); removed ineffective margin-left:auto.
+- Primary for functional testing: real `server.py` (./start.sh); `test-server.py` only for deliberate chaos/mutation queue experiments.
+- Fixed server won't start: .env with unquoted "SMTP_FROM_NAME=Sietch CRM" (space) caused "CRM: command not found" during `source .env` in start.sh. Quoted value in .env + config.example.env. Made start.sh env loading robust (strips+re-quotes values safely).
+- Updated AGENTS.md (last session summary) + CHANGELOG.
+
 - Non-negotiables added to plan/AGENTS: preserve data/layout as if using OO API (note types, history with embedded emails, contacts, etc.); refer to main/prod for tiles/preview; implement contacts support; all OO API funcs replaced; focus functional first (sync later); git+docs after changes.
 - Admin console: button moved to right of header (left of sign out); no separate branding/bot/event-log buttons; tabs keep current order with exact same SVGs next to titles for Branding, Bot Customers, Event Log. Added Contacts tab stub.
 - Header: static "Sietch CRM" to left of version number (under header, static not changeable).

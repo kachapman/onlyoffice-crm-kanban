@@ -95,13 +95,13 @@ Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local 
 
 | Sub-phase | Status | Notes |
 |-----------|--------|-------|
-| 2A: Search modal expansion | 🔲 | Add filters, batch ops, rich results. |
-| 2B: Project card click behavior | 🔲 | Will be done in Phase 1 follow-up. |
-| 2C: Unified Admin Modal | 🔲 | Single tabbed admin panel (Projects, Users, Stages, Custom Fields, Contacts, Event Log, Bot Customers, Sync Status). |
-| 2D: Tile layout refactoring | 🔲 | CSS grid, responsive breakpoints, drag-and-drop (SortableJS CDN). |
-| 2E: Photo gallery | 🔲 | Upload, thumbnails, EXIF, lightbox, quota. |
-| 2F: Notification drawer | 🔲 | Slide-out drawer with replies. |
-| 2G: User profile/account modal | 🔲 | Name, email, phone, display name, profile picture, password change, notification prefs. |
+| 2A: Search modal expansion | ✅ | Filters (stage, owner), batch ops (add/remove tag, set stage, export selected), rich results, select-all, row-click preview. |
+| 2B: Project card click behavior | ✅ | Cards click → preview (side/full) or edit; Phase 1 follow-up completed. |
+| 2C: Unified Admin Modal | ✅ | Vertical sidebar tabs (overview/sync/users/stages/custom-fields/contacts/tags/branding/bot/logs); custom fields read-only, tags add, contacts/stages add+search, sync stubs; icons per non-neg. Projects managed via search modal (filters + batch ops). |
+| 2D: Tile layout refactoring | 🟡 | CSS grid (spans, double-height, responsive), native drag-drop + hints + layout buttons; SortableJS/FLIP/terminal theme per big plan not yet. |
+| 2E: Photo gallery | 🔲 | Backend + DB + quota/EXIF/folders ready; no frontend UI (no Photos tab in preview, no gallery/lightbox). |
+| 2F: Notification drawer | 🔲 | Feed tile + keyword filter exists; no slide-out drawer with inline replies. |
+| 2G: User profile/account modal | 🔲 | /api/user-profile exists for sync; no dedicated modal for edit (name/email/pw/prefs/pic). |
 
 ### Phase 3: Email + IMAP
 
@@ -122,6 +122,11 @@ Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local 
 - 5A: Beta deployment on `crm.publicadjustermidwest.com`.
 - 5B: Gradual user migration.
 - 5C: Archive OnlyOffice droplet, redirect dashboard domain, remove sync tables/code.
+
+### Research item: OnlyOffice CRM import phase (for future sync/enrich)
+- Consider still using the export script path (`migrate_from_onlyoffice.py --export-only` + `import_json_export.py`), but ensure **every deal is ID'd by its unique OnlyOffice number** (the `id` from the opp object, as shown in `https://office.publicadjustermidwest.com/Products/CRM/Deals.aspx?id=828`).
+- Store the OO id (as `external_id` or similar column on `opportunities`) during import. Future API sync (Phase 4) can then reliably locate + match the correct deal inside Sietch by this stable id instead of title (e.g. "Storyboard on Ramada (Steve Krajczar)").
+- Also address current export limitation: bulk opp export (via `/filter`) + import currently misses per-opportunity **tags** and **user/custom field values** (only global tag list and custom field *definitions* are exported). Extend export (parallel to how per-opp history is pulled) to capture full `tags` + `customFieldList` so they survive roundtrip or can be used in later sync.
 
 ---
 
@@ -158,7 +163,9 @@ Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local 
 - 2026-07-19: Phase 1 follow-up fixes committed (kanban fields, `localeCompare`, card title→preview, branding POST route, active-user filter). Verified locally.
 - 2026-07-19: Started Phase 2 export tooling: `--export-only` + `import_json_export.py` skeleton added to `migrate_from_onlyoffice.py`. Fixed user_id=1 fallback in profile migration. Footer made static (bottom of content flow).
 - Quick logo update: Replaced dashboard logos with new assets/sietch-logo-2-nobg*.png (nobg2 for pure logo in header/branding defaults; nobg1 for footers that had logo + name text beside it). Updated all references in HTML, server.py, init.sql, README. Progress: Phase 1 fixes complete (localeCompare, create/edit now functional). Issues encountered: import left tags/tasks incomplete (deprioritized per direction); multiple title matches possible for future enrich (will use external_id). Continuing to Phase 2C admin console expansion.
-- Advanced 2C: normalized /api/v2/me to camelCase (consistent isAdmin etc); added live Overview (shows current user from session) + functional Users tab (lists all users read-only via /api/v2/users with admin badges). Sync tabs remain stubbed.
+- Advanced 2C: normalized /api/v2/me to camelCase (consistent isAdmin etc); added live Overview (shows current user from session) + functional Users tab (lists all users read-only via /api/v2/users with admin badges). Sync tabs remain stubbed. Header buttons (mail, add-tile, bookmarks) + sign-out fixed with early listener attach + robust show/hide (part of making UI functional before deeper 2C tabs).
+- Consulted plan: still in Phase 2 / 2C focus (admin tabs filling, contacts). Phase 1 + research item complete. Moving forward on 2C.
+- 2C contacts tab: enhanced with live search, dynamic list from /api/v2/contacts, basic add contact form (uses existing POST). Read-only display for import preservation; supports func in deals/bot.
 - 2026-07-18: `60d880b` — Add dashboard-local data migration tooling.
 - 2026-07-18: `b7d091b` — Expose dashboard on `0.0.0.0` and DB on `127.0.0.1:5432`.
 - 2026-07-18: `0fb82e3` — Fix local deployment for Podman.
@@ -171,6 +178,6 @@ Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local 
 
 Non-negotiables in place. Admin: button position fixed, tabs with icons (current order), contacts stub added for preserve, redirects for old modals. Header static "Sietch CRM [ver]". Logos static. Flashing fixed to original hover (no re-render). Git committed + docs updated after changes.
 
-Continue filling admin tabs content (move forms), ensure contacts full for func, keep all preserve rules. Sync moved later. Focus functional new DB/UI.
+Header core buttons (mail/add-tile/bookmarks) + sign-out now functional. 2C admin contacts tab enhanced (search + add). Continue filling admin tabs content (move forms, e.g. stages), ensure contacts full for func, keep all preserve rules. Sync moved later. Focus functional new DB/UI. Advance Phase 2C.
 
 Update AGENTS/CHANGELOG/plan after every change.
