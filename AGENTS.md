@@ -1,7 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** Phase 2 started: added --export-only + export-dir to migrate_from_onlyoffice.py (writes per-entity JSON), created import_json_export.py skeleton. Fixed Sietch dashboard footer (was position:fixed; now static flow at very bottom of dashboard content after tiles). Updated plan + AGENTS. Terminal theme (Phase 2D) planned after export + 2C admin modal. See sietch-crm-plan.md.
+**Last session summary (for next resume):** Phase 2: expanded import_json_export.py to import users (with external_user_id), stages, tags, contacts, opportunities (with relation mapping), and basic history. --export-only already in place. Footer static. See sietch-crm-plan.md for progress. Terminal theme in 2D.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 
