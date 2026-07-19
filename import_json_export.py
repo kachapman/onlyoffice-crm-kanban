@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Import portable JSON export (produced by migrate_from_onlyoffice.py --export-only) into Sietch CRM PostgreSQL.
 
+Imports: users (w/ external_user_id), stages, tags, custom field defs, contacts,
+opportunities (w/ stage/contact/responsible + tag attachments if present),
+tasks, history events (w/ category mapping).
+
 Usage:
-    python import_json_export.py --source ./crm_export_json --db-host ... 
+    python import_json_export.py --source ./crm_export_json --db-host 127.0.0.1 ...
+    python import_json_export.py --source ./crm_export_json --dry-run
 """
 
 from __future__ import annotations
@@ -23,7 +28,11 @@ except ImportError:
 def _load_json(path: Path) -> Any:
     if not path.exists():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    # Some exports may wrap in response
+    if isinstance(data, dict) and "response" in data:
+        return data["response"]
+    return data
 
 
 def _db_conn(args: argparse.Namespace):
@@ -88,6 +97,41 @@ def _insert_tags(conn, tags: list[dict]) -> dict[str, int]:
             crm_id = str(t.get("id") or t.get("ID") or title)
             crm_to_v3[crm_id] = row[0]
     conn.commit()
+    return crm_to_v3
+
+
+def _insert_custom_fields(conn, cfs: list[dict]) -> dict[str, int]:
+    """Import custom field definitions."""
+    if not cfs:
+        return {}
+    cur = conn.cursor()
+    crm_to_v3: dict[str, int] = {}
+    count = 0
+    for cf in cfs:
+        if not isinstance(cf, dict):
+            continue
+        title = str(cf.get("label") or cf.get("title") or cf.get("name") or cf.get("fieldTitle") or "").strip()
+        if not title:
+            continue
+        field_type = cf.get("fieldType") or cf.get("type") or 0
+        try:
+            field_type = int(field_type)
+        except:
+            field_type = 0
+        cur.execute(
+            """INSERT INTO custom_field_definitions (title, field_type, sort_order)
+               VALUES (%s, %s, %s)
+               ON CONFLICT (title) DO NOTHING
+               RETURNING id""",
+            (title, field_type, cf.get("sortOrder") or 0),
+        )
+        row = cur.fetchone()
+        if row:
+            crm_id = str(cf.get("id") or cf.get("ID") or title)
+            crm_to_v3[crm_id] = row[0]
+            count += 1
+    conn.commit()
+    print(f"  custom fields: {count}")
     return crm_to_v3
 
 
@@ -160,8 +204,8 @@ def _insert_contacts(conn, contacts: list[dict], user_map: dict) -> dict[str, in
     return crm_to_v3
 
 
-def _insert_opportunities(conn, opps: list[dict], stage_map: dict[str, int], contact_map: dict[str, int], user_map: dict[str, int]) -> dict[str, int]:
-    """Import opportunities, mapping relations. Returns old_opp_id -> new_id."""
+def _insert_opportunities(conn, opps: list[dict], stage_map: dict[str, int], contact_map: dict[str, int], user_map: dict[str, int], tag_map: dict[str, int]) -> dict[str, int]:
+    """Import opportunities, mapping relations. Returns old_opp_id -> new_id. Also attaches tags if present."""
     if not opps:
         return {}
     cur = conn.cursor()
@@ -217,21 +261,92 @@ def _insert_opportunities(conn, opps: list[dict], stage_map: dict[str, int], con
         cur.execute(
             """INSERT INTO opportunities (title, description, stage_id, stage_type, bid_value,
                    expected_close_date, contact_id, responsible_user_id, created_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
-               RETURNING id""",
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                RETURNING id""",
             (title, desc, stage_id, stage_type, bid_value, due, contact_id, responsible_id),
         )
         vid = cur.fetchone()[0]
         if crm_id:
             opp_map[crm_id] = vid
+
+        # Attach tags if embedded in opp data (list of tag objects or titles)
+        try:
+            opp_tags = o.get("tags") or o.get("Tags") or []
+            if isinstance(opp_tags, list):
+                for tg in opp_tags:
+                    tag_title = ""
+                    if isinstance(tg, dict):
+                        tag_title = str(tg.get("title") or tg.get("Title") or tg.get("name") or "").strip()
+                    elif isinstance(tg, str):
+                        tag_title = tg.strip()
+                    if tag_title:
+                        # lookup by title if not in map by id
+                        t_id = None
+                        for k, v in tag_map.items():
+                            # simple: we can query or assume title match
+                            pass
+                        cur.execute("SELECT id FROM tag_definitions WHERE title = %s", (tag_title,))
+                        tr = cur.fetchone()
+                        if tr:
+                            cur.execute(
+                                "INSERT INTO opportunity_tags (opportunity_id, tag_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                                (vid, tr[0]),
+                            )
+        except Exception:
+            pass
+
         count += 1
     conn.commit()
     print(f"  opportunities: {count}")
     return opp_map
 
 
+def _insert_tasks(conn, tasks: list[dict], opp_map: dict[str, int], user_map: dict[str, int]) -> int:
+    """Import tasks (open + closed), mapping to opportunities and users."""
+    if not tasks:
+        return 0
+    cur = conn.cursor()
+    count = 0
+    for t in tasks:
+        if not isinstance(t, dict):
+            continue
+        title = str(t.get("title") or t.get("Title") or "").strip()
+        if not title:
+            continue
+        description = str(t.get("description") or t.get("Description") or "").strip() or None
+        is_closed = bool(t.get("isClosed") or t.get("IsClosed") or t.get("closed") or False)
+
+        # Link to opportunity
+        opp_data = t.get("opportunity") or t.get("Opportunity") or {}
+        crm_opp_id = str(opp_data.get("id") or opp_data.get("ID") or t.get("entityId") or "") if isinstance(opp_data, dict) else str(t.get("entityId") or "")
+        v3_opp_id = opp_map.get(crm_opp_id)
+
+        # Responsible
+        resp_data = t.get("responsible") or t.get("Responsible") or {}
+        crm_resp_id = str(resp_data.get("id") or resp_data.get("ID") or "") if isinstance(resp_data, dict) else ""
+        v3_resp_id = user_map.get(crm_resp_id)
+
+        due_date = t.get("dueDate") or t.get("DueDate") or None
+        priority = int(t.get("priority") or t.get("Priority") or 0)
+
+        closed_at = None
+        if is_closed:
+            closed_at = t.get("closedDate") or t.get("ClosedDate") or t.get("closedAt") or None
+
+        cur.execute(
+            """INSERT INTO tasks (title, description, opportunity_id, responsible_user_id,
+                   due_date, priority, is_closed, closed_at, created_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())""",
+            (title, description, v3_opp_id, v3_resp_id, due_date, priority, is_closed, closed_at),
+        )
+        count += 1
+    conn.commit()
+    print(f"  tasks: {count}")
+    return count
+
+
 def _insert_history_basic(conn, history: list[dict], opp_map: dict[str, int], user_map: dict[str, int]) -> int:
-    """Basic history import. Looks for content and links to opportunity."""
+    """Improved history import. Maps categories by title, links to opp."""
     if not history:
         return 0
     cur = conn.cursor()
@@ -240,34 +355,42 @@ def _insert_history_basic(conn, history: list[dict], opp_map: dict[str, int], us
         if not isinstance(h, dict):
             continue
         opp_data = h.get("opportunity") or h.get("Opportunity") or {}
-        opp_crm_id = str(opp_data.get("id") or opp_data.get("ID") or h.get("opportunityId") or "")
+        opp_crm_id = str(opp_data.get("id") or opp_data.get("ID") or h.get("opportunityId") or h.get("entityId") or "")
         opp_id = opp_map.get(opp_crm_id)
         if not opp_id:
             continue
 
-        content = h.get("content") or h.get("Content") or h.get("note") or str(h)[:200]
-        created = h.get("created") or h.get("createOn") or None
-
-        # Try to find a category, default to 1 (Note) if exists
-        cat_id = 1
+        # Category by title
+        cat_data = h.get("category") or h.get("Category") or {}
+        cat_title = str(cat_data.get("title") or cat_data.get("Title") or "Note").strip() if isinstance(cat_data, dict) else "Note"
+        cat_id = None
         try:
-            cur.execute("SELECT id FROM history_categories LIMIT 1")
+            cur.execute("SELECT id FROM history_categories WHERE title = %s", (cat_title,))
             row = cur.fetchone()
             if row:
                 cat_id = row[0]
-        except:
-            pass
+            else:
+                cur.execute("INSERT INTO history_categories (title, is_system) VALUES (%s, TRUE) RETURNING id", (cat_title,))
+                cat_id = cur.fetchone()[0]
+        except Exception:
+            cat_id = 1  # fallback
 
-        author_id = None
-        author_data = h.get("createdBy") or h.get("author") or {}
-        if isinstance(author_data, dict):
-            a_id = str(author_data.get("id") or author_data.get("ID") or "")
-            author_id = user_map.get(a_id)
+        content = h.get("content") or h.get("Content") or h.get("note") or ""
+        if isinstance(content, dict):
+            content = content.get("text") or str(content)
+        content = str(content).strip() or None
+
+        created = h.get("created") or h.get("createOn") or h.get("Created") or h.get("date") or None
+
+        # Author
+        author_data = h.get("createBy") or h.get("CreateBy") or h.get("createdBy") or h.get("author") or {}
+        crm_author_id = str(author_data.get("id") or author_data.get("ID") or "") if isinstance(author_data, dict) else ""
+        author_id = user_map.get(crm_author_id)
 
         cur.execute(
             """INSERT INTO history_events (opportunity_id, category_id, content, created_by, created_at)
                VALUES (%s, %s, %s, %s, COALESCE(%s, NOW()))""",
-            (opp_id, cat_id, str(content)[:2000], author_id, created),
+            (opp_id, cat_id, content, author_id, created),
         )
         count += 1
     conn.commit()
@@ -295,12 +418,13 @@ def main():
     users = _load_json(src / "users.json") or []
     stages = _load_json(src / "stages.json") or []
     tags = _load_json(src / "tags.json") or []
+    custom_fields = _load_json(src / "custom_fields.json") or []
     contacts = _load_json(src / "contacts.json") or []
     opps = _load_json(src / "opportunities.json") or []
     tasks = _load_json(src / "tasks.json") or []
     history = _load_json(src / "history.json") or []
 
-    print(f"  users: {len(users)}, stages: {len(stages)}, tags: {len(tags)}, contacts: {len(contacts)}, opps: {len(opps)}")
+    print(f"  users: {len(users)}, stages: {len(stages)}, tags: {len(tags)}, custom_fields: {len(custom_fields)}, contacts: {len(contacts)}, opps: {len(opps)}, tasks: {len(tasks)}, history: {len(history)}")
 
     if args.dry_run:
         print("Dry run — not writing to DB.")
@@ -318,20 +442,28 @@ def main():
         print(f"  stages: {len(stage_map)}")
 
         print("Importing tags...")
-        _insert_tags(conn, tags)
+        tag_map = _insert_tags(conn, tags)
+
+        print("Importing custom fields...")
+        _insert_custom_fields(conn, custom_fields)
 
         print("Importing contacts...")
         contact_map = _insert_contacts(conn, contacts, user_map)
         print(f"  contacts: {len(contact_map)}")
 
         print("Importing opportunities...")
-        opp_map = _insert_opportunities(conn, opps, stage_map, contact_map, user_map)
+        opp_map = _insert_opportunities(conn, opps, stage_map, contact_map, user_map, tag_map)
+
+        print("Importing tasks...")
+        _insert_tasks(conn, tasks, opp_map, user_map)
 
         print("Importing history events (basic)...")
         _insert_history_basic(conn, history, opp_map, user_map)
 
         conn.commit()
-        print("\nImport complete for core entities.")
+        print("\nImport complete for core entities (users, stages, tags, custom fields, contacts, opps, tasks, history).")
+        print("Note: After import, run migrate_dashboard_data.py to remap local user-profiles/tiles/notes if applicable.")
+        print("Opportunity custom field *values* and full per-opp tags may need additional export steps or manual association.")
     except Exception as exc:
         conn.rollback()
         print(f"Import failed: {exc}")
