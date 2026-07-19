@@ -5,12 +5,12 @@ All notable changes to the Sietch CRM dashboard are documented here.
 ## Unreleased (Phase 1 follow-up)
 
 - Non-negotiables added to plan/AGENTS: preserve data/layout as if using OO API (note types, history with embedded emails, contacts, etc.); refer to main/prod for tiles/preview; implement contacts support; all OO API funcs replaced; focus functional first (sync later); git+docs after changes.
-- Admin console: button moved to right of header (left of sign out); no separate branding/bot/event-log buttons; tabs keep current order with exact same SVGs next to titles for Branding, Bot Customers, Event Log.
-- Header: static "Sietch CRM [version]" (under header, left of version; not changeable).
-- Logos: footer, favicon, "Sietch CRM" name static/hardcoded (using new assets); ship watermarks remain customizable.
+- Admin console: button moved to right of header (left of sign out); no separate branding/bot/event-log buttons; tabs keep current order with exact same SVGs next to titles for Branding, Bot Customers, Event Log. Added Contacts tab stub.
+- Header: static "Sietch CRM" to left of version number (under header, static not changeable).
+- Logos: footer, favicon, "Sietch CRM" name static/hardcoded (using new assets); ship watermarks remain customizable via branding.
 - Flashing on deal tiles: restored original production hover (simple border light-up on mouseover, no re-render); disabled card observer/enrich replaceWith that caused flash on visible/hover.
 - Started consolidating branding/bot/logs into admin tabs (stubs; full move next).
-- Updated docs with non-negotiables per user direction. 
+- Updated docs with non-negotiables per user direction.
 
 - OnlyOffice->Sietch data import completed and verified (1191 opps, 38898 history events, 16 contacts, 11 users) into sietch_crm; bot login + filtered API queries work.
 - Added legacy query param support (filterValue, stageType, opportunityStagesid, contactid) in server.py:_handle_projects_list so frontend group kanbans and search continue to filter correctly after import.
