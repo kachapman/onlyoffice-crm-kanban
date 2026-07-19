@@ -1,7 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** Fixed add tile modal close (onclick fallbacks on cancel + backdrop, commit 1c83244). Wrote detailed Phase 2H plan to sietch-crm-plan.md: three scopes (project/personal/company), full file manager UI, batch ops, search, header button, overhauled per-project docs tab. DB migration, backend endpoints, frontend modal, implementation order all documented. Commit cf7fbdd pushed. Next: Phase 2D tile layout or Phase 2H build (DB migration + backend first).
+**Last session summary (for next resume):** Phase 2H frontend: wrote all JS for documents modal (bindDocumentsModal, openDocumentsModal, closeDocumentsModal, loadDocumentsList, renderDocumentsList, upload, batch delete/move/copy, drag-drop upload), wired #documents-btn header button to openDocumentsModal, added modal HTML + CSS. Backend was committed in 1a2e654. Syntax-checked JS, cleaned up redundant code. Commit c5de6e5 pushed. Next: test on LAN server, then tackle right-click context menu and overhauling existing Documents tab in project preview modal.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 
