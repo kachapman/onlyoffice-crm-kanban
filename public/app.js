@@ -17297,6 +17297,7 @@ function switchAdminTab(tab) {
   const activeBtn = document.querySelector(`#admin-console-modal .admin-tab-btn[data-tab="${tab}"]`);
   if (activeBtn) activeBtn.style.borderBottom = "2px solid var(--accent)";
   if (tab === "users") populateAdminUsersList();
+  if (tab === "contacts") populateAdminContactsList();
 }
 
 async function populateAdminOverview() {
@@ -17322,6 +17323,24 @@ async function populateAdminUsersList() {
     container.innerHTML = `<p><strong>Users (read-only):</strong></p>${list}<p style="font-size:0.75rem;color:var(--muted);margin-top:0.5rem;">Full CRUD later in 2C.</p>`;
   } catch (e) {
     container.innerHTML = `<p style="color:#b00;">Failed to load users: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+async function populateAdminContactsList() {
+  const container = $("#admin-tab-contacts");
+  if (!container) return;
+  if (container.dataset.populated === "1") return;
+  container.dataset.populated = "1";
+  try {
+    const data = await api("/api/v2/contacts");
+    const contacts = unwrap(data) || data || [];
+    const list = (contacts || []).map(c => {
+      const name = [c.firstName, c.lastName].filter(Boolean).join(" ") || c.displayName || c.email || "Contact";
+      return `<div style="padding:2px 0; border-bottom:1px solid var(--border);">${escapeHtml(name)} &lt;${escapeHtml(c.email || "")}&gt; ${c.company ? escapeHtml(c.company) : ""}</div>`;
+    }).join("") || "<p>No contacts.</p>";
+    container.innerHTML = `<p><strong>Contacts (read-only for import):</strong></p>${list}<p style="font-size:0.75rem;color:var(--muted);margin-top:0.5rem;">Required to preserve contact-based functionality (deals, bot modal etc). Full CRUD later.</p>`;
+  } catch (e) {
+    container.innerHTML = `<p style="color:#b00;">Failed to load contacts: ${escapeHtml(e.message)}</p>`;
   }
 }
 
