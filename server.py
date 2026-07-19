@@ -686,6 +686,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/history-categories":
             self._handle_history_categories_get()
             return
+        if api_path == "/api/v2/documents/personal":
+            self._handle_documents_personal()
+            return
+        if api_path == "/api/v2/documents/company":
+            self._handle_documents_company()
+            return
+        if api_path == "/api/v2/documents/search":
+            self._handle_documents_search(qs)
+            return
+        if api_path == "/api/v2/projects/simple":
+            self._handle_projects_simple()
+            return
         m = re.match(r"^/api/v2/documents/(\d+)$", api_path)
         if m:
             self._handle_document_download(int(m.group(1)))
@@ -859,6 +871,25 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if m and method == "POST":
             self._handle_document_callback(int(m.group(1)))
             return
+        m = re.match(r"^/api/v2/documents/(\d+)/copy$", api_path)
+        if m and method == "POST":
+            self._handle_document_copy(int(m.group(1)))
+            return
+        if api_path == "/api/v2/documents/batch-delete" and method == "POST":
+            self._handle_documents_batch_delete()
+            return
+        if api_path == "/api/v2/documents/batch-move" and method == "POST":
+            self._handle_documents_batch_move()
+            return
+        if api_path == "/api/v2/documents/batch-copy" and method == "POST":
+            self._handle_documents_batch_copy()
+            return
+        if api_path == "/api/v2/documents/personal/upload" and method == "POST":
+            self._handle_document_upload_personal()
+            return
+        if api_path == "/api/v2/documents/company/upload" and method == "POST":
+            self._handle_document_upload_company()
+            return
 
         # ── v2 API: Resources ──
         if api_path == "/api/v2/stages" and method == "POST":
@@ -924,6 +955,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         m = re.match(r"^/api/v2/documents/(\d+)$", api_path)
         if m and method == "DELETE":
             self._handle_document_delete(int(m.group(1)))
+            return
+        if m and method == "PUT":
+            self._handle_document_update(int(m.group(1)))
             return
         m = re.match(r"^/api/v2/notifications/(\d+)/read$", api_path)
         if m and method == "PUT":
@@ -1832,7 +1866,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not user:
             return
         rows = db.query(
-            """SELECT id, title, file_path, file_size, mime_type, uploaded_by, uploaded_at
+            """SELECT id, title, notes, file_path, file_size, mime_type, uploaded_by, uploaded_at, company_scope
                FROM project_documents WHERE opportunity_id = %s AND is_deleted = FALSE
                ORDER BY uploaded_at DESC""",
             (opp_id,),
@@ -1840,9 +1874,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         docs = []
         for r in rows:
             docs.append({
-                "id": r[0], "title": r[1], "filePath": r[2],
-                "fileSize": r[3], "mimeType": r[4], "uploadedBy": r[5],
-                "uploadedAt": r[6].isoformat() if r[6] else None,
+                "id": r[0], "title": r[1], "notes": r[2], "filePath": r[3],
+                "fileSize": r[4], "mimeType": r[5], "uploadedBy": r[6],
+                "uploadedAt": r[7].isoformat() if r[7] else None,
+                "companyScope": r[8],
                 "editUrl": f"/api/v2/documents/{r[0]}/editor-config",
             })
         _json_response(self, 200, {"documents": docs})
@@ -1961,6 +1996,439 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             (doc_id,),
         )
         _json_response(self, 200, {"ok": True})
+
+    def _handle_document_update(self, doc_id: int) -> None:
+        """PATCH equivalent: rename, update notes, or move to project."""
+        user = _require_auth(self)
+        if not user:
+            return
+        row = db.query(
+            "SELECT uploaded_by, opportunity_id, company_scope FROM project_documents WHERE id = %s AND is_deleted = FALSE",
+            (doc_id,), fetch="one",
+        )
+        if not row:
+            _json_response(self, 404, {"error": "Document not found"})
+            return
+        uploaded_by, opp_id, company_scope = row
+        is_owner = uploaded_by == user["id"]
+        is_admin = user.get("is_admin")
+        if not is_owner and not is_admin:
+            _json_response(self, 403, {"error": "Not authorized"})
+            return
+        try:
+            body = json.loads(_read_body(self))
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        title = body.get("title")
+        notes = body.get("notes")
+        new_opp_id = body.get("opportunity_id")
+        updates = []
+        params = []
+        if title is not None:
+            updates.append("title = %s")
+            params.append(title)
+        if notes is not None:
+            updates.append("notes = %s")
+            params.append(notes)
+        if new_opp_id is not None:
+            # Move to project scope: clear personal/company flags
+            updates.append("opportunity_id = %s")
+            params.append(new_opp_id)
+        if not updates:
+            _json_response(self, 400, {"error": "Nothing to update"})
+            return
+        params.append(doc_id)
+        db.execute(f"UPDATE project_documents SET {', '.join(updates)} WHERE id = %s", tuple(params))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_documents_personal(self) -> None:
+        """List current user's personal documents (uploaded_by = user, no opp, not company)."""
+        user = _require_auth(self)
+        if not user:
+            return
+        rows = db.query(
+            """SELECT id, title, notes, file_path, file_size, mime_type, uploaded_at, opportunity_id, company_scope
+               FROM project_documents
+               WHERE uploaded_by = %s AND is_deleted = FALSE AND opportunity_id IS NULL AND company_scope = FALSE
+               ORDER BY uploaded_at DESC""",
+            (user["id"],),
+        )
+        docs = [self._doc_row(r) for r in rows]
+        _json_response(self, 200, {"documents": docs})
+
+    def _handle_documents_company(self) -> None:
+        """List all company-scoped documents."""
+        user = _require_auth(self)
+        if not user:
+            return
+        rows = db.query(
+            """SELECT id, title, notes, file_path, file_size, mime_type, uploaded_at, opportunity_id, company_scope
+               FROM project_documents
+               WHERE company_scope = TRUE AND is_deleted = FALSE
+               ORDER BY uploaded_at DESC""",
+        )
+        docs = [self._doc_row(r) for r in rows]
+        _json_response(self, 200, {"documents": docs})
+
+    def _handle_documents_search(self, qs: dict) -> None:
+        """Search all non-deleted project documents. Returns results grouped by project."""
+        user = _require_auth(self)
+        if not user:
+            return
+        q = (qs.get("q", [""])[0]).strip().lower()
+        project_id = qs.get("project_id", [None])[0]
+        if project_id:
+            project_id = int(project_id)
+        if q:
+            if project_id:
+                rows = db.query(
+                    """SELECT d.id, d.title, d.notes, d.file_path, d.file_size, d.mime_type, d.uploaded_at,
+                              d.opportunity_id, d.company_scope, o.title AS opp_title
+                       FROM project_documents d
+                       JOIN opportunities o ON o.id = d.opportunity_id
+                       WHERE d.opportunity_id = %s AND d.is_deleted = FALSE
+                         AND (LOWER(d.title) LIKE %s OR LOWER(d.notes) LIKE %s)
+                       ORDER BY d.uploaded_at DESC""",
+                    (project_id, f"%{q}%", f"%{q}%"),
+                )
+            else:
+                rows = db.query(
+                    """SELECT d.id, d.title, d.notes, d.file_path, d.file_size, d.mime_type, d.uploaded_at,
+                              d.opportunity_id, d.company_scope, o.title AS opp_title
+                       FROM project_documents d
+                       JOIN opportunities o ON o.id = d.opportunity_id
+                       WHERE d.opportunity_id IS NOT NULL AND d.is_deleted = FALSE
+                         AND (LOWER(d.title) LIKE %s OR LOWER(d.notes) LIKE %s)
+                       ORDER BY o.title, d.uploaded_at DESC""",
+                    (f"%{q}%", f"%{q}%"),
+                )
+        else:
+            if project_id:
+                rows = db.query(
+                    """SELECT d.id, d.title, d.notes, d.file_path, d.file_size, d.mime_type, d.uploaded_at,
+                              d.opportunity_id, d.company_scope, o.title AS opp_title
+                       FROM project_documents d
+                       JOIN opportunities o ON o.id = d.opportunity_id
+                       WHERE d.opportunity_id = %s AND d.is_deleted = FALSE
+                       ORDER BY d.uploaded_at DESC""",
+                    (project_id,),
+                )
+            else:
+                rows = db.query(
+                    """SELECT d.id, d.title, d.notes, d.file_path, d.file_size, d.mime_type, d.uploaded_at,
+                              d.opportunity_id, d.company_scope, o.title AS opp_title
+                       FROM project_documents d
+                       JOIN opportunities o ON o.id = d.opportunity_id
+                       WHERE d.opportunity_id IS NOT NULL AND d.is_deleted = FALSE
+                       ORDER BY o.title, d.uploaded_at DESC""",
+                )
+        # Group by project
+        grouped = {}
+        for r in rows:
+            opp_title = r[-1]
+            if opp_title not in grouped:
+                grouped[opp_title] = {"project": opp_title, "projectId": r[7], "documents": []}
+            grouped[opp_title]["documents"].append(self._doc_row(r[:-1]))
+        _json_response(self, 200, {"results": list(grouped.values()), "total": len(rows)})
+
+    def _handle_projects_simple(self) -> None:
+        """Lightweight project list for document move/copy picker. Recent 20."""
+        user = _require_auth(self)
+        if not user:
+            return
+        rows = db.query(
+            """SELECT o.id, o.title, s.title AS stage_title
+               FROM opportunities o
+               LEFT JOIN stages s ON s.id = o.stage_id
+               ORDER BY o.id DESC
+               LIMIT 20""",
+        )
+        projects = [{"id": r[0], "title": r[1], "stage": r[2]} for r in rows]
+        _json_response(self, 200, {"projects": projects})
+
+    def _handle_document_copy(self, doc_id: int) -> None:
+        """Copy a document to a new scope (project, personal, or company)."""
+        user = _require_auth(self)
+        if not user:
+            return
+        row = db.query(
+            "SELECT title, notes, file_path, file_size, mime_type FROM project_documents WHERE id = %s AND is_deleted = FALSE",
+            (doc_id,), fetch="one",
+        )
+        if not row:
+            _json_response(self, 404, {"error": "Document not found"})
+            return
+        title, notes, file_path, file_size, mime_type = row
+        try:
+            body = json.loads(_read_body(self))
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        new_opp_id = body.get("opportunity_id")
+        new_company = body.get("company_scope", False)
+        # Determine storage subdir
+        if new_opp_id is not None:
+            scope_dir = DOCUMENT_STORAGE_PATH / "shared" / "project" / str(new_opp_id)
+            company_scope = False
+            uploaded_by = None
+        elif new_company:
+            scope_dir = DOCUMENT_STORAGE_PATH / "shared" / "company"
+            company_scope = True
+            uploaded_by = None
+        else:
+            scope_dir = DOCUMENT_STORAGE_PATH / "shared" / "personal" / str(user["id"])
+            company_scope = False
+            uploaded_by = user["id"]
+        scope_dir.mkdir(parents=True, exist_ok=True)
+        src = ROOT / file_path
+        safe_name = re.sub(r'[^\w.\-]', '_', title)
+        unique_name = f"{int(time.time())}_{safe_name}"
+        dst = scope_dir / unique_name
+        try:
+            dst.write_bytes(src.read_bytes())
+        except OSError:
+            _json_response(self, 500, {"error": "Failed to copy file"})
+            return
+        doc_id = db.insert_returning(
+            """INSERT INTO project_documents (title, notes, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (title, notes, str(dst.relative_to(ROOT)), file_size, mime_type, uploaded_by, new_opp_id, company_scope),
+        )
+        _json_response(self, 201, {"id": doc_id, "title": title})
+
+    def _handle_documents_batch_delete(self) -> None:
+        """Soft-delete multiple documents."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            body = json.loads(_read_body(self))
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        ids = body.get("ids", [])
+        if not ids:
+            _json_response(self, 400, {"error": "ids required"})
+            return
+        is_admin = user.get("is_admin")
+        # Verify user owns all docs they're trying to delete (unless admin)
+        rows = db.query(
+            "SELECT id, uploaded_by, company_scope FROM project_documents WHERE id = ANY(%s) AND is_deleted = FALSE",
+            (ids,),
+        )
+        for r in rows:
+            doc_id, uploaded_by, company_scope = r[0], r[1], r[2]
+            if company_scope and uploaded_by != user["id"] and not is_admin:
+                _json_response(self, 403, {"error": f"Not authorized to delete document {doc_id}"})
+                return
+            if not company_scope and uploaded_by != user["id"] and not is_admin:
+                _json_response(self, 403, {"error": f"Not authorized to delete document {doc_id}"})
+                return
+        db.execute(
+            "UPDATE project_documents SET is_deleted = TRUE, deleted_at = NOW() WHERE id = ANY(%s)",
+            (ids,),
+        )
+        _json_response(self, 200, {"ok": True, "count": len(ids)})
+
+    def _handle_documents_batch_move(self) -> None:
+        """Move multiple documents to a project (updates opportunity_id, clears personal/company flags)."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            body = json.loads(_read_body(self))
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        ids = body.get("ids", [])
+        new_opp_id = body.get("opportunity_id")
+        if not ids or new_opp_id is None:
+            _json_response(self, 400, {"error": "ids and opportunity_id required"})
+            return
+        is_admin = user.get("is_admin")
+        rows = db.query(
+            "SELECT id, uploaded_by, company_scope FROM project_documents WHERE id = ANY(%s) AND is_deleted = FALSE",
+            (ids,),
+        )
+        for r in rows:
+            doc_id, uploaded_by, company_scope = r[0], r[1], r[2]
+            if uploaded_by != user["id"] and not is_admin:
+                _json_response(self, 403, {"error": f"Not authorized to move document {doc_id}"})
+                return
+        # Move file to new project directory
+        for doc_id in ids:
+            row = db.query(
+                "SELECT file_path, title FROM project_documents WHERE id = %s AND is_deleted = FALSE",
+                (doc_id,), fetch="one",
+            )
+            if not row:
+                continue
+            old_path, title = row
+            src = ROOT / old_path
+            new_dir = DOCUMENT_STORAGE_PATH / "shared" / "project" / str(new_opp_id)
+            new_dir.mkdir(parents=True, exist_ok=True)
+            safe_name = re.sub(r'[^\w.\-]', '_', title)
+            new_path = new_dir / f"{int(time.time())}_{safe_name}"
+            if src.exists():
+                new_path.write_bytes(src.read_bytes())
+            db.execute(
+                """UPDATE project_documents
+                   SET opportunity_id = %s, company_scope = FALSE, uploaded_by = NULL, file_path = %s
+                   WHERE id = %s""",
+                (new_opp_id, str(new_path.relative_to(ROOT)), doc_id),
+            )
+        _json_response(self, 200, {"ok": True, "count": len(ids)})
+
+    def _handle_documents_batch_copy(self) -> None:
+        """Copy multiple documents to a new scope."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            body = json.loads(_read_body(self))
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        ids = body.get("ids", [])
+        new_opp_id = body.get("opportunity_id")
+        new_company = body.get("company_scope", False)
+        if not ids:
+            _json_response(self, 400, {"error": "ids required"})
+            return
+        copied = 0
+        for doc_id in ids:
+            # Use the single copy handler logic inline
+            row = db.query(
+                "SELECT title, notes, file_path, file_size, mime_type FROM project_documents WHERE id = %s AND is_deleted = FALSE",
+                (doc_id,), fetch="one",
+            )
+            if not row:
+                continue
+            title, notes, file_path, file_size, mime_type = row
+            if new_opp_id is not None:
+                scope_dir = DOCUMENT_STORAGE_PATH / "shared" / "project" / str(new_opp_id)
+                company_scope, uploaded_by = False, None
+            elif new_company:
+                scope_dir = DOCUMENT_STORAGE_PATH / "shared" / "company"
+                company_scope, uploaded_by = True, None
+            else:
+                scope_dir = DOCUMENT_STORAGE_PATH / "shared" / "personal" / str(user["id"])
+                company_scope, uploaded_by = False, user["id"]
+            scope_dir.mkdir(parents=True, exist_ok=True)
+            src = ROOT / file_path
+            safe_name = re.sub(r'[^\w.\-]', '_', title)
+            unique_name = f"{int(time.time())}_{safe_name}"
+            dst = scope_dir / unique_name
+            try:
+                dst.write_bytes(src.read_bytes())
+            except OSError:
+                continue
+            db.insert_returning(
+                """INSERT INTO project_documents (title, notes, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                (title, notes, str(dst.relative_to(ROOT)), file_size, mime_type, uploaded_by, new_opp_id, company_scope),
+            )
+            copied += 1
+        _json_response(self, 200, {"ok": True, "copied": copied})
+
+    def _handle_document_upload_personal(self) -> None:
+        """Upload a personal document for the current user."""
+        user = _require_auth(self)
+        if not user:
+            return
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.startswith("multipart/form-data"):
+            _json_response(self, 400, {"error": "Expected multipart/form-data"})
+            return
+        try:
+            parsed = _parse_multipart(_read_body(self), content_type)
+        except Exception as exc:
+            _json_response(self, 400, {"error": f"Invalid multipart body: {exc}"})
+            return
+        file_info = parsed.get("file")
+        if not file_info:
+            _json_response(self, 400, {"error": "file field required"})
+            return
+        title = file_info["filename"]
+        data = file_info["data"]
+        mime_type = file_info.get("content-type") or _guess_mime(title)
+        safe_name = re.sub(r'[^\w.\-]', '_', title)
+        if not safe_name:
+            safe_name = "document"
+        scope_dir = DOCUMENT_STORAGE_PATH / "shared" / "personal" / str(user["id"])
+        scope_dir.mkdir(parents=True, exist_ok=True)
+        unique_name = f"{int(time.time())}_{safe_name}"
+        file_path = scope_dir / unique_name
+        file_path.write_bytes(data)
+        file_size = len(data)
+        doc_id = db.insert_returning(
+            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope)
+               VALUES (%s, %s, %s, %s, %s, NULL, FALSE) RETURNING id""",
+            (title, str(file_path.relative_to(ROOT)), file_size, mime_type, user["id"]),
+        )
+        _json_response(self, 201, {
+            "id": doc_id, "title": title, "fileSize": file_size,
+            "mimeType": mime_type, "editUrl": f"/api/v2/documents/{doc_id}/editor-config",
+        })
+
+    def _handle_document_upload_company(self) -> None:
+        """Upload a company-shared document. Any authenticated user can upload."""
+        user = _require_auth(self)
+        if not user:
+            return
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.startswith("multipart/form-data"):
+            _json_response(self, 400, {"error": "Expected multipart/form-data"})
+            return
+        try:
+            parsed = _parse_multipart(_read_body(self), content_type)
+        except Exception as exc:
+            _json_response(self, 400, {"error": f"Invalid multipart body: {exc}"})
+            return
+        file_info = parsed.get("file")
+        if not file_info:
+            _json_response(self, 400, {"error": "file field required"})
+            return
+        title = file_info["filename"]
+        data = file_info["data"]
+        mime_type = file_info.get("content-type") or _guess_mime(title)
+        safe_name = re.sub(r'[^\w.\-]', '_', title)
+        if not safe_name:
+            safe_name = "document"
+        scope_dir = DOCUMENT_STORAGE_PATH / "shared" / "company"
+        scope_dir.mkdir(parents=True, exist_ok=True)
+        unique_name = f"{int(time.time())}_{safe_name}"
+        file_path = scope_dir / unique_name
+        file_path.write_bytes(data)
+        file_size = len(data)
+        doc_id = db.insert_returning(
+            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope)
+               VALUES (%s, %s, %s, %s, %s, NULL, TRUE) RETURNING id""",
+            (title, str(file_path.relative_to(ROOT)), file_size, mime_type, user["id"]),
+        )
+        _json_response(self, 201, {
+            "id": doc_id, "title": title, "fileSize": file_size,
+            "mimeType": mime_type, "editUrl": f"/api/v2/documents/{doc_id}/editor-config",
+        })
+
+    def _doc_row(self, r: tuple) -> dict:
+        """Build document response dict from a project_documents row."""
+        # r may include opp_title as last element (for search grouped results)
+        doc_id, title, notes, file_path, file_size, mime_type, uploaded_at, opportunity_id, company_scope = r[:9]
+        result = {
+            "id": doc_id,
+            "title": title,
+            "notes": notes,
+            "filePath": file_path,
+            "fileSize": file_size,
+            "mimeType": mime_type,
+            "uploadedAt": uploaded_at.isoformat() if uploaded_at else None,
+            "opportunityId": opportunity_id,
+            "companyScope": company_scope,
+            "editUrl": f"/api/v2/documents/{doc_id}/editor-config",
+        }
+        return result
 
     def _handle_document_callback(self, doc_id: int) -> None:
         """OnlyOffice Document Server save callback. Saves updated file if provided."""

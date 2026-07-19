@@ -395,17 +395,20 @@ CREATE TABLE project_documents (
     id SERIAL PRIMARY KEY,
     opportunity_id INTEGER REFERENCES opportunities(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
+    notes TEXT,
     file_path TEXT NOT NULL,
     file_size BIGINT,
     mime_type TEXT,
     uploaded_by INTEGER REFERENCES users(id),
     uploaded_at TIMESTAMP DEFAULT NOW(),
     is_deleted BOOLEAN DEFAULT FALSE,
-    deleted_at TIMESTAMP
+    deleted_at TIMESTAMP,
+    company_scope BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE INDEX idx_project_documents_opp ON project_documents(opportunity_id);
 CREATE INDEX idx_project_documents_uploaded ON project_documents(uploaded_at DESC);
+CREATE INDEX idx_documents_company ON project_documents(company_scope) WHERE company_scope = TRUE;
 
 CREATE TABLE photo_exif_cache (
     image_path TEXT PRIMARY KEY,

@@ -111,25 +111,23 @@ A unified Documents experience across three scopes — **per-project**, **person
 
 #### Data Model
 
-**Table: `project_documents`** — add three columns via migration:
+**Table: `project_documents`** — add two columns via migration (reusing existing `uploaded_by` column for personal docs):
 
 ```sql
 ALTER TABLE project_documents
-  ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
   ADD COLUMN company_scope BOOLEAN NOT NULL DEFAULT FALSE,
   ADD COLUMN notes TEXT;
-CREATE INDEX idx_documents_user ON project_documents(user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX idx_documents_company ON project_documents(company_scope) WHERE company_scope = TRUE;
 ```
 
 **Scope derived from columns:**
 - `opportunity_id IS NOT NULL` → **project document** (belongs to that project)
-- `user_id IS NOT NULL AND opportunity_id IS NULL AND company_scope = FALSE` → **personal document**
+- `uploaded_by IS NOT NULL AND opportunity_id IS NULL AND company_scope = FALSE` → **personal document**
 - `company_scope = TRUE` → **company document**
 
 **File storage paths:**
 - Project: `DOCUMENT_STORAGE_PATH / shared / project / {opp_id} / {filename}`
-- Personal: `DOCUMENT_STORAGE_PATH / shared / personal / {user_id} / {filename}`
+- Personal: `DOCUMENT_STORAGE_PATH / shared / personal / {uploaded_by} / {filename}`
 - Company: `DOCUMENT_STORAGE_PATH / shared / company / {filename}`
 
 #### Backend API
@@ -142,10 +140,10 @@ CREATE INDEX idx_documents_company ON project_documents(company_scope) WHERE com
 | `GET` | `/api/v2/documents/company` | List all company-shared docs |
 | `GET` | `/api/v2/documents/search?q=&project_id=` | Search all project docs; `project_id` optional; results grouped by project |
 | `PATCH` | `/api/v2/documents/{id}` | Rename (`{title, notes}`) or move to project (`{opportunity_id}`) |
-| `POST` | `/api/v2/documents/{id}/copy` | Copy doc; body: `{opportunity_id?, user_id?, company_scope?}` |
+| `POST` | `/api/v2/documents/{id}/copy` | Copy doc; body: `{opportunity_id?, company_scope?}` (scope determined by which param is set) |
 | `POST` | `/api/v2/documents/batch-delete` | Batch soft-delete; body: `{ids: []}` |
 | `POST` | `/api/v2/documents/batch-move` | Batch move; body: `{ids: [], opportunity_id}` |
-| `POST` | `/api/v2/documents/batch-copy` | Batch copy; body: `{ids: [], opportunity_id?, user_id?, company_scope?}` |
+| `POST` | `/api/v2/documents/batch-copy` | Batch copy; body: `{ids: [], opportunity_id?, company_scope?}` |
 | `GET` | `/api/v2/projects/simple` | Lightweight project list for picker (id, title, stage) — recent 20 |
 
 **Keep existing:** download, editor-config, per-project list/upload, single delete.
