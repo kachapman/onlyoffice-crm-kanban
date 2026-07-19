@@ -2705,6 +2705,413 @@ function bindCalendarEventClicks(section, cal) {
   });
 }
 
+/* ── Documents Modal ─────────────────────────────────────── */
+
+const docsState = {
+  scope: "projects",   // "projects" | "mydocs" | "company"
+  currentProjectId: null,
+  currentProjectTitle: null,
+  searchQuery: "",
+  selected: new Set(),
+  documents: [],
+  projects: [],
+  loading: false,
+};
+
+function docsIconForMime(mimeType) {
+  if (!mimeType) return `<svg class="doc-doc-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
+  if (mimeType.includes("word") || mimeType.includes("document"))
+    return `<svg class="doc-doc-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>`;
+  if (mimeType.includes("sheet") || mimeType.includes("excel") || mimeType.includes("csv"))
+    return `<svg class="doc-doc-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>`;
+  if (mimeType.includes("pdf"))
+    return `<svg class="doc-doc-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>`;
+  if (mimeType.startsWith("image/"))
+    return `<svg class="doc-doc-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`;
+  return `<svg class="doc-doc-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
+}
+
+function formatDocSize(bytes) {
+  if (!bytes) return "—";
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+async function loadDocsProjects() {
+  try {
+    const data = await api("/api/v2/projects/simple");
+    docsState.projects = (data.projects || []).slice(0, 20);
+    renderDocsProjectList();
+  } catch {}
+}
+
+function renderDocsProjectList() {
+  const list = $("#documents-project-list");
+  if (!list) return;
+  list.innerHTML = docsState.projects.slice(0, 5).map(p =>
+    `<button type="button" class="documents-project-item${docsState.currentProjectId === p.id ? " active" : ""}" data-project-id="${p.id}" data-project-title="${escapeHtml(p.title || "")}">${escapeHtml(p.title || "Project " + p.id)}</button>`
+  ).join("") +
+    `<button type="button" class="documents-project-item" data-search-all="1">Search all projects…</button>`;
+  list.querySelectorAll(".documents-project-item:not([data-search-all])").forEach(btn => {
+    btn.addEventListener("click", () => {
+      docsState.currentProjectId = Number(btn.dataset.projectId);
+      docsState.currentProjectTitle = btn.dataset.projectTitle;
+      docsState.selected.clear();
+      docsState.searchQuery = "";
+      const searchInput = $("#documents-search-input");
+      if (searchInput) searchInput.value = "";
+      loadDocumentsList();
+    });
+  });
+  const searchAllBtn = list.querySelector("[data-search-all]");
+  if (searchAllBtn) {
+    searchAllBtn.addEventListener("click", () => {
+      docsState.currentProjectId = null;
+      docsState.currentProjectTitle = null;
+      docsState.selected.clear();
+      loadDocumentsList();
+    });
+  }
+}
+
+function openDocumentsModal() {
+  const modal = $("#documents-modal");
+  if (!modal) return;
+  docsState.scope = "projects";
+  docsState.currentProjectId = null;
+  docsState.currentProjectTitle = null;
+  docsState.selected.clear();
+  docsState.searchQuery = "";
+  docsState.documents = [];
+  docsState.loading = false;
+  const searchInput = $("#documents-search-input");
+  if (searchInput) searchInput.value = "";
+  document.querySelectorAll(".documents-scope-btn").forEach(b => b.classList.toggle("active", b.dataset.scope === "projects"));
+  modal.classList.remove("hidden");
+  loadDocsProjects();
+  loadDocumentsList();
+}
+
+function closeDocumentsModal() {
+  const modal = $("#documents-modal");
+  if (!modal) return;
+  modal.classList.add("hidden");
+  docsState.selected.clear();
+  docsState.searchQuery = "";
+  docsState.scope = "projects";
+}
+
+async function loadDocumentsList() {
+  const list = $("#documents-list");
+  if (!list) return;
+  list.innerHTML = '<div class="documents-loading">Loading…</div>';
+  docsState.loading = true;
+  docsState.selected.clear();
+  updateDocsToolbar();
+  try {
+    let data;
+    if (docsState.scope === "mydocs") {
+      data = await api("/api/v2/documents/personal");
+      docsState.documents = data.documents || [];
+    } else if (docsState.scope === "company") {
+      data = await api("/api/v2/documents/company");
+      docsState.documents = data.documents || [];
+    } else {
+      const qs = new URLSearchParams();
+      if (docsState.currentProjectId) {
+        qs.set("project_id", String(docsState.currentProjectId));
+      }
+      if (docsState.searchQuery) {
+        qs.set("q", docsState.searchQuery);
+      }
+      const path = "/api/v2/documents/search" + (qs.toString() ? "?" + qs.toString() : "");
+      data = await api(path);
+      docsState.documents = [];
+      (data.results || []).forEach(group => {
+        (group.documents || []).forEach(d => {
+          d._projectTitle = group.project;
+          d._projectId = group.projectId;
+          docsState.documents.push(d);
+        });
+      });
+    }
+    renderDocumentsList();
+  } catch (err) {
+    list.innerHTML = `<div class="documents-empty"><div class="documents-empty-icon">⚠</div>${escapeHtml(err.message)}</div>`;
+  } finally {
+    docsState.loading = false;
+  }
+}
+
+function renderDocumentsList() {
+  const list = $("#documents-list");
+  if (!list) return;
+  const docs = docsState.documents;
+  if (!docs.length) {
+    const scopeMessages = {
+      mydocs: "No personal documents yet. Upload files or copy from a project.",
+      company: "No company documents yet. Upload shared resources here.",
+      projects: docsState.currentProjectId ? "No documents in this project. Upload files or drag them here." : "No documents found.",
+    };
+    list.innerHTML = `<div class="documents-empty"><div class="documents-empty-icon"><svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>${scopeMessages[docsState.scope] || "No documents."}</div>`;
+    return;
+  }
+  list.innerHTML = docs.map(d => {
+    const checked = docsState.selected.has(d.id) ? "checked" : "";
+    const selClass = docsState.selected.has(d.id) ? " selected" : "";
+    const projectLabel = d._projectTitle ? `<span class="doc-doc-project">${escapeHtml(d._projectTitle)}</span>` : "";
+    return `<div class="documents-list-row${selClass}" data-doc-id="${d.id}">
+      <input type="checkbox" class="doc-cb" data-id="${d.id}" ${checked} />
+      ${docsIconForMime(d.mimeType)}
+      <span class="doc-doc-title" title="${escapeHtml(d.title)}">${escapeHtml(d.title)}</span>
+      ${projectLabel}
+      <span class="doc-doc-meta">
+        <span class="doc-doc-size">${formatDocSize(d.fileSize)}</span>
+        <span class="doc-doc-date">${d.uploadedAt ? escapeHtml(d.uploadedAt.split("T")[0]) : "—"}</span>
+      </span>
+    </div>`;
+  }).join("");
+  list.querySelectorAll(".doc-cb").forEach(cb => {
+    cb.addEventListener("click", e => {
+      e.stopPropagation();
+      toggleDocSelect(Number(cb.dataset.id));
+    });
+  });
+  list.querySelectorAll(".documents-list-row").forEach(row => {
+    row.addEventListener("click", e => {
+      if (e.target.tagName === "INPUT") return;
+      const id = Number(row.dataset.docId);
+      if (docsState.selected.has(id)) {
+        docsState.selected.delete(id);
+        row.classList.remove("selected");
+        row.querySelector(".doc-cb").checked = false;
+      } else {
+        docsState.selected.add(id);
+        row.classList.add("selected");
+        row.querySelector(".doc-cb").checked = true;
+      }
+      updateDocsToolbar();
+    });
+    row.addEventListener("dblclick", () => {
+      const id = Number(row.dataset.docId);
+      openDocEditor(id);
+    });
+  });
+  updateDocsToolbar();
+}
+
+function toggleDocSelect(id) {
+  if (docsState.selected.has(id)) {
+    docsState.selected.delete(id);
+  } else {
+    docsState.selected.add(id);
+  }
+  const row = document.querySelector(`.documents-list-row[data-doc-id="${id}"]`);
+  if (row) row.classList.toggle("selected", docsState.selected.has(id));
+  updateDocsToolbar();
+}
+
+function updateDocsToolbar() {
+  const n = docsState.selected.size;
+  const countEl = $("#documents-selected-count");
+  const deleteBtn = $("#documents-delete-btn");
+  const moveBtn = $("#documents-move-btn");
+  const copyBtn = $("#documents-copy-btn");
+  const clearBtn = $("#documents-clear-selection-btn");
+  if (countEl) {
+    countEl.textContent = n ? `${n} selected` : "0 selected";
+    countEl.classList.toggle("hidden", !n);
+  }
+  if (deleteBtn) deleteBtn.disabled = !n;
+  if (moveBtn) moveBtn.disabled = !n;
+  if (copyBtn) copyBtn.disabled = !n;
+  if (clearBtn) clearBtn.classList.toggle("hidden", !n);
+}
+
+async function deleteSelectedDocs() {
+  if (!docsState.selected.size) return;
+  const n = docsState.selected.size;
+  if (!confirm(`Delete ${n} document${n > 1 ? "s" : ""}? This cannot be undone.`)) return;
+  try {
+    await api("/api/v2/documents/batch-delete", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ ids: Array.from(docsState.selected) }),
+    });
+    docsState.selected.clear();
+    showToast(`Deleted ${n} document${n > 1 ? "s" : ""}`);
+    loadDocumentsList();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function moveSelectedDocs() {
+  if (!docsState.selected.size) return;
+  const projectId = prompt("Enter the project ID to move selected documents to:");
+  if (!projectId) return;
+  const pid = Number(projectId);
+  if (!pid || isNaN(pid)) { showToast("Invalid project ID", true); return; }
+  try {
+    await api("/api/v2/documents/batch-move", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ ids: Array.from(docsState.selected), opportunity_id: pid }),
+    });
+    docsState.selected.clear();
+    showToast("Documents moved");
+    loadDocumentsList();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function copySelectedDocs() {
+  if (!docsState.selected.size) return;
+  const dest = prompt("Copy to: (1) Personal docs, (2) Company docs, or enter a project ID");
+  if (!dest) return;
+  let body;
+  if (dest === "1") {
+    body = { ids: Array.from(docsState.selected) };
+  } else if (dest === "2") {
+    body = { ids: Array.from(docsState.selected), company_scope: true };
+  } else {
+    const pid = Number(dest);
+    if (!pid || isNaN(pid)) { showToast("Invalid project ID", true); return; }
+    body = { ids: Array.from(docsState.selected), opportunity_id: pid };
+  }
+  try {
+    await api("/api/v2/documents/batch-copy", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    docsState.selected.clear();
+    showToast("Documents copied");
+    loadDocumentsList();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+function openDocEditor(docId) {
+  window.open(`/api/v2/documents/${docId}/editor-config`, "_blank");
+}
+
+function downloadDoc(docId, title) {
+  const a = document.createElement("a");
+  a.href = `/api/v2/documents/${docId}`;
+  a.download = title || "document";
+  a.click();
+}
+
+async function uploadDocsToCurrentScope(files) {
+  if (!files || !files.length) return;
+  const isCompany = docsState.scope === "company";
+  const isPersonal = docsState.scope === "mydocs";
+  const uploadEndpoint = isCompany ? "/api/v2/documents/company/upload" : isPersonal ? "/api/v2/documents/personal/upload" : docsState.currentProjectId ? `/api/v2/projects/${docsState.currentProjectId}/documents` : null;
+  if (!uploadEndpoint) { showToast("Select a project first", true); return; }
+  let ok = 0, fail = 0;
+  for (const file of files) {
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      await fetch(uploadEndpoint, { method: "POST", credentials: "same-origin", body: formData });
+      ok++;
+    } catch {
+      fail++;
+    }
+  }
+  if (ok) showToast(`Uploaded ${ok} file${ok > 1 ? "s" : ""}`);
+  if (fail) showToast(`Failed to upload ${fail} file${fail > 1 ? "s" : ""}`, true);
+  loadDocumentsList();
+}
+
+function bindDocumentsModal() {
+  const modal = $("#documents-modal");
+  if (!modal || modal.dataset.bound) return;
+  modal.dataset.bound = "1";
+
+  modal.querySelectorAll("[data-documents-dismiss]").forEach(el => {
+    el.addEventListener("click", closeDocumentsModal);
+  });
+  $("#documents-modal-close")?.addEventListener("click", closeDocumentsModal);
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && !modal.classList.contains("hidden")) closeDocumentsModal();
+  });
+
+  // Scope sidebar
+  document.querySelectorAll(".documents-scope-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      docsState.scope = btn.dataset.scope;
+      docsState.currentProjectId = null;
+      docsState.currentProjectTitle = null;
+      docsState.selected.clear();
+      docsState.searchQuery = "";
+      const searchInput = $("#documents-search-input");
+      if (searchInput) searchInput.value = "";
+      document.querySelectorAll(".documents-scope-btn").forEach(b => b.classList.toggle("active", b === btn));
+      loadDocumentsList();
+    });
+  });
+
+  // Search
+  const searchInput = $("#documents-search-input");
+  if (searchInput) {
+    let t = null;
+    searchInput.addEventListener("input", () => {
+      clearTimeout(t);
+      t = setTimeout(() => {
+        docsState.searchQuery = searchInput.value.trim();
+        loadDocumentsList();
+      }, 300);
+    });
+  }
+
+  // Toolbar actions
+  $("#documents-delete-btn")?.addEventListener("click", deleteSelectedDocs);
+  $("#documents-move-btn")?.addEventListener("click", moveSelectedDocs);
+  $("#documents-copy-btn")?.addEventListener("click", copySelectedDocs);
+  $("#documents-clear-selection-btn")?.addEventListener("click", () => {
+    docsState.selected.clear();
+    document.querySelectorAll(".doc-cb").forEach(cb => { cb.checked = false; });
+    document.querySelectorAll(".documents-list-row").forEach(row => row.classList.remove("selected"));
+    updateDocsToolbar();
+  });
+
+  // Upload
+  const uploadBtn = $("#documents-upload-btn");
+  if (uploadBtn) {
+    uploadBtn.addEventListener("click", () => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.multiple = true;
+      input.accept = ".doc,.docx,.xls,.xlsx,.ppt,.pptx,.pdf,.txt,.csv,.png,.jpg,.jpeg,.gif,.zip,.rar";
+      input.onchange = () => uploadDocsToCurrentScope(Array.from(input.files));
+      input.click();
+    });
+  }
+
+  // Drag and drop upload
+  const dropOverlay = $("#documents-drop-overlay");
+  if (dropOverlay) {
+    modal.addEventListener("dragover", e => {
+      e.preventDefault();
+      dropOverlay.classList.remove("hidden");
+    });
+    modal.addEventListener("dragleave", e => {
+      if (!modal.contains(e.relatedTarget)) dropOverlay.classList.add("hidden");
+    });
+    modal.addEventListener("drop", e => {
+      e.preventDefault();
+      dropOverlay.classList.add("hidden");
+      const files = Array.from(e.dataTransfer.files).filter(f => f.size > 0);
+      if (files.length) uploadDocsToCurrentScope(files);
+    });
+  }
+}
+
 function bindCalendarEventModal() {
   const modal = $("#calendar-event-modal");
   if (!modal || modal.dataset.bound) return;
@@ -20062,9 +20469,12 @@ async function init() {
     openQuickNoteModal().catch((err) => showToast(err.message, true));
   });
 
+  $("#documents-btn")?.addEventListener("click", () => openDocumentsModal());
+
   bindAddTileModal();
   bindCalendarEventModal();
   bindMailInboxButton();
+  bindDocumentsModal();
 
   $("#refresh-btn").addEventListener("click", () => refreshAll({ force: true }));
   // logout-btn attached early in init() for robustness (prevents sign-out doing nothing if later code errors)
