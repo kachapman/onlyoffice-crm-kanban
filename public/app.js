@@ -10425,7 +10425,8 @@ function bindAddTileModal() {
   modal.dataset.bound = "1";
 
   // #add-tile-btn attached early in init()
-  $("#add-tile-cancel")?.addEventListener("click", closeAddTileModal);
+  const cancelBtn = $("#add-tile-cancel");
+  cancelBtn?.addEventListener("click", closeAddTileModal);
   modal.querySelectorAll("[data-add-tile-dismiss]").forEach((el) => {
     el.addEventListener("click", closeAddTileModal);
   });

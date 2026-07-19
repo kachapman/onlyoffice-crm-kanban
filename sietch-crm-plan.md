@@ -102,6 +102,7 @@ Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local 
 | 2E: Photo gallery | 🔲 | Backend + DB + quota/EXIF/folders ready; no frontend UI (no Photos tab in preview, no gallery/lightbox). |
 | 2F: Notification drawer | 🔲 | Feed tile + keyword filter exists; no slide-out drawer with inline replies. |
 | 2G: User profile/account modal | 🔲 | /api/user-profile exists for sync; no dedicated modal for edit (name/email/pw/prefs/pic). |
+| 2H: Documents modal | 🔲 | New shared-folder file manager modal: lists all shared documents, upload, delete, rename, copy, move, open in Document Server editor. Button in header bar (files icon). Storage: server filesystem + DB table. Document Server used only as editor (no built-in file manager API). |
 
 ### Phase 3: Email + IMAP
 
