@@ -7717,3 +7717,33 @@ body {
   font-size: 0.65rem;
 }
 
+/* ── Admin Branding Modal ──────────────────────────────────────────────────── */
+
+.modal-card-branding {
+  width: min(480px, 92vw);
+  max-height: min(90vh, 720px);
+  overflow-y: auto;
+}
+
+.color-input-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.color-input-row input[type="color"] {
+  width: 48px;
+  height: 36px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  cursor: pointer;
+}
+
+.color-hex {
+  font-family: monospace;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+

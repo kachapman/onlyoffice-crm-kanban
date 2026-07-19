@@ -17258,6 +17258,15 @@ function updateBotCustomersBtn() {
   btn.classList.toggle("hidden", !state.currentUserIsAdmin);
 }
 
+function updateBrandingBtn() {
+  const btn = $("#branding-btn");
+  if (!btn) return;
+  btn.classList.toggle("hidden", !state.currentUserIsAdmin);
+  if (state.currentUserIsAdmin) {
+    btn.addEventListener("click", openBrandingModal);
+  }
+}
+
 let _botCustomersDraft = null;
 let _botCustomersMappings = [];
 
@@ -19074,6 +19083,7 @@ async function refreshAll({ force = false } = {}) {
       }
     }
     updateBotCustomersBtn();
+    updateBrandingBtn();
     syncFeedFilterPlaceholder();
     // Re-render bookmark sidebar + button states now that profile (including bookmarkedDeals) is loaded
     renderBookmarkTabs();
@@ -19260,6 +19270,104 @@ function applyBranding(branding) {
   }
 }
 
+// ── Branding Admin Modal ────────────────────────────────────────────────────
+
+let _brandingData = null;
+
+async function openBrandingModal() {
+  const modal = $("#branding-modal");
+  if (!modal) return;
+
+  // Load current branding
+  try {
+    const resp = await fetch("/api/branding");
+    _brandingData = resp.ok ? await resp.json() : {};
+  } catch (e) {
+    _brandingData = {};
+  }
+
+  // Populate form
+  $("#branding-company-name").value = _brandingData.companyName || "";
+  $("#branding-login-title").value = _brandingData.loginTitle || "";
+  $("#branding-header-eyebrow").value = _brandingData.headerEyebrow || "";
+  $("#branding-header-title").value = _brandingData.headerTitle || "";
+  $("#branding-logo-path").value = _brandingData.logoPath || "";
+  $("#branding-watermark-path").value = _brandingData.watermarkPath || "";
+  $("#branding-favicon-path").value = _brandingData.faviconPath || "";
+  $("#branding-primary-color").value = _brandingData.primaryColor || "#3b82f6";
+  $("#branding-color-hex").textContent = _brandingData.primaryColor || "#3b82f6";
+
+  $("#branding-error")?.classList.add("hidden");
+  modal.classList.remove("hidden");
+}
+
+function closeBrandingModal() {
+  $("#branding-modal")?.classList.add("hidden");
+}
+
+async function saveBranding() {
+  const errorEl = $("#branding-error");
+  errorEl?.classList.add("hidden");
+
+  const payload = {
+    companyName: $("#branding-company-name").value.trim() || null,
+    loginTitle: $("#branding-login-title").value.trim() || null,
+    headerEyebrow: $("#branding-header-eyebrow").value.trim() || null,
+    headerTitle: $("#branding-header-title").value.trim() || null,
+    logoPath: $("#branding-logo-path").value.trim() || null,
+    watermarkPath: $("#branding-watermark-path").value.trim() || null,
+    faviconPath: $("#branding-favicon-path").value.trim() || null,
+    primaryColor: $("#branding-primary-color").value || null,
+  };
+
+  try {
+    const resp = await fetch("/api/branding", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.error) {
+      throw new Error(data.error || "Failed to save");
+    }
+    // Apply branding immediately
+    const freshResp = await fetch("/api/branding");
+    if (freshResp.ok) {
+      applyBranding(await freshResp.json());
+    }
+    showToast("Branding saved");
+    closeBrandingModal();
+  } catch (e) {
+    if (errorEl) {
+      errorEl.textContent = e.message || "Failed to save branding";
+      errorEl.classList.remove("hidden");
+    }
+  }
+}
+
+function bindBrandingModal() {
+  const modal = $("#branding-modal");
+  if (!modal || modal.dataset.bound) return;
+  modal.dataset.bound = "1";
+
+  $("#branding-cancel")?.addEventListener("click", closeBrandingModal);
+  $("#branding-save")?.addEventListener("click", saveBranding);
+  modal.querySelector("[data-branding-dismiss]")?.addEventListener("click", closeBrandingModal);
+  modal.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeBrandingModal();
+  });
+
+  // Live color preview
+  const colorInput = $("#branding-primary-color");
+  const colorHex = $("#branding-color-hex");
+  if (colorInput && colorHex) {
+    colorInput.addEventListener("input", () => {
+      colorHex.textContent = colorInput.value;
+    });
+  }
+}
+
 async function init() {
   loadEventLogFromStorage();
 
@@ -19298,6 +19406,7 @@ async function init() {
   bindNotesArchiveRestoreModal();
   bindEventLogModal();
   bindBotCustomersModal();
+  bindBrandingModal();
   initBookmarkSidebar();
   initSearchTrigger();
   initNoteEditorPasteHandlers();
