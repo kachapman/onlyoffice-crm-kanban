@@ -18,7 +18,7 @@ services:
       - dashboard-data:/app/data
       - dashboard-uploads:/app/uploads
     ports:
-      - "127.0.0.1:8766:8766"
+      - "0.0.0.0:8766:8766"
     networks:
       - vanguard-internal
 
@@ -37,6 +37,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    ports:
+      - "127.0.0.1:5432:5432"
     volumes:
       - db-data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
