@@ -989,59 +989,6 @@
   </div>
 
   <!-- Admin Branding Modal -->
-  <div id="branding-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="branding-modal-title">
-    <div class="modal-backdrop" data-branding-dismiss></div>
-    <div class="modal-card modal-card-branding modal-card-form">
-      <h2 id="branding-modal-title" class="modal-title">Company Branding</h2>
-      <p class="modal-message">Customize how your company appears in the dashboard and login screen.</p>
-
-      <form id="branding-form" class="modal-form">
-        <div class="field">
-          <label for="branding-company-name">Company Name</label>
-          <input type="text" id="branding-company-name" placeholder="Sietch CRM" maxlength="100" />
-        </div>
-        <div class="field">
-          <label for="branding-login-title">Login Title</label>
-          <input type="text" id="branding-login-title" placeholder="Sietch CRM" maxlength="100" />
-        </div>
-        <div class="field">
-          <label for="branding-header-eyebrow">Header Eyebrow Text</label>
-          <input type="text" id="branding-header-eyebrow" placeholder="Sietch CRM" maxlength="100" />
-        </div>
-        <div class="field">
-          <label for="branding-header-title">Header Title (HTML allowed)</label>
-          <input type="text" id="branding-header-title" placeholder="Workspace &lt;em&gt;dashboard&lt;/em&gt;" maxlength="200" />
-        </div>
-        <div class="field">
-          <label for="branding-logo-path">Logo Path</label>
-          <input type="text" id="branding-logo-path" placeholder="/assets/sietch-logo-2-nobg2.png" maxlength="500" />
-        </div>
-        <div class="field">
-          <label for="branding-watermark-path">Watermark Image Path (login background)</label>
-          <input type="text" id="branding-watermark-path" placeholder="/hero-ship-168.png" maxlength="500" />
-        </div>
-        <div class="field">
-          <label for="branding-favicon-path">Favicon Path</label>
-          <input type="text" id="branding-favicon-path" placeholder="/favicon.ico" maxlength="500" />
-        </div>
-        <div class="field">
-          <label for="branding-primary-color">Primary Color</label>
-          <div class="color-input-row">
-            <input type="color" id="branding-primary-color" value="#3b82f6" />
-            <span id="branding-color-hex" class="color-hex">#3b82f6</span>
-          </div>
-        </div>
-      </form>
-
-      <div id="branding-error" class="modal-error hidden"></div>
-
-      <div class="modal-actions">
-        <button type="button" id="branding-cancel" class="btn btn-ghost">Cancel</button>
-        <button type="button" id="branding-save" class="btn btn-primary">Save Branding</button>
-      </div>
-    </div>
-  </div>
-
   <!-- Unified Admin Console Modal (Phase 2C) - auto shown for isAdmin users (kenc, bot, etc) via session -->
   <div id="admin-console-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="admin-console-title">
     <div class="modal-backdrop" data-admin-console-dismiss></div>
@@ -1128,7 +1075,49 @@
         <p>Contacts support (for import from OO and contact-based functionality in deals, bot, previews etc). Stub for now; full impl to preserve old contacts data/links.</p>
       </div>
       <div id="admin-tab-branding" class="admin-tab-content hidden">
-        <p>Company Branding content (moved from separate modal). Icons next to tab title.</p>
+        <p class="modal-message">Customize how your company appears in the dashboard and login screen.</p>
+        <form id="branding-form" class="modal-form">
+          <div class="field">
+            <label for="branding-company-name">Company Name</label>
+            <input type="text" id="branding-company-name" placeholder="Sietch CRM" maxlength="100" />
+          </div>
+          <div class="field">
+            <label for="branding-login-title">Login Title</label>
+            <input type="text" id="branding-login-title" placeholder="Sietch CRM" maxlength="100" />
+          </div>
+          <div class="field">
+            <label for="branding-header-eyebrow">Header Eyebrow Text</label>
+            <input type="text" id="branding-header-eyebrow" placeholder="Sietch CRM" maxlength="100" />
+          </div>
+          <div class="field">
+            <label for="branding-header-title">Header Title (HTML allowed)</label>
+            <input type="text" id="branding-header-title" placeholder="Workspace &lt;em&gt;dashboard&lt;/em&gt;" maxlength="200" />
+          </div>
+          <div class="field">
+            <label for="branding-logo-path">Logo Path</label>
+            <input type="text" id="branding-logo-path" placeholder="/assets/sietch-logo-2-nobg2.png" maxlength="500" />
+          </div>
+          <div class="field">
+            <label for="branding-watermark-path">Watermark Image Path (login background)</label>
+            <input type="text" id="branding-watermark-path" placeholder="/hero-ship-168.png" maxlength="500" />
+          </div>
+          <div class="field">
+            <label for="branding-favicon-path">Favicon Path</label>
+            <input type="text" id="branding-favicon-path" placeholder="/favicon.ico" maxlength="500" />
+          </div>
+          <div class="field">
+            <label for="branding-primary-color">Primary Color</label>
+            <div class="color-input-row">
+              <input type="color" id="branding-primary-color" value="#3b82f6" />
+              <span id="branding-color-hex" class="color-hex">#3b82f6</span>
+            </div>
+          </div>
+        </form>
+        <div id="branding-error" class="modal-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" id="branding-cancel" class="btn btn-ghost">Cancel</button>
+          <button type="button" id="branding-save" class="btn btn-primary">Save Branding</button>
+        </div>
       </div>
       <div id="admin-tab-bot" class="admin-tab-content hidden">
         <p>Customer Bot content (moved from separate modal). Icons next to tab title.</p>

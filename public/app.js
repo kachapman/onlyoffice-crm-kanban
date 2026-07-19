@@ -17287,6 +17287,13 @@ function openAdminConsoleModal() {
     $("#sync-tasks-btn")?.addEventListener("click", () => { if (statusEl) statusEl.textContent = "Pull tasks stub."; });
     $("#sync-full-btn")?.addEventListener("click", () => { if (statusEl) statusEl.textContent = "Full reconcile stub. Uses read-only for now."; });
   }
+
+  // Bind branding save (content moved to admin tab, no separate modal)
+  $("#branding-save")?.addEventListener("click", saveBranding);
+  $("#branding-cancel")?.addEventListener("click", () => {
+    // reset or just close admin for now
+    $("#admin-console-modal")?.classList.add("hidden");
+  });
 }
 
 function switchAdminTab(tab) {
@@ -19361,11 +19368,7 @@ async function openBrandingModal() {
     adminModal.classList.remove("hidden");
     switchAdminTab("branding");
   }
-  return; // old branding modal deprecated
-  const modal = $("#branding-modal");
-  if (!modal) return;
-
-  // Load current branding
+  // Load current branding for the form in tab
   try {
     const resp = await fetch("/api/branding");
     _brandingData = resp.ok ? await resp.json() : {};
@@ -19373,7 +19376,7 @@ async function openBrandingModal() {
     _brandingData = {};
   }
 
-  // Populate form
+  // Populate form (now in admin tab)
   $("#branding-company-name").value = _brandingData.companyName || "";
   $("#branding-login-title").value = _brandingData.loginTitle || "";
   $("#branding-header-eyebrow").value = _brandingData.headerEyebrow || "";
@@ -19385,7 +19388,6 @@ async function openBrandingModal() {
   $("#branding-color-hex").textContent = _brandingData.primaryColor || "#3b82f6";
 
   $("#branding-error")?.classList.add("hidden");
-  modal.classList.remove("hidden");
 }
 
 function closeBrandingModal() {
