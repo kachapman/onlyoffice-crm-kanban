@@ -5392,53 +5392,25 @@ async function fetchOpportunityForUpdate(oppId) {
 }
 
 function buildOpportunityPutBody(opp, overrides = {}) {
-  const oppId = Number(opp.id ?? opp.ID);
-  const members = [];
-  if (Array.isArray(opp.members)) {
-    for (const m of opp.members) {
-      const mid = m.id ?? m.ID;
-      if (mid != null) members.push(Number(mid));
-    }
-  }
-
-  const accessList = [];
-  if (Array.isArray(opp.accessList)) {
-    for (const u of opp.accessList) {
-      const uid = u.id ?? u.ID;
-      if (uid != null) accessList.push(String(uid));
-    }
-  }
-
   const responsible = opp.responsible?.id ?? opp.responsible?.ID ?? state.currentUserId;
 
   const body = {
-    opportunityid: oppId,
-    contactid: Number(opp.contact?.id ?? opp.contact?.ID ?? opp.contactId ?? 0) || 0,
-    members,
     title: opp.title || opp.Title || "",
     description: opp.description ?? opp.Description ?? "",
-    responsibleid: String(responsible || ""),
-    bidType: Number(opp.bidType ?? opp.BidType ?? 0),
+    stageId: Number(opp.stage?.id ?? opp.stage?.ID ?? opp.stageId ?? 0),
     bidValue: Number(opp.bidValue ?? opp.BidValue ?? 0),
-    bidCurrencyAbbr:
-      opp.bidCurrency?.abbreviation ?? opp.bidCurrency?.Abbreviation ?? opp.bidCurrencyAbbr ?? "USD",
-    perPeriodValue: Number(opp.perPeriodValue ?? opp.PerPeriodValue ?? 1),
-    stageid: Number(opp.stage?.id ?? opp.stage?.ID ?? opp.stageId ?? 0),
-    successProbability: Number(
-      opp.successProbability ?? opp.SuccessProbability ?? opp.stage?.successProbability ?? 0
-    ),
-    actualCloseDate: crmDateTimeFromApi(opp.actualCloseDate ?? opp.ActualCloseDate),
+    contactId: Number(opp.contact?.id ?? opp.contact?.ID ?? opp.contactId ?? 0) || 0,
+    responsibleUserId: String(responsible || ""),
     expectedCloseDate: crmDateTimeFromApi(opp.expectedCloseDate ?? opp.ExpectedCloseDate),
     isPrivate: !!(opp.isPrivate ?? opp.IsPrivate),
-    accessList,
-    isNotify: false,
+    probability: Number(
+      opp.successProbability ?? opp.SuccessProbability ?? opp.stage?.successProbability ?? 0
+    ),
   };
 
   if (overrides.expectedCloseDate !== undefined) body.expectedCloseDate = overrides.expectedCloseDate;
-  if (overrides.stageid !== undefined) body.stageid = overrides.stageid;
-  if (overrides.successProbability !== undefined) {
-    body.successProbability = overrides.successProbability;
-  }
+  if (overrides.stageId !== undefined) body.stageId = overrides.stageId;
+  if (overrides.probability !== undefined) body.probability = overrides.probability;
   if (overrides.title !== undefined) body.title = overrides.title;
   return body;
 }
@@ -5473,10 +5445,10 @@ async function updateOpportunityStage(oppId, stageId) {
 
   const stage = state.stages.find((s) => Number(s.id ?? s.ID) === sid);
   const opp = await fetchOpportunityForUpdate(oppId);
-  const overrides = { stageid: sid };
+  const overrides = { stageId: sid };
   const stageProb = stage?.successProbability ?? stage?.SuccessProbability;
   if (stageProb != null && !Number.isNaN(Number(stageProb))) {
-    overrides.successProbability = Number(stageProb);
+    overrides.probability = Number(stageProb);
   }
 
   const body = buildOpportunityPutBody(opp, overrides);
@@ -5505,10 +5477,10 @@ async function updateOpportunityBulk(oppId, { dueDate, stageId, customFieldValue
   if (dueDate !== undefined) overrides.expectedCloseDate = dueDate || null;
   if (stageId !== undefined) {
     const sid = Number(stageId);
-    overrides.stageid = sid;
+    overrides.stageId = sid;
     const stage = state.stages.find(s => Number(s.id ?? s.ID) === sid);
     const sp = stage?.successProbability ?? stage?.SuccessProbability;
-    if (sp != null && !Number.isNaN(Number(sp))) overrides.successProbability = Number(sp);
+    if (sp != null && !Number.isNaN(Number(sp))) overrides.probability = Number(sp);
   }
   if (title !== undefined) overrides.title = title;
   const body = buildOpportunityPutBody(opp, overrides);
@@ -8616,51 +8588,24 @@ async function createOpportunityHistoryEvent(oppId, { content, categoryId, notif
 
   const createdIso = created ? new Date(`${created}T12:00:00`).toISOString() : null;
 
-  if (validFileIds && validFileIds.length > 0) {
-    // Use exact native form-urlencoded shape for attachments (from capture)
-    // Use .json suffix for the history endpoint when sending attachments (matches native capture)
-    const historyPath = `/api/v2/projects/${oppId}/history`;
-    const params = new URLSearchParams();
-    params.set("content", html);
-    params.set("categoryId", String(categoryId || 0));
-    params.set("entityId", String(oppId));
-    params.set("entityType", "opportunity");
-    params.set("created", createdIso || new Date().toISOString());
-    if (validNotifyUserList?.length) {
-      validNotifyUserList.forEach((uid) => params.append("notifyUserList", uid));
-    }
-    validFileIds.forEach((fid) => params.append("fileId[]", String(fid)));
+  const historyPath = `/api/v2/projects/${oppId}/history`;
+  const body = {
+    content: html,
+    categoryId: String(categoryId || 1),
+  };
+  if (validNotifyUserList?.length) body.notifyUserList = validNotifyUserList;
+  if (createdIso) body.created = createdIso;
+  if (validFileIds?.length) body.fileIds = validFileIds;
 
-    descriptorBody = params.toString();
-    descriptorHeaders = { "Content-Type": "application/x-www-form-urlencoded" };
+  descriptorBody = JSON.stringify(body);
+  descriptorHeaders = { "Content-Type": "application/json" };
 
-    apiCall = () => api(historyPath, {
-      method: "POST",
-      headers: descriptorHeaders,
-      body: descriptorBody,
-      showCrashBanner: false,
-    });
-  } else {
-    const body = {
-      entityType: "opportunity",
-      entityId: oppId,
-      contactId: 0,
-      content: html,
-      categoryId,
-    };
-    if (validNotifyUserList?.length) body.notifyUserList = validNotifyUserList;
-    if (createdIso) body.created = createdIso;
-
-    descriptorBody = JSON.stringify(body);
-    descriptorHeaders = { "Content-Type": "application/json" };
-
-    apiCall = () => api(`/api/v2/projects/${oppId}/history`, {
-      method: "POST",
-      headers: descriptorHeaders,
-      body: descriptorBody,
-      showCrashBanner: false,
-    });
-  }
+  apiCall = () => api(historyPath, {
+    method: "POST",
+    headers: descriptorHeaders,
+    body: descriptorBody,
+    showCrashBanner: false,
+  });
 
   const historyDescriptorPath = `/api/v2/projects/${oppId}/history`;
 
@@ -9866,8 +9811,8 @@ function collectCreateOppCustomFieldValues() {
 /** OnlyOffice ItemKeyValuePair<int,string> on create/update opportunity bodies. */
 function buildCustomFieldListForApi(fieldValues) {
   return fieldValues.map(({ fieldId, value }) => ({
-    key: Number(fieldId),
-    value: String(value ?? ""),
+    id: String(fieldId),
+    fieldValue: String(value ?? ""),
   }));
 }
 
@@ -10136,49 +10081,22 @@ function buildOpportunityCreateBody(form) {
   const title = form.title?.trim();
   if (!title) throw new Error("Title is required");
 
-  const responsibleId = form.responsibleId?.trim();
-  if (!responsibleId) throw new Error("Responsible user is required");
-
-  const stageId = Number(form.stageId);
-  if (!Number.isFinite(stageId) || stageId <= 0) throw new Error("Stage is required");
-
   const draft = state.newOpportunityDraft;
   const contactId = draft?.contactId != null ? Number(draft.contactId) : 0;
-  const stage = state.stages.find((s) => Number(s.id ?? s.ID) === stageId);
-  const successProbability = Number(stage?.successProbability ?? stage?.SuccessProbability ?? 0);
 
   const body = {
-    contactid: Number.isFinite(contactId) ? contactId : 0,
-    members: [],
     title,
     description: form.description?.trim() || "",
-    responsibleid: String(responsibleId),
-    bidType: 0,
-    bidValue: 0,
-    bidCurrencyAbbr: "USD",
-    perPeriodValue: 1,
-    stageid: stageId,
-    successProbability: Number.isFinite(successProbability) ? successProbability : 0,
-    actualCloseDate: null,
-    expectedCloseDate: form.expectedCloseDate ? serializeCrmTimestamp(form.expectedCloseDate) : null,
-    isPrivate: !!form.isPrivate,
-    accessList: [],
-    isNotify: !!form.isNotify,
   };
 
-  if (form.isPrivate) {
-    const accessSel = $("#create-opp-access");
-    body.accessList = accessSel
-      ? [...accessSel.selectedOptions].map((o) => o.value).filter(Boolean)
-      : [];
-    if (!body.accessList.length) body.accessList = [String(responsibleId)];
-  } else {
-    body.accessList = [];
+  if (form.stageId) {
+    const stageId = Number(form.stageId);
+    if (Number.isFinite(stageId) && stageId > 0) body.stageId = stageId;
   }
-
-  if (form.customFields?.length) {
-    body.customFieldList = buildCustomFieldListForApi(form.customFields);
-  }
+  if (form.responsibleId?.trim()) body.responsibleUserId = String(form.responsibleId.trim());
+  if (Number.isFinite(contactId) && contactId > 0) body.contactId = contactId;
+  if (form.expectedCloseDate) body.expectedCloseDate = serializeCrmTimestamp(form.expectedCloseDate);
+  if (form.isPrivate) body.isPrivate = true;
 
   return body;
 }
@@ -18090,29 +18008,19 @@ function buildCreateTaskBody(form) {
   const title = form.title?.trim();
   if (!title) throw new Error("Task title is required");
 
-  const responsibleId = form.responsibleId?.trim();
-  if (!responsibleId) throw new Error("Assigned user is required");
-
-  const categoryId = resolveTaskCategoryId(form.categoryId);
-  if (categoryId == null) {
-    throw new Error("No task category available. Reload the page or check CRM task categories.");
-  }
-
   const body = {
     title,
     description: form.description?.trim() || "",
-    responsibleId,
-    categoryId,
-    isNotify: !!form.isNotify,
   };
 
+  if (form.responsibleId?.trim()) body.responsibleUserId = String(form.responsibleId.trim());
+
   const deadline = toApiTaskDeadline(form.deadLine);
-  if (deadline) body.deadline = deadline;
+  if (deadline) body.dueDate = deadline;
 
   const oppId = state.newTaskOpportunity.id;
   if (oppId != null && Number.isFinite(oppId)) {
-    body.entityType = "opportunity";
-    body.entityId = oppId;
+    body.opportunityId = oppId;
   }
 
   return body;
@@ -18138,7 +18046,7 @@ async function createCrmTask(body) {
       body: JSON.stringify(body),
       description: `Create task "${body?.title || body?.Title || 'untitled'}"`,
       opType: "task",
-      targetId: body?.entityId ? String(body.entityId) : undefined,
+      targetId: body?.opportunityId ? String(body.opportunityId) : undefined,
     }
   );
   if (res && res.queued) {
