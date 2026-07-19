@@ -10,6 +10,7 @@ BEGIN;
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
+    external_user_id TEXT,
     password_hash TEXT,
     password_salt TEXT,
     must_change_password BOOLEAN DEFAULT TRUE,
@@ -21,6 +22,8 @@ CREATE TABLE users (
     created_at TIMESTAMP DEFAULT NOW(),
     last_login TIMESTAMP
 );
+
+CREATE INDEX idx_users_external ON users(external_user_id);
 
 CREATE TABLE sessions (
     token TEXT PRIMARY KEY,
