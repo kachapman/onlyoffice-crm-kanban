@@ -8579,18 +8579,6 @@ async function uploadAttachmentForNote(file, oppId) {
   }
   return { id: data.id, title: data.title || file.name, fileSize: data.fileSize, mimeType: data.mimeType };
 }
-    throw new Error(`Upload response missing file ID for ${file.name}`);
-  }
-  if (typeof fileId === "object") fileId = fileId.id || fileId.Id || fileId.Data || fileId.data || null;
-  fileId = String(fileId).trim();
-  if (!fileId) {
-    throw new Error(`Upload returned an empty file ID for ${file.name}`);
-  }
-  return {
-    id: fileId,
-    title: data.FileName || data.fileName || data.name || file.name,
-  };
-}
 
 async function createOpportunityHistoryEvent(oppId, { content, categoryId, notifyUserList, fileIds = [], attachmentNames = [], failedAttachmentNames = [], created = null }) {
   const html = noteContentToHtml(content);
