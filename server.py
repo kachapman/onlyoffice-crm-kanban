@@ -377,6 +377,98 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/config":
             _json_response(self, 200, {"version": APP_VERSION})
             return
+        if api_path == "/api/branding":
+            try:
+                row = db.query_one(
+                    """SELECT company_name, logo_path, watermark_path, login_title,
+                              header_eyebrow, header_title, primary_color, favicon_path
+                       FROM branding ORDER BY id LIMIT 1"""
+                )
+                if row:
+                    _json_response(self, 200, {
+                        "companyName": row["company_name"] or "Sietch CRM",
+                        "logoPath": row["logo_path"] or "/assets/sietch-logo.png",
+                        "watermarkPath": row["watermark_path"],
+                        "loginTitle": row["login_title"] or "Sietch CRM",
+                        "headerEyebrow": row["header_eyebrow"] or "Sietch CRM",
+                        "headerTitle": row["header_title"] or "Workspace <em>dashboard</em>",
+                        "primaryColor": row["primary_color"] or "#3b82f6",
+                        "faviconPath": row["favicon_path"] or "/favicon.ico",
+                    })
+                else:
+                    _json_response(self, 200, {
+                        "companyName": "Sietch CRM",
+                        "logoPath": "/assets/sietch-logo.png",
+                        "watermarkPath": None,
+                        "loginTitle": "Sietch CRM",
+                        "headerEyebrow": "Sietch CRM",
+                        "headerTitle": "Workspace <em>dashboard</em>",
+                        "primaryColor": "#3b82f6",
+                        "faviconPath": "/favicon.ico",
+                    })
+            except Exception:
+                logger.exception("Failed to load branding")
+                _json_response(self, 200, {
+                    "companyName": "Sietch CRM",
+                    "logoPath": "/assets/sietch-logo.png",
+                    "watermarkPath": None,
+                    "loginTitle": "Sietch CRM",
+                    "headerEyebrow": "Sietch CRM",
+                    "headerTitle": "Workspace <em>dashboard</em>",
+                    "primaryColor": "#3b82f6",
+                    "faviconPath": "/favicon.ico",
+                })
+            return
+        if api_path == "/api/branding" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON body"})
+                return
+            try:
+                # Update or insert branding
+                existing = db.query_one("SELECT id FROM branding LIMIT 1")
+                if existing:
+                    db.execute(
+                        """UPDATE branding SET
+                            company_name = COALESCE(%s, company_name),
+                            logo_path = COALESCE(%s, logo_path),
+                            watermark_path = %s,
+                            login_title = COALESCE(%s, login_title),
+                            header_eyebrow = COALESCE(%s, header_eyebrow),
+                            header_title = COALESCE(%s, header_title),
+                            primary_color = COALESCE(%s, primary_color),
+                            favicon_path = COALESCE(%s, favicon_path),
+                            updated_at = NOW()
+                        WHERE id = %s""",
+                        (payload.get("companyName"), payload.get("logoPath"),
+                         payload.get("watermarkPath"), payload.get("loginTitle"),
+                         payload.get("headerEyebrow"), payload.get("headerTitle"),
+                         payload.get("primaryColor"), payload.get("faviconPath"),
+                         existing["id"]),
+                    )
+                else:
+                    db.execute(
+                        """INSERT INTO branding (company_name, logo_path, watermark_path,
+                            login_title, header_eyebrow, header_title, primary_color, favicon_path)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                        (payload.get("companyName", "Sietch CRM"),
+                         payload.get("logoPath", "/assets/sietch-logo.png"),
+                         payload.get("watermarkPath"),
+                         payload.get("loginTitle", "Sietch CRM"),
+                         payload.get("headerEyebrow", "Sietch CRM"),
+                         payload.get("headerTitle", "Workspace <em>dashboard</em>"),
+                         payload.get("primaryColor", "#3b82f6"),
+                         payload.get("faviconPath", "/favicon.ico")),
+                    )
+                _json_response(self, 200, {"ok": True})
+            except Exception:
+                logger.exception("Failed to update branding")
+                _json_response(self, 500, {"error": "Failed to update branding"})
+            return
         if api_path == "/api/changelog":
             cl = Path(__file__).parent / "CHANGELOG.md"
             body = cl.read_text("utf-8") if cl.exists() else "# Changelog\n\nNo changelog available."

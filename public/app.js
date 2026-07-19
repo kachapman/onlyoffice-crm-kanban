@@ -1,6 +1,37 @@
 /**
- * Vanguard CRM — multi-group opportunity board (local test portal)
+ * Sietch CRM — multi-group opportunity board (local test portal)
  */
+
+// Load branding early for login screen
+(async function loadBrandingEarly() {
+  try {
+    const resp = await fetch("/api/branding");
+    if (resp.ok) {
+      const branding = await resp.json();
+      // Apply to login screen immediately
+      if (branding.companyName) {
+        document.title = branding.companyName;
+        const loginTitle = document.querySelector(".login-title");
+        if (loginTitle) loginTitle.textContent = branding.loginTitle || branding.companyName;
+        const noscript = document.querySelector("noscript div");
+        if (noscript) noscript.textContent = `JavaScript is required for the ${branding.companyName}. Please enable it and reload.`;
+      }
+      if (branding.watermarkPath) {
+        const watermark = document.querySelector(".login-watermark");
+        if (watermark) watermark.src = branding.watermarkPath;
+      }
+      if (branding.faviconPath) {
+        const favicon = document.querySelector('link[rel="shortcut icon"]');
+        if (favicon) favicon.href = branding.faviconPath;
+      }
+      if (branding.primaryColor) {
+        document.documentElement.style.setProperty("--accent", branding.primaryColor);
+      }
+    }
+  } catch (e) {
+    // Silently fail — branding is cosmetic
+  }
+})();
 
 const GROUPS_STORAGE_KEY = "oo_board_groups_v2";
 const CALENDARS_STORAGE_KEY = "oo_board_calendars_v1";
@@ -19194,6 +19225,41 @@ function bindChangelogModal(version) {
   });
 }
 
+function applyBranding(branding) {
+  // Apply company name to title
+  if (branding.companyName) {
+    document.title = branding.companyName;
+    // Update login title
+    const loginTitle = $(".login-title");
+    if (loginTitle) loginTitle.textContent = branding.loginTitle || branding.companyName;
+    // Update header eyebrow
+    const eyebrow = $(".eyebrow");
+    if (eyebrow) eyebrow.textContent = branding.headerEyebrow || branding.companyName;
+    // Update noscript message
+    const noscript = $("noscript div");
+    if (noscript) noscript.textContent = `JavaScript is required for the ${branding.companyName}. Please enable it and reload.`;
+  }
+  // Apply custom watermark
+  if (branding.watermarkPath) {
+    const watermark = $(".login-watermark");
+    if (watermark) watermark.src = branding.watermarkPath;
+  }
+  // Apply custom logo
+  if (branding.logoPath) {
+    const logo = $(".hero-logo");
+    if (logo) logo.src = branding.logoPath;
+  }
+  // Apply custom favicon
+  if (branding.faviconPath) {
+    const favicon = $('link[rel="shortcut icon"]');
+    if (favicon) favicon.href = branding.faviconPath;
+  }
+  // Apply primary color
+  if (branding.primaryColor) {
+    document.documentElement.style.setProperty("--accent", branding.primaryColor);
+  }
+}
+
 async function init() {
   loadEventLogFromStorage();
 
@@ -19201,6 +19267,14 @@ async function init() {
   // Version next to sign out (loaded from server /VERSION so it auto-updates on release)
   const verEl = $("#app-version");
   if (verEl) verEl.textContent = config.version ? "v" + config.version : "v1.7.5";
+
+  // Load branding configuration
+  try {
+    const branding = await (await fetch("/api/branding")).json();
+    applyBranding(branding);
+  } catch (e) {
+    console.warn("Failed to load branding:", e);
+  }
 
   state.groups = [];
   state.calendarTiles = [];

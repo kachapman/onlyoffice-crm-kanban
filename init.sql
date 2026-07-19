@@ -562,6 +562,27 @@ CREATE TABLE user_profiles (
 );
 
 -- ============================================================================
+-- 7.16 Company Branding Configuration
+-- ============================================================================
+
+CREATE TABLE branding (
+    id SERIAL PRIMARY KEY,
+    company_name TEXT DEFAULT 'Sietch CRM',
+    logo_path TEXT DEFAULT '/assets/sietch-logo.png',
+    watermark_path TEXT,
+    login_title TEXT DEFAULT 'Sietch CRM',
+    header_eyebrow TEXT DEFAULT 'Sietch CRM',
+    header_title TEXT DEFAULT 'Workspace <em>dashboard</em>',
+    primary_color TEXT DEFAULT '#3b82f6',
+    favicon_path TEXT DEFAULT '/favicon.ico',
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Insert default branding
+INSERT INTO branding (company_name, login_title, header_eyebrow, header_title)
+VALUES ('Sietch CRM', 'Sietch CRM', 'Sietch CRM', 'Workspace <em>dashboard</em>');
+
+-- ============================================================================
 -- Seed Data
 -- ============================================================================
 

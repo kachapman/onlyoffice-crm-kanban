@@ -7660,3 +7660,60 @@ body {
   cursor: pointer;
 }
 
+/* ── Sietch CRM Footer ─────────────────────────────────────────────────────── */
+
+.sietch-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  opacity: 0.6;
+  transition: opacity 0.2s;
+}
+
+.sietch-footer:hover {
+  opacity: 0.9;
+}
+
+.sietch-footer-logo {
+  height: 24px;
+  width: auto;
+  object-fit: contain;
+}
+
+.sietch-footer-text {
+  font-size: 0.75rem;
+  color: var(--text-muted, #6b7280);
+  letter-spacing: 0.05em;
+}
+
+.sietch-dashboard-footer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  background: var(--surface, #1a1a2e);
+  border-top: 1px solid var(--border, #2a2a4a);
+  opacity: 0.5;
+  transition: opacity 0.2s;
+  z-index: 100;
+}
+
+.sietch-dashboard-footer:hover {
+  opacity: 0.8;
+}
+
+.sietch-dashboard-footer .sietch-footer-logo {
+  height: 16px;
+}
+
+.sietch-dashboard-footer .sietch-footer-text {
+  font-size: 0.65rem;
+}
+
