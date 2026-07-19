@@ -149,7 +149,7 @@ class TestChaosHandler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self) -> None:
-        if self.path == "/api/login":
+        if self.path == "/api/login" or self.path == "/api/v2/auth/login":
             self._handle_test_login()
             return
         if self.path == "/api/logout":
@@ -169,6 +169,12 @@ class TestChaosHandler(SimpleHTTPRequestHandler):
             return
         if self.path.startswith("/api/"):
             self._handle_api_post_put("PUT")
+            return
+        self.send_error(405)
+
+    def do_PATCH(self) -> None:
+        if self.path.startswith("/api/"):
+            self._handle_api_post_put("PATCH")
             return
         self.send_error(405)
 
@@ -357,6 +363,23 @@ class TestChaosHandler(SimpleHTTPRequestHandler):
         if path == "/api/session":
             _json_response(self, 200, {"authenticated": True, "testMode": True})
             return
+        if path == "/api/v2/documents/personal":
+            _json_response(self, 200, {"documents": [], "testMode": True})
+            return
+        if path == "/api/v2/documents/company":
+            _json_response(self, 200, {"documents": [], "testMode": True})
+            return
+        if path == "/api/v2/documents/search":
+            _json_response(self, 200, {"results": [], "total": 0, "testMode": True})
+            return
+        if re.match(r"^/api/v2/projects/\d+/documents$", path):
+            _json_response(self, 200, {"documents": [], "testMode": True})
+            return
+        if path == "/api/v2/projects/simple":
+            _json_response(self, 200, {"projects": [], "testMode": True})
+            return
+            _json_response(self, 200, {"authenticated": True, "testMode": True})
+            return
         if path == "/api/test/chaos":
             self._handle_chaos_control()
             return
@@ -420,6 +443,22 @@ class TestChaosHandler(SimpleHTTPRequestHandler):
             self._handle_chaos_control()
             return
 
+        if path == "/api/v2/documents/personal/upload" or path == "/api/v2/documents/company/upload":
+            self._handle_doc_upload()
+            return
+        if re.match(r"^/api/v2/projects/\d+/documents$", path) and method == "POST":
+            self._handle_doc_upload()
+            return
+        if path in ("/api/v2/documents/batch-delete", "/api/v2/documents/batch-move", "/api/v2/documents/batch-copy"):
+            self._handle_doc_batch()
+            return
+        if re.match(r"^/api/v2/documents/\d+$", path) and method == "PATCH":
+            _json_response(self, 200, {"ok": True, "testMode": True})
+            return
+        if re.match(r"^/api/v2/documents/\d+/copy$", path):
+            _json_response(self, 200, {"ok": True, "testMode": True})
+            return
+
         route = self._get_proxy_route()
         if not route:
             self.send_error(404)
@@ -451,6 +490,12 @@ class TestChaosHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(resp_body)))
         self.end_headers()
         self.wfile.write(resp_body)
+
+    def _handle_doc_upload(self) -> None:
+        _json_response(self, 200, {"id": "test-doc-" + str(int(time.time())), "testMode": True})
+
+    def _handle_doc_batch(self) -> None:
+        _json_response(self, 200, {"ok": True, "testMode": True})
 
     def _get_proxy_route(self):
         match = re.match(r"^/api/proxy(/.*)$", urlparse(self.path).path)
