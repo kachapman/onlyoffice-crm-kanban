@@ -137,7 +137,8 @@ Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local 
 - 2026-07-18: `9bb823c` — CSV import and project-list fix.
 - 2026-07-18: `7f28153` — Fix projects list stage/contact field indices and add CSV import script.
 - 2026-07-18: `a2e8cb2` — Fix JS syntax error after `uploadAttachmentForNote` refactor.
-- 2026-07-19: Phase 1 follow-up fixes committed (kanban fields, `localeCompare`, card title→preview, branding POST route, active-user filter). Verified locally: branding save works, `/api/v2/projects` returns top-level `stageId`/`stageType`, `/api/v2/users` returns `isActive`.
+- 2026-07-19: Phase 1 follow-up fixes committed (kanban fields, `localeCompare`, card title→preview, branding POST route, active-user filter). Verified locally.
+- 2026-07-19: Started Phase 2 export tooling: `--export-only` + `import_json_export.py` skeleton added to `migrate_from_onlyoffice.py`. Fixed user_id=1 fallback in profile migration. Footer made static (bottom of content flow).
 - 2026-07-18: `60d880b` — Add dashboard-local data migration tooling.
 - 2026-07-18: `b7d091b` — Expose dashboard on `0.0.0.0` and DB on `127.0.0.1:5432`.
 - 2026-07-18: `0fb82e3` — Fix local deployment for Podman.
@@ -148,6 +149,8 @@ Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local 
 
 ## Next action
 
-Phase 1 follow-up complete. Next: Phase 2 export tooling (`--export-only` mode + `import_json_export.py`).
+Phase 2 export tooling in progress. Expand `import_json_export.py` for full entities + user remap. Then test export/import.
+
+Terminal theme (monospace dark panes for history/feed/event log) is in Phase 2D (Tile Layout + Terminal theme) per plan — after export + admin modal (2C).
 
 Update AGENTS.md and commit.

@@ -6,8 +6,9 @@ Requires: psycopg2 (pip install psycopg2-binary)
 
 Usage:
     python migrate_from_onlyoffice.py --portal-url https://office.publicadjustermidwest.com --email admin@example.com --password secret
+    python migrate_from_onlyoffice.py --portal-url ... --email ... --password ... --export-only --export-dir ./crm-export
     python migrate_from_onlyoffice.py --help
-"""
+ """
 
 from __future__ import annotations
 
@@ -667,26 +668,101 @@ def _migrate_user_profiles(conn) -> int:
                     if not isinstance(data, dict):
                         continue
 
-                    # Try to find the user by looking up the file name pattern
-                    # File names are sanitized user IDs
-                    # We need to match them to our users table
-                    # For now, store all profile data under user_id=1 as fallback
-                    # The actual remapping happens after all data is loaded
-
-                    cur.execute(
-                        """INSERT INTO user_profiles (user_id, kanban_layout, tile_configs)
-                           VALUES (1, %s, %s)
-                           ON CONFLICT (user_id) DO UPDATE SET
-                               kanban_layout = EXCLUDED.kanban_layout,
-                               tile_configs = EXCLUDED.tile_configs""",
-                        (json.dumps(data.get("tileLayout", {})), json.dumps(data)),
-                    )
-                    count += 1
+                    # Profiles are remapped properly by migrate_dashboard_data.py using external_user_id
+                    # Skip insert here to avoid polluting with user_id=1.
+                    # This step is kept for compatibility but does not write.
+                    print(f"  [note] Skipping profile insert for {profile_file.name} (use migrate_dashboard_data.py for remap)")
+                    count += 1  # counted for report, no DB write
                 except (json.JSONDecodeError, OSError) as exc:
                     print(f"  [warn] Profile {profile_file}: {exc}")
         conn.commit()
     print(f"  → {count} user profiles migrated (remap after user migration)")
     return count
+
+
+# ── Export-only (Phase 2) ──────────────────────────────────────────────────────
+
+def _write_json(out_dir: Path, name: str, data: Any) -> None:
+    path = out_dir / f"{name}.json"
+    path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    print(f"  wrote {name}.json ({len(data) if isinstance(data, (list, dict)) else 'data'})")
+
+
+def _do_export_only(portal: str, token: str, out_dir: Path) -> None:
+    """Fetch data from OnlyOffice and write portable JSON files. No DB writes."""
+
+    # Users (for reference / later mapping)
+    print("Exporting users...")
+    try:
+        users = _paginate(portal, token, "/api/2.0/people/filter?count=500")
+        _write_json(out_dir, "users", users)
+    except Exception as e:
+        print(f"  [warn] users: {e}")
+
+    # Stages
+    print("Exporting stages...")
+    try:
+        stages = _unwrap(_crm_get(portal, token, "/api/2.0/crm/opportunity/stage"))
+        _write_json(out_dir, "stages", stages)
+    except Exception as e:
+        print(f"  [warn] stages: {e}")
+
+    # Tags
+    print("Exporting tags...")
+    try:
+        tags = _unwrap(_crm_get(portal, token, "/api/2.0/crm/opportunity/tag"))
+        _write_json(out_dir, "tags", tags)
+    except Exception as e:
+        print(f"  [warn] tags: {e}")
+
+    # Custom field definitions
+    print("Exporting custom field defs...")
+    try:
+        cfs = _unwrap(_crm_get(portal, token, "/api/2.0/crm/opportunity/customfield/definitions"))
+        _write_json(out_dir, "custom_fields", cfs)
+    except Exception as e:
+        print(f"  [warn] custom_fields: {e}")
+
+    # Contacts
+    print("Exporting contacts...")
+    try:
+        contacts = _paginate(portal, token, "/api/2.0/crm/contact")
+        _write_json(out_dir, "contacts", contacts)
+    except Exception as e:
+        print(f"  [warn] contacts: {e}")
+
+    # Opportunities (all stages)
+    print("Exporting opportunities (all stages)...")
+    try:
+        opps = _paginate(portal, token, "/api/2.0/crm/opportunity/filter?stageType=-1&sortBy=date_created&sortOrder=descending")
+        _write_json(out_dir, "opportunities", opps)
+    except Exception as e:
+        print(f"  [warn] opportunities: {e}")
+
+    # History (large)
+    print("Exporting history events...")
+    try:
+        history = _paginate(portal, token, "/api/2.0/crm/history/filter?entityType=opportunity&count=500")
+        _write_json(out_dir, "history", history)
+    except Exception as e:
+        print(f"  [warn] history: {e}")
+
+    # Tasks
+    print("Exporting tasks...")
+    try:
+        open_tasks = _paginate(portal, token, "/api/2.0/projects/task/")
+        closed_tasks = _paginate(portal, token, "/api/2.0/projects/task/?closed=true")
+        all_tasks = (open_tasks or []) + (closed_tasks or [])
+        _write_json(out_dir, "tasks", all_tasks)
+    except Exception as e:
+        print(f"  [warn] tasks: {e}")
+
+    # Optional: basic files metadata note (attachments are pulled during history in full migration)
+    print("Exporting notes (files metadata not bulk-exported here; use full migration for attachments)")
+    _write_json(out_dir, "export_manifest", {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "note": "Run with full migration or use document endpoints for files. This export is for core CRM entities."
+    })
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -701,6 +777,8 @@ def main():
     parser.add_argument("--db-name", default=os.getenv("DB_NAME", "vanguard"))
     parser.add_argument("--db-user", default=os.getenv("DB_USER", "vanguard"))
     parser.add_argument("--db-password", default=os.getenv("DB_PASSWORD", ""))
+    parser.add_argument("--export-only", action="store_true", help="Export OnlyOffice data to JSON files only (portable, no DB connection or writes)")
+    parser.add_argument("--export-dir", default="crm_export_json", help="Output directory for JSON export when using --export-only")
     args = parser.parse_args()
 
     # ── Connect to OnlyOffice CRM ──
@@ -724,6 +802,14 @@ def main():
     if not token:
         sys.exit(f"No token in authentication response: {auth_data}")
     print("Authenticated successfully.")
+
+    if args.export_only:
+        export_dir = Path(args.export_dir)
+        export_dir.mkdir(parents=True, exist_ok=True)
+        print(f"\n[EXPORT-ONLY] Writing to {export_dir.resolve()}")
+        _do_export_only(args.portal_url, token, export_dir)
+        print("\nExport complete. JSON files written.")
+        return
 
     # ── Connect to PostgreSQL ──
     print(f"\nConnecting to PostgreSQL at {args.db_host}:{args.db_port}/{args.db_name}...")

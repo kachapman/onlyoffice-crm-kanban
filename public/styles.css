@@ -7689,20 +7689,16 @@ body {
 }
 
 .sietch-dashboard-footer {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  padding: 0.5rem;
+  padding: 1rem 0.5rem;
+  margin-top: 1rem;
   background: var(--surface, #1a1a2e);
   border-top: 1px solid var(--border, #2a2a4a);
   opacity: 0.5;
   transition: opacity 0.2s;
-  z-index: 100;
 }
 
 .sietch-dashboard-footer:hover {
