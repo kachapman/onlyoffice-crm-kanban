@@ -1,7 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** Phase 2: expanded import_json_export.py to import users (with external_user_id), stages, tags, contacts, opportunities (with relation mapping), and basic history. --export-only already in place. Footer static. See sietch-crm-plan.md for progress. Terminal theme in 2D.
+**Last session summary (for next resume):** Phase 2 importer heavily improved: added full tasks import, enhanced history w/ category mapping+create, custom field defs, opp tag attachments, better JSON unwrap, dry-run, counts, notes for follow-ups. Script now ready to deploy/run for migration (after export JSON transfer). Updated plan/AGENTS. See sietch-crm-plan.md.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 
