@@ -1,5 +1,9 @@
 # Sietch CRM
 
+<p align="center">
+  <img src="public/assets/sietch-logo.png" alt="Sietch CRM Logo" width="200">
+</p>
+
 > "The sietch is where the tribe gathers. Water is rationed. Strategy is planned. Nothing is lost."
 
 **Current version:** 3.0.0 — see [CHANGELOG.md](./CHANGELOG.md)
