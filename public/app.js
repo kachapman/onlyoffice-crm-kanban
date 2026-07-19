@@ -3110,6 +3110,135 @@ function bindDocumentsModal() {
       if (files.length) uploadDocsToCurrentScope(files);
     });
   }
+
+  // Right-click context menu
+  const ctxMenu = $("#documents-ctx");
+  let ctxDocId = null;
+  let ctxDocTitle = null;
+
+  function showDocCtxMenu(e, docId, title) {
+    e.preventDefault();
+    ctxDocId = docId;
+    ctxDocTitle = title;
+    ctxMenu.querySelectorAll(".ctx-menu-item").forEach(item => {
+      item.dataset.docId = String(docId);
+    });
+    const rect = modal.getBoundingClientRect();
+    let x = e.clientX - rect.left + modal.scrollLeft;
+    let y = e.clientY - rect.top + modal.scrollTop;
+    const mw = 200, mh = ctxMenu.offsetHeight || 240;
+    if (x + mw > modal.clientWidth) x = modal.clientWidth - mw - 8;
+    if (y + mh > modal.clientHeight) y = modal.clientHeight - mh - 8;
+    ctxMenu.style.left = x + "px";
+    ctxMenu.style.top = y + "px";
+    ctxMenu.classList.remove("hidden");
+  }
+
+  function hideDocCtxMenu() {
+    ctxMenu.classList.add("hidden");
+    ctxDocId = null;
+    ctxDocTitle = null;
+  }
+
+  document.getElementById("documents-list")?.addEventListener("contextmenu", e => {
+    const row = e.target.closest(".documents-list-row");
+    if (!row) return;
+    e.preventDefault();
+    const id = Number(row.dataset.docId);
+    const title = row.querySelector(".doc-doc-title")?.textContent || "";
+    showDocCtxMenu(e, id, title);
+  });
+
+  ctxMenu.addEventListener("click", async e => {
+    const btn = e.target.closest(".ctx-menu-item");
+    if (!btn) return;
+    const action = btn.dataset.docCtx;
+    const docId = ctxDocId;
+    hideDocCtxMenu();
+    if (!docId) return;
+    if (action === "open") {
+      openDocEditor(docId);
+    } else if (action === "download") {
+      downloadDoc(docId, ctxDocTitle);
+    } else if (action === "rename") {
+      const newTitle = prompt("New name:", ctxDocTitle || "");
+      if (!newTitle || newTitle === ctxDocTitle) return;
+      try {
+        await api(`/api/v2/documents/${docId}`, {
+          method: "PATCH",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({ title: newTitle }),
+        });
+        showToast("Document renamed");
+        loadDocumentsList();
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    } else if (action === "move") {
+      const projectId = prompt("Move to project ID:");
+      if (!projectId) return;
+      const pid = Number(projectId);
+      if (!pid || isNaN(pid)) { showToast("Invalid project ID", true); return; }
+      try {
+        await api(`/api/v2/documents/${docId}`, {
+          method: "PATCH",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({ opportunity_id: pid }),
+        });
+        showToast("Document moved");
+        loadDocumentsList();
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    } else if (action === "copy") {
+      const dest = prompt("Copy to: (1) Personal docs, (2) Company docs, or enter a project ID");
+      if (!dest) return;
+      let body;
+      if (dest === "1") {
+        body = {};
+      } else if (dest === "2") {
+        body = { company_scope: true };
+      } else {
+        const pid = Number(dest);
+        if (!pid || isNaN(pid)) { showToast("Invalid project ID", true); return; }
+        body = { opportunity_id: pid };
+      }
+      try {
+        await api(`/api/v2/documents/${docId}/copy`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(body),
+        });
+        showToast("Document copied");
+        loadDocumentsList();
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    } else if (action === "delete") {
+      if (!confirm(`Delete "${ctxDocTitle || "this document"}"? This cannot be undone.`)) return;
+      try {
+        await api(`/api/v2/documents/batch-delete`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({ ids: [docId] }),
+        });
+        showToast("Document deleted");
+        loadDocumentsList();
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    }
+  });
+
+  document.addEventListener("click", e => {
+    if (!ctxMenu.classList.contains("hidden") && !ctxMenu.contains(e.target)) {
+      hideDocCtxMenu();
+    }
+  });
+
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && !ctxMenu.classList.contains("hidden")) hideDocCtxMenu();
+  });
 }
 
 function bindCalendarEventModal() {
@@ -18858,49 +18987,165 @@ function renderOpportunityPreviewContent(container, data) {
   docsContent.dataset.tabContent = "documents";
   docsContent.style.display = "none";
 
-  const docs = documents || [];
-  if (!docs.length) {
-    const p = document.createElement("p");
-    p.className = "opp-preview-empty";
-    p.textContent = "No documents attached to this deal";
-    docsContent.appendChild(p);
-  } else {
-    const ul = document.createElement("ul");
-    ul.className = "opp-preview-documents";
-    for (const d of docs) {
+  const oppId = opp.id ?? opp.ID;
+  const previewDocsState = { selected: new Set(), documents: documents || [] };
+
+  // Toolbar: upload + select-all + delete
+  const docsToolbar = document.createElement("div");
+  docsToolbar.className = "opp-docs-toolbar";
+
+  const uploadInput = document.createElement("input");
+  uploadInput.type = "file";
+  uploadInput.multiple = true;
+  uploadInput.accept = ".doc,.docx,.xls,.xlsx,.ppt,.pptx,.pdf,.txt,.csv,.png,.jpg,.jpeg,.gif,.zip,.rar";
+  uploadInput.style.display = "none";
+  const uploadBtn = document.createElement("button");
+  uploadBtn.type = "button";
+  uploadBtn.className = "btn btn-primary btn-sm";
+  uploadBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload`;
+  uploadBtn.addEventListener("click", () => uploadInput.click());
+  uploadInput.addEventListener("change", async () => {
+    const files = Array.from(uploadInput.files).filter(f => f.size > 0);
+    if (!files.length) return;
+    uploadBtn.disabled = true;
+    let ok = 0, fail = 0;
+    for (const file of files) {
+      const formData = new FormData();
+      formData.append("file", file);
+      try {
+        const res = await fetch(`/api/v2/projects/${oppId}/documents`, { method: "POST", credentials: "same-origin", body: formData });
+        if (res.ok) ok++; else fail++;
+      } catch { fail++; }
+    }
+    uploadBtn.disabled = false;
+    if (ok) showToast(`Uploaded ${ok} file${ok > 1 ? "s" : ""}`);
+    if (fail) showToast(`Failed ${fail} file${fail > 1 ? "s" : ""}`, true);
+    if (ok) {
+      const fresh = await fetchOpportunityDocuments(oppId);
+      previewDocsState.documents = fresh;
+      previewDocsState.selected.clear();
+      renderPreviewDocsList();
+    }
+    uploadInput.value = "";
+  });
+  docsToolbar.appendChild(uploadBtn);
+
+  const selAllBtn = document.createElement("button");
+  selAllBtn.type = "button";
+  selAllBtn.className = "btn btn-secondary btn-sm";
+  selAllBtn.textContent = "Select all";
+  selAllBtn.addEventListener("click", () => {
+    const allSelected = previewDocsState.documents.every(d => previewDocsState.selected.has(d.id));
+    if (allSelected) {
+      previewDocsState.selected.clear();
+    } else {
+      previewDocsState.documents.forEach(d => previewDocsState.selected.add(d.id));
+    }
+    renderPreviewDocsList();
+  });
+  docsToolbar.appendChild(selAllBtn);
+
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.className = "btn btn-secondary btn-sm";
+  deleteBtn.textContent = "Delete selected";
+  deleteBtn.disabled = true;
+  deleteBtn.addEventListener("click", async () => {
+    if (!previewDocsState.selected.size) return;
+    if (!confirm(`Delete ${previewDocsState.selected.size} document${previewDocsState.selected.size > 1 ? "s" : ""}?`)) return;
+    try {
+      await api("/api/v2/documents/batch-delete", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ ids: Array.from(previewDocsState.selected) }),
+      });
+      showToast("Deleted");
+      previewDocsState.selected.clear();
+      const fresh = await fetchOpportunityDocuments(oppId);
+      previewDocsState.documents = fresh;
+      renderPreviewDocsList();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  });
+  docsToolbar.appendChild(deleteBtn);
+
+  docsContent.appendChild(docsToolbar);
+
+  function renderPreviewDocsList() {
+    const list = docsContent.querySelector(".opp-preview-docs-list");
+    if (!list) return;
+    const { docs: ds, selected } = previewDocsState;
+    const countEl = docsContent.querySelector(".opp-docs-count");
+    if (countEl) countEl.textContent = `${ds.length} document${ds.length !== 1 ? "s" : ""}`;
+    deleteBtn.disabled = !selected.size;
+    list.innerHTML = ds.length ? "" : `<p class="opp-preview-empty">No documents in this project. Use Upload to add files.</p>`;
+    if (!ds.length) return;
+    ds.forEach(d => {
       const docId = d.id ?? d.ID ?? "";
+      const title = d.title || d.Title || d.name || d.Name || "Document";
+      const checked = selected.has(docId) ? "checked" : "";
       const li = document.createElement("li");
+      li.className = selected.has(docId) ? "opp-preview-doc-item selected" : "opp-preview-doc-item";
+
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "opp-doc-cb";
+      cb.checked = !!selected.has(docId);
+      cb.dataset.docId = docId;
+      cb.addEventListener("change", () => {
+        if (cb.checked) previewDocsState.selected.add(docId);
+        else previewDocsState.selected.delete(docId);
+        deleteBtn.disabled = !previewDocsState.selected.size;
+        li.classList.toggle("selected", cb.checked);
+      });
+      li.appendChild(cb);
+
+      const icon = document.createElement("span");
+      icon.className = "opp-doc-icon";
+      icon.innerHTML = docsIconForMime(d.mimeType || d.mimeType);
+      li.appendChild(icon);
 
       const a = document.createElement("a");
       a.href = docId ? `/api/v2/documents/${docId}/editor-config` : "#";
       a.target = "_blank";
       a.rel = "noopener noreferrer";
-      a.textContent = d.title || d.Title || d.name || d.Name || "Document";
+      a.textContent = title;
+      a.title = title;
       a.style.color = "inherit";
       a.style.textDecoration = "none";
+      a.style.flex = "1";
+      a.style.minWidth = "0";
+      a.style.overflow = "hidden";
+      a.style.textOverflow = "ellipsis";
+      a.style.whiteSpace = "nowrap";
       li.appendChild(a);
 
       if (docId) {
         const dl = document.createElement("a");
         dl.href = `/api/v2/documents/${docId}`;
         dl.title = "Download";
-        dl.setAttribute("aria-label", "Download document");
+        dl.setAttribute("aria-label", "Download");
         dl.setAttribute("download", "");
-        dl.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
-        dl.style.marginLeft = '0.5em';
-        dl.style.textDecoration = 'none';
-        dl.style.fontSize = '0.9em';
-        dl.style.display = 'inline-flex';
-        dl.style.alignItems = 'center';
-        dl.target = '_blank';
-        dl.rel = 'noopener';
+        dl.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
+        dl.style.textDecoration = "none";
+        dl.style.display = "inline-flex";
+        dl.style.alignItems = "center";
+        dl.style.flexShrink = "0";
+        dl.target = "_blank";
+        dl.rel = "noopener";
         li.appendChild(dl);
       }
 
-      ul.appendChild(li);
-    }
-    docsContent.appendChild(ul);
+      list.appendChild(li);
+    });
   }
+
+  const docsList = document.createElement("ul");
+  docsList.className = "opp-preview-docs-list";
+  docsContent.appendChild(docsList);
+
+  renderPreviewDocsList();
 
   container.appendChild(docsContent);
 
