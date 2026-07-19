@@ -1,7 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** Completed Phase 2A + 2C. 2A: search popup now has stage/owner filters, select-all, batch ops (add/remove tag, set stage, export selected), row-click preview. 2C: admin tabs expanded/filled (Custom Fields read-only, Tags add, plus existing contacts/stages). Non-neg preserved (tab icons, no separate buttons, no reorder of existing tabs). Projects managed via search modal. Docs updated; git status/diff run. Next: Phase 2D/2E/2F/2G or explicit direction.
+**Last session summary (for next resume):** Phase 2A continued: search popup now opens to Projects tab (not "search"). Projects tab = search input + stage/owner filters + batch ops. Tags tab = separate tab for tag selector + Search by Tag. Tab switching triggers data load (performSearchPopupQuery for projects, performSearchPopupTagQuery for tags). Error display scoped per-tab. Tag selector deduplicated. renderSearchPopupResults now takes container param. activateSearchPopupTab handles projects/tags/preview logic. Commit 7de588f pushed. CHANGELOG updated. Next: Phase 2D/2E/2F/2G or test+deploy.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 

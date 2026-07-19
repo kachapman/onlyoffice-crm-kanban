@@ -4,6 +4,8 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 ## Unreleased (Phase 1 follow-up)
 
+- Phase 2A continuation: search popup modal now opens on Projects tab by default. Projects tab shows search input + stage/owner filters + batch ops (add/remove tag, set stage, export). Tags tab (separate tab) shows tag selector + Search by Tag button to find deals by tag. Tab switching auto-loads data. Error display scoped to active tab's error div. Tag selector deduplicated (removed duplicate from projects tab). Enter key supported on tag select. Preview tabs fall back to Projects on close.
+
 - Header buttons (mail-inbox, add-tile, bookmarks trigger) + sign-out now reliably work (previously did nothing or no UI switch). Attached all critical listeners EARLY in init() immediately after guarded login form (using dataset guards to avoid dups) + made showLogin/showApp force display+visibility. Late binds no longer duplicate header attaches.
 - Sign out: reliably switches the UI to the login screen immediately (no static dashboard until manual refresh). Wrapped logout fetch in try/catch (always proceed to showLogin); added explicit style.display toggles in showApp/showLogin for robustness.
 - Phase 2C admin: contacts tab enhanced with live search + basic add contact form; stages tab implemented with search + add form (POST to /api/v2/stages; refreshes global stages; mirrors contacts UX).
