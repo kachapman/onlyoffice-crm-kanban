@@ -1,24 +1,50 @@
 services:
   dashboard:
+    container_name: vanguard-crm-v3
     build: .
-    container_name: vanguard-crm-dashboard
     restart: unless-stopped
     env_file:
       - .env
     environment:
-      PORT: "8765"
+      PORT: "8766"
       COOKIE_SECURE: "true"
+      DB_HOST: db
+      DB_PORT: "5432"
+    depends_on:
+      db:
+        condition: service_healthy
     volumes:
       - dashboard-data:/app/data
     ports:
-      - "127.0.0.1:8765:8765"
+      - "127.0.0.1:8766:8766"
     networks:
-      - estimate-network
+      - vanguard-internal
 
-networks:
-  estimate-network:
-    external: true
-    name: estimate-enhancer_estimate-network
+  db:
+    image: postgres:16-alpine
+    container_name: vanguard-db
+    restart: always
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - vanguard-internal
 
 volumes:
   dashboard-data:
+  db-data:
+
+networks:
+  vanguard-internal:
+    driver: bridge

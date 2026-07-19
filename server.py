@@ -1,32 +1,28 @@
 #!/usr/bin/env python3
-"""DEV ONLY: standalone proxy for UI testing.
+"""Vanguard CRM v3.0 — Standalone server with PostgreSQL backend.
 
-Production: install onlyoffice-module/ into Community Server (see INSTALL.txt).
-The board is then served by Workspace at /Products/OpportunityBoard/Default.aspx.
+Replaces OnlyOffice CRM proxy with direct database queries.
+All data owned locally. Zero external API calls.
 """
 
 from __future__ import annotations
 
 import gzip
-import html
-from html.parser import HTMLParser
 import io
 import json
 import os
 import re
-import ssl
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from http import cookies
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urlparse
+from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 from ics_calendar import _MAX_ICS_BYTES, is_allowed_calendar_url, parse_ics_calendar
 
-# Load app version from VERSION file (for display in UI, updates automatically on release)
+# ── Version ────────────────────────────────────────────────────────────────────
 APP_VERSION = "dev"
 try:
     version_path = Path(__file__).parent / "VERSION"
@@ -34,31 +30,26 @@ try:
         APP_VERSION = version_path.read_text().strip()
 except Exception:
     pass
+
+# ── Local store imports (unchanged from v2) ────────────────────────────────────
 from user_profile_store import load_user_profile, save_user_profile
 from event_log_store import append_event_log, load_event_log, list_users_with_logs
-from crm_bot_store import (add_mapping, cancel_code, cancel_code_by_value,
-                           generate_code, get_mapping_by_chat, get_pending_codes,
-                           get_usage_stats, list_mappings, remove_mapping,
-                           remove_mapping_by_chat, set_nickname, set_verify_chat_id,
-                           track_request, verify_code)
+from crm_bot_store import (
+    add_mapping, cancel_code, cancel_code_by_value,
+    generate_code, get_mapping_by_chat, get_pending_codes,
+    get_usage_stats, list_mappings, remove_mapping,
+    remove_mapping_by_chat, set_nickname, set_verify_chat_id,
+    track_request, verify_code,
+)
 from presence_store import (
-    append_dm,
-    clear_conversation,
-    clean_stale_presence_records,
-    clear_auto_status,
-    get_conversation,
-    get_portal_presence_snapshot,
-    get_recent_dms_for_user,
-    load_user_presence,
-    load_user_last_read_dms,
-    mark_messages_read,
-    save_user_presence,
-    set_last_read_dm,
-    set_status,
-    touch_crm_activity,
-    touch_heartbeat,
+    append_dm, clear_conversation, clean_stale_presence_records,
+    clear_auto_status, get_conversation, get_portal_presence_snapshot,
+    get_recent_dms_for_user, load_user_presence, load_user_last_read_dms,
+    mark_messages_read, save_user_presence, set_last_read_dm,
+    set_status, touch_crm_activity, touch_heartbeat,
 )
 
+# ── Config ─────────────────────────────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
 
@@ -78,163 +69,31 @@ def _load_env_file() -> None:
 
 
 _load_env_file()
-PORT = int(os.environ.get("PORT", "8765"))
-PORTAL_URL = os.environ.get("ONLYOFFICE_PORTAL_URL", "").rstrip("/")
-DEFAULT_PORTAL = PORTAL_URL or "https://office.publicadjustermidwest.com"
-SSL_VERIFY = os.environ.get("ONLYOFFICE_SSL_VERIFY", "true").lower() not in (
-    "0",
-    "false",
-    "no",
-)
-SESSION_COOKIE = "oo_token"
+
+PORT = int(os.environ.get("PORT", "8766"))
+SESSION_COOKIE = "vanguard_session"
 DATA_DIR = ROOT / "data"
 COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
-PRESENCE_AUTO_STATUS_TIMEOUT_S = 300  # 5 min — clear auto-status if no dashboard activity
+PRESENCE_AUTO_STATUS_TIMEOUT_S = 300
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-BOT_CRM_EMAIL = os.environ.get("BOT_CRM_EMAIL", "")
-BOT_CRM_PASSWORD = os.environ.get("BOT_CRM_PASSWORD", "")
+PHOTO_STORAGE_PATH = Path(os.getenv("PHOTO_STORAGE_PATH", str(DATA_DIR / "photos")))
+
+# ── DB init ────────────────────────────────────────────────────────────────────
+import db
+import auth as auth_mod
+
+db.init_db()
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
 
 
-def _crm_display_name(user_dict: dict[str, Any], user_id: str = "") -> str:
-    """Best-effort display name from a CRM people/user record.
-
-    Falls back through common OnlyOffice user fields so a missing displayName
-    does not leak the raw user id / UUID into the UI.
-    """
-    p = user_dict
-    first = str(p.get("firstName") or p.get("FirstName") or "").strip()
-    last = str(p.get("lastName") or p.get("LastName") or "").strip()
-    full_name = f"{first} {last}".strip()
-    return str(
-        p.get("displayName")
-        or p.get("DisplayName")
-        or p.get("userName")
-        or p.get("UserName")
-        or p.get("email")
-        or p.get("Email")
-        or full_name
-        or user_id
-    )
-
-
-class ResponseCache:
-    """Simple in-memory response cache with per-entry TTL."""
-
-    def __init__(self) -> None:
-        self._data: dict[str, tuple[float, int, bytes, str]] = {}
-
-    def get(self, key: str) -> tuple[int, bytes, str] | None:
-        entry = self._data.get(key)
-        if entry is None:
-            return None
-        expires_at, status, body, ctype = entry
-        if time.time() >= expires_at:
-            del self._data[key]
-            return None
-        return (status, body, ctype)
-
-    def set(self, key: str, value: tuple[int, bytes, str], ttl: float) -> None:
-        self._data[key] = (time.time() + ttl, value[0], value[1], value[2])
-
-    def clear(self) -> None:
-        self._data.clear()
-
-    def invalidate_prefix(self, prefix: str) -> None:
-        """Remove all cache entries whose key starts with the given prefix."""
-        to_delete = [k for k in self._data if k.startswith(prefix)]
-        for k in to_delete:
-            del self._data[k]
-
-
-_proxy_cache = ResponseCache()
-
-
-def _proxy_cache_ttl(api_path: str) -> int | None:
-    """Return cache TTL seconds for a GET proxy path, or None (no cache)."""
-    p = api_path.lower()
-    if re.search(r"/crm/opportunity/tag(/\d+)?$", p):
-        return 600  # 10 min — CRM-wide tag definitions, changes only when admin edits tags
-    if "/crm/opportunity/stage" in p:
-        return 600  # 10 min — CRM-wide stage definitions, admin-only changes
-    if "/crm/opportunity/filter" in p:
-        return 30  # 30s — user-scoped filter results (not reusable between users)
-    if "/crm/history/filter" in p:
-        return 30  # 30s — user-scoped history (not reusable between users)
-    if re.search(r"/crm/opportunity/\d+/customfield", p):
-        return 600  # 10 min — CRM-wide custom field definitions
-    # Single-opp fetch for board card updates (used by targeted refresh)
-    if re.search(r"/crm/opportunity/\d+$", p):
-        return 30
-    return None
-
-
-def _cache_key(method: str, api_path: str, query: str, portal: str, token: str = "") -> str:
-    return f"{method}:{api_path}:{query}:{portal}:{token}"
-
-
-def _session_token(handler: SimpleHTTPRequestHandler) -> str | None:
-    jar = cookies.SimpleCookie(handler.headers.get("Cookie", ""))
-    tok = jar.get(SESSION_COOKIE)
-    return tok.value if tok else None
-
-
-def _require_auth(handler: SimpleHTTPRequestHandler) -> tuple[str, str, str] | None:
-    """Return (portal, token, user_id) or None after sending error response."""
-    portal = _portal_base(handler)
-    if not portal:
-        _json_response(handler, 400, {"error": "Portal URL not configured"})
-        return None
-    token = _session_token(handler)
-    if not token:
-        _json_response(handler, 401, {"error": "Not authenticated"})
-        return None
-    user_id = _fetch_crm_user_id(portal, token)
-    if not user_id:
-        _json_response(handler, 502, {"error": "Could not resolve CRM user"})
-        return None
-    return portal, token, user_id
-
-
-_crm_user_id_cache: dict[str, str] = {}  # token -> user_id
-
-def _fetch_crm_user_id(portal: str, token: str) -> str | None:
-    cached = _crm_user_id_cache.get(token)
-    if cached is not None:
-        return cached
-    url = f"{portal.rstrip('/')}/api/2.0/people/@self.json"
-    req = urllib.request.Request(
-        url,
-        headers={"Accept": "application/json", "Authorization": token},
-        method="GET",
-    )
-    try:
-        with urllib.request.urlopen(req, context=_ssl_context(), timeout=20) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, OSError):
-        return None
-    me = data.get("response") or data.get("result") or data
-    if not isinstance(me, dict):
-        return None
-    uid = me.get("id") or me.get("ID") or me.get("userId") or me.get("UserId")
-    if uid is None:
-        return None
-    user_id_str = str(uid)
-    _crm_user_id_cache[token] = user_id_str
-    return user_id_str
-
-
-def _ssl_context() -> ssl.SSLContext | None:
-    if SSL_VERIFY:
-        return None
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    return ctx
-
-
-def _portal_base(handler: SimpleHTTPRequestHandler) -> str:
-    header = handler.headers.get("X-OnlyOffice-Portal", "").strip().rstrip("/")
-    return header or PORTAL_URL
+def _json_response(handler: SimpleHTTPRequestHandler, status: int, payload: dict | list) -> None:
+    body = json.dumps(payload, default=str).encode("utf-8")
+    handler.send_response(status)
+    handler.send_header("Content-Type", "application/json; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
 
 
 def _read_body(handler: SimpleHTTPRequestHandler) -> bytes:
@@ -244,62 +103,52 @@ def _read_body(handler: SimpleHTTPRequestHandler) -> bytes:
     return handler.rfile.read(length)
 
 
-def _json_response(handler: SimpleHTTPRequestHandler, status: int, payload: dict) -> None:
-    body = json.dumps(payload).encode("utf-8")
-    handler.send_response(status)
-    handler.send_header("Content-Type", "application/json; charset=utf-8")
-    handler.send_header("Content-Length", str(len(body)))
-    handler.end_headers()
-    handler.wfile.write(body)
-
-
-def _proxy_request(
-    handler: SimpleHTTPRequestHandler,
-    method: str,
-    api_path: str,
-    query: str = "",
-    body: bytes | None = None,
-    content_type: str | None = None,
-) -> tuple[int, bytes, str]:
-    portal = _portal_base(handler)
-    if not portal:
-        return 400, b'{"error":"Portal URL not configured. Set ONLYOFFICE_PORTAL_URL or send X-OnlyOffice-Portal header."}', "application/json"
-
+def _session_token(handler: SimpleHTTPRequestHandler) -> str | None:
     jar = cookies.SimpleCookie(handler.headers.get("Cookie", ""))
-    token = jar.get(SESSION_COOKIE)
-    if token is None:
-        return 401, b'{"error":"Not authenticated"}', "application/json"
+    tok = jar.get(SESSION_COOKIE)
+    return tok.value if tok else None
 
-    path = api_path if api_path.startswith("/") else f"/{api_path}"
-    url = f"{portal}{path}"
-    if query:
-        url = f"{url}?{query}"
 
-    # Use the incoming request's Accept header so binary downloads (attachments) work
-    incoming_accept = handler.headers.get("Accept", "application/json")
-    headers = {
-        "Accept": incoming_accept,
-        "Authorization": token.value,
-    }
-    body_empty = body is None or body.strip() in (b"", b"{}", b"null")
-    if not body_empty:
-        headers["Content-Type"] = content_type or "application/json"
-    elif method in ("PUT", "POST", "DELETE"):
-        # Empty JSON body on entity custom-field POST breaks fieldValue query binding.
-        if method == "POST" and re.search(r"/customfield/\d+", path, re.I):
-            body = None
-        else:
-            body = b"{}"
-            headers["Content-Type"] = "application/json"
+def _require_auth(handler: SimpleHTTPRequestHandler) -> dict | None:
+    """Return user dict or None after sending error response."""
+    token = _session_token(handler)
+    if not token:
+        _json_response(handler, 401, {"error": "Not authenticated"})
+        return None
+    user = auth_mod.get_session_user(token)
+    if not user:
+        _json_response(handler, 401, {"error": "Invalid or expired session"})
+        return None
+    return user
 
-    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+
+def _require_admin(handler: SimpleHTTPRequestHandler) -> dict | None:
+    """Return admin user dict or None after sending error response."""
+    user = _require_auth(handler)
+    if not user:
+        return None
+    if not user.get("is_admin"):
+        _json_response(handler, 403, {"error": "Forbidden"})
+        return None
+    return user
+
+
+def _parse_iso_datetime(value: str):
+    raw = str(value or "").strip()
+    if not raw:
+        return None
     try:
-        with urllib.request.urlopen(req, context=_ssl_context(), timeout=120) as resp:
-            return resp.status, resp.read(), resp.headers.get_content_type()
-    except urllib.error.HTTPError as exc:
-        data = exc.read()
-        ctype = exc.headers.get_content_type() if exc.headers else "application/json"
-        return exc.code, data, ctype
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+# ── Request Handler ────────────────────────────────────────────────────────────
 
 
 class KanbanHandler(SimpleHTTPRequestHandler):
@@ -314,15 +163,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     def do_OPTIONS(self) -> None:
         self.send_response(204)
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-OnlyOffice-Portal")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
     def do_GET(self) -> None:
         if self.path.startswith("/api/"):
             self._handle_api_get()
-            return
-        if self.path.startswith("/crm-proxy/"):
-            self._handle_crm_proxy("GET")
             return
         super().do_GET()
 
@@ -332,7 +178,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return super().send_head()
 
         fs_path = self.translate_path(self.path)
-        # Resolve directory to index.html so it gets gzip compression too
         if os.path.isdir(fs_path):
             for index in ("index.html", "index.htm"):
                 candidate = os.path.join(fs_path, index)
@@ -354,7 +199,6 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
         accept = self.headers.get("Accept-Encoding", "")
         should_gzip = "gzip" in accept and len(data) > 1024
-
         if should_gzip:
             data = gzip.compress(data)
 
@@ -373,10 +217,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         super().end_headers()
 
     def do_POST(self) -> None:
-        if self.path == "/api/login":
+        if self.path == "/api/v2/auth/login":
             self._handle_login()
             return
-        if self.path == "/api/logout":
+        if self.path == "/api/v2/auth/logout":
             self._handle_logout()
             return
         if self.path.startswith("/api/"):
@@ -396,6 +240,8 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         self.send_error(405)
 
+    # ── Auth ────────────────────────────────────────────────────────────────
+
     def _handle_login(self) -> None:
         try:
             payload = json.loads(_read_body(self) or b"{}")
@@ -403,45 +249,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": "Invalid JSON body"})
             return
 
-        username = payload.get("userName") or payload.get("username")
-        password = payload.get("password")
-        portal = (payload.get("portalUrl") or "").strip().rstrip("/") or _portal_base(self)
-        if not portal:
-            _json_response(
-                self,
-                400,
-                {
-                    "error": "Portal URL required. Set ONLYOFFICE_PORTAL_URL or pass portalUrl in body.",
-                },
-            )
+        email = str(payload.get("email") or payload.get("userName") or "").strip()
+        password = str(payload.get("password") or "")
+        if not email or not password:
+            _json_response(self, 400, {"error": "Email and password are required"})
             return
 
-        if not username or not password:
-            _json_response(self, 400, {"error": "userName and password are required"})
+        user = auth_mod.authenticate_user(email, password)
+        if not user:
+            _json_response(self, 401, {"error": "Invalid email or password"})
             return
 
-        body = json.dumps({"userName": username, "password": password}).encode("utf-8")
-        req = urllib.request.Request(
-            f"{portal}/api/2.0/authentication.json",
-            data=body,
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, context=_ssl_context()) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            _json_response(self, exc.code, {"error": "Authentication failed", "detail": detail})
-            return
-        except urllib.error.URLError as exc:
-            _json_response(self, 502, {"error": str(exc.reason)})
-            return
-
-        token = data.get("response", {}).get("token")
-        if not token:
-            _json_response(self, 502, {"error": "No token in authentication response", "raw": data})
-            return
+        ip = self.client_address[0] if self.client_address else ""
+        token = auth_mod.create_session(user["id"], ip)
 
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -453,37 +273,24 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if COOKIE_SECURE:
             cookie[SESSION_COOKIE]["secure"] = True
         self.send_header("Set-Cookie", cookie.output(header="").strip())
-        body_out = json.dumps(
-            {
-                "ok": True,
-                "portalUrl": portal,
-                "expires": data.get("response", {}).get("expires"),
-            }
-        ).encode("utf-8")
+        body_out = json.dumps({
+            "ok": True,
+            "user": {
+                "id": user["id"],
+                "email": user["email"],
+                "displayName": user["display_name"],
+                "isAdmin": user["is_admin"],
+                "mustChangePassword": user["must_change_password"],
+            },
+        }).encode("utf-8")
         self.send_header("Content-Length", str(len(body_out)))
         self.end_headers()
         self.wfile.write(body_out)
 
     def _handle_logout(self) -> None:
-        # Best-effort: clear the user's lastHeartbeat so they immediately appear "offline"
-        # (not AFD) after explicit or auto sign-out. Tab-away users keep their hb record
-        # (stale) and will show as AFD until hb cleared or aged >3h.
-        try:
-            portal = _portal_base(self)
-            token = _session_token(self)
-            if portal and token:
-                user_id = _fetch_crm_user_id(portal, token)
-                if user_id:
-                    pres = load_user_presence(portal, user_id)
-                    if pres.get("lastHeartbeat"):
-                        pres["lastHeartbeat"] = ""
-                        save_user_presence(portal, user_id, pres)
-        except Exception:
-            pass
-
-        # Clear cached user ID on logout
-        _crm_user_id_cache.pop(token, None)
-
+        token = _session_token(self)
+        if token:
+            auth_mod.destroy_session(token)
         self.send_response(200)
         cookie = cookies.SimpleCookie()
         cookie[SESSION_COOKIE] = ""
@@ -494,13 +301,1266 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b'{"ok":true}')
 
-    def _api_route(self) -> tuple[str, str] | None:
-        match = re.match(r"^/api/proxy(/.*)$", urlparse(self.path).path)
-        if not match:
-            return None
-        api_path = match.group(1)
-        parsed = urlparse(self.path)
-        return api_path, parsed.query
+    def _handle_password_reset_request(self) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        email = str(payload.get("email") or "").strip().lower()
+        if not email:
+            _json_response(self, 400, {"error": "Email is required"})
+            return
+        user = auth_mod.get_user_by_email(email)
+        if user:
+            token = auth_mod.create_reset_token(user["id"])
+            from smtp_client import send_password_reset_email
+            reset_url = f"{self.headers.get('Origin', 'http://localhost:' + str(PORT))}/reset?token={token}"
+            send_password_reset_email(email, reset_url)
+        # Always return success to prevent email enumeration
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_password_reset(self) -> None:
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        token = str(payload.get("token") or "").strip()
+        new_password = str(payload.get("password") or "")
+        if not token or not new_password:
+            _json_response(self, 400, {"error": "Token and password are required"})
+            return
+        user_id = auth_mod.verify_reset_token(token)
+        if not user_id:
+            _json_response(self, 400, {"error": "Invalid or expired reset token"})
+            return
+        auth_mod.set_password(user_id, new_password)
+        auth_mod.consume_reset_token(token)
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_change_password(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        current = str(payload.get("currentPassword") or "")
+        new_password = str(payload.get("newPassword") or "")
+        if not current or not new_password:
+            _json_response(self, 400, {"error": "Current and new password are required"})
+            return
+        row = db.query(
+            "SELECT password_hash, password_salt FROM users WHERE id = %s",
+            (user["id"],), fetch="one",
+        )
+        if not row or not row[0]:
+            _json_response(self, 400, {"error": "No password set"})
+            return
+        if not auth_mod.verify_password(current, row[0], row[1]):
+            _json_response(self, 401, {"error": "Current password is incorrect"})
+            return
+        auth_mod.set_password(user["id"], new_password)
+        _json_response(self, 200, {"ok": True})
+
+    # ── API GET Router ──────────────────────────────────────────────────────
+
+    def _handle_api_get(self) -> None:
+        api_path = urlparse(self.path).path
+        qs = parse_qs(urlparse(self.path).query)
+
+        # ── Config / Info ──
+        if api_path == "/api/config":
+            _json_response(self, 200, {"version": APP_VERSION})
+            return
+        if api_path == "/api/changelog":
+            cl = Path(__file__).parent / "CHANGELOG.md"
+            body = cl.read_text("utf-8") if cl.exists() else "# Changelog\n\nNo changelog available."
+            self.send_response(200)
+            self.send_header("Content-Type", "text/markdown; charset=utf-8")
+            self.send_header("Content-Length", str(len(body.encode("utf-8"))))
+            self.end_headers()
+            self.wfile.write(body.encode("utf-8"))
+            return
+        if api_path == "/api/session":
+            user = None
+            token = _session_token(self)
+            if token:
+                user = auth_mod.get_session_user(token)
+            _json_response(self, 200, {"authenticated": user is not None, "user": user})
+            return
+        if api_path == "/api/health":
+            try:
+                row = db.query("SELECT 1", fetch="one")
+                _json_response(self, 200, {"dbReachable": bool(row)})
+            except Exception:
+                _json_response(self, 200, {"dbReachable": False})
+            return
+
+        # ── Presence / Team (local store, unchanged) ──
+        if api_path.startswith("/api/presence"):
+            if api_path == "/api/presence/users":
+                self._handle_presence_users()
+                return
+            if api_path == "/api/presence":
+                self._handle_presence_get()
+                return
+            if api_path == "/api/presence/dm":
+                self._handle_presence_dm_get()
+                return
+            self.send_error(404)
+            return
+
+        # ── Event log (local store, unchanged) ──
+        if api_path == "/api/event-log":
+            self._handle_event_log_get()
+            return
+        if api_path == "/api/event-log/users":
+            self._handle_event_log_users()
+            return
+        if api_path == "/api/event-log/all":
+            self._handle_event_log_admin_get()
+            return
+
+        # ── User profile (local store, unchanged) ──
+        if api_path == "/api/user-profile":
+            self._handle_user_profile_get()
+            return
+        if api_path == "/api/dashboard-notes":
+            self._handle_dashboard_notes_get()
+            return
+
+        # ── Calendar feed (local handler, unchanged) ──
+        if api_path == "/api/calendar/feed":
+            self._handle_calendar_feed()
+            return
+
+        # ── Admin check ──
+        if api_path == "/api/check-admin":
+            self._handle_check_admin()
+            return
+
+        # ── Bot customers (admin, unchanged) ──
+        if api_path == "/api/bot-customers":
+            self._handle_bot_customers_list()
+            return
+        if api_path.startswith("/api/bot/"):
+            self._handle_bot_api_get()
+            return
+
+        # ── v2 API: Projects ──
+        if api_path == "/api/v2/projects":
+            self._handle_projects_list(qs)
+            return
+        m = re.match(r"^/api/v2/projects/(\d+)$", api_path)
+        if m:
+            self._handle_project_get(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/projects/(\d+)/tags$", api_path)
+        if m:
+            self._handle_project_tags_get(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/projects/(\d+)/custom-fields$", api_path)
+        if m:
+            self._handle_project_custom_fields_get(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/projects/(\d+)/history$", api_path)
+        if m:
+            self._handle_project_history_get(int(m.group(1)), qs)
+            return
+        m = re.match(r"^/api/v2/projects/(\d+)/photos$", api_path)
+        if m:
+            self._handle_project_photos_get(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/projects/(\d+)/photo-folders$", api_path)
+        if m:
+            self._handle_project_photo_folders_get(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/projects/(\d+)/history/(\d+)/replies$", api_path)
+        if m:
+            self._handle_history_replies_get(int(m.group(1)), int(m.group(2)))
+            return
+
+        # ── v2 API: Other resources ──
+        if api_path == "/api/v2/stages":
+            self._handle_stages_get()
+            return
+        if api_path == "/api/v2/tags":
+            self._handle_tags_get()
+            return
+        if api_path == "/api/v2/custom-fields":
+            self._handle_custom_fields_get()
+            return
+        if api_path == "/api/v2/contacts":
+            self._handle_contacts_get(qs)
+            return
+        if api_path == "/api/v2/tasks":
+            self._handle_tasks_get(qs)
+            return
+        if api_path == "/api/v2/users":
+            self._handle_users_get()
+            return
+        if api_path == "/api/v2/me":
+            self._handle_me_get()
+            return
+        if api_path == "/api/v2/notifications":
+            self._handle_notifications_get(qs)
+            return
+        if api_path == "/api/v2/history-categories":
+            self._handle_history_categories_get()
+            return
+
+        # ── Batch tags ──
+        if api_path == "/api/batch-opportunity-tags":
+            self._handle_batch_opportunity_tags()
+            return
+
+        self.send_error(404)
+
+    # ── API POST/PUT/DELETE Router ──────────────────────────────────────────
+
+    def _handle_api_post_put(self, method: str) -> None:
+        api_path = urlparse(self.path).path
+        qs = parse_qs(urlparse(self.path).query)
+
+        # ── Presence (local, unchanged) ──
+        if api_path.startswith("/api/presence"):
+            if api_path == "/api/presence/heartbeat" and method == "POST":
+                self._handle_presence_heartbeat()
+                return
+            if api_path == "/api/presence/status" and method == "POST":
+                self._handle_presence_status()
+                return
+            if api_path == "/api/presence/last-read" and method == "POST":
+                self._handle_presence_last_read()
+                return
+            if api_path == "/api/presence/dm" and method == "POST":
+                self._handle_presence_dm_post()
+                return
+            if api_path == "/api/presence/dm" and method == "DELETE":
+                self._handle_presence_dm_clear()
+                return
+            self.send_error(404)
+            return
+
+        # ── Event log (local) ──
+        if api_path == "/api/event-log" and method == "PUT":
+            self._handle_event_log_put()
+            return
+
+        # ── User profile (local) ──
+        if api_path == "/api/user-profile" and method == "PUT":
+            self._handle_user_profile_put()
+            return
+        if api_path == "/api/dashboard-notes" and method == "PUT":
+            self._handle_dashboard_notes_put()
+            return
+
+        # ── Password reset ──
+        if api_path == "/api/v2/auth/reset-request" and method == "POST":
+            self._handle_password_reset_request()
+            return
+        if api_path == "/api/v2/auth/reset" and method == "POST":
+            self._handle_password_reset()
+            return
+        if api_path == "/api/v2/auth/change-password" and method == "POST":
+            self._handle_change_password()
+            return
+
+        # ── Bot customers (admin) ──
+        if api_path.startswith("/api/bot-customers"):
+            self._handle_bot_customers_post_put(method)
+            return
+        if api_path.startswith("/api/bot/"):
+            self._handle_bot_api_post(method)
+            return
+
+        # ── v2 API: Projects ──
+        if api_path == "/api/v2/projects" and method == "POST":
+            self._handle_project_create()
+            return
+        m = re.match(r"^/api/v2/projects/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_project_update(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/projects/(\d+)$", api_path)
+        if m and method == "DELETE":
+            self._handle_project_delete(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/projects/(\d+)/tags$", api_path)
+        if m and method == "POST":
+            self._handle_project_tag_add(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/projects/(\d+)/tags/(\d+)$", api_path)
+        if m and method == "DELETE":
+            self._handle_project_tag_remove(int(m.group(1)), int(m.group(2)))
+            return
+        m = re.match(r"^/api/v2/projects/(\d+)/custom-fields$", api_path)
+        if m and method == "PUT":
+            self._handle_project_custom_fields_update(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/projects/(\d+)/history$", api_path)
+        if m and method == "POST":
+            self._handle_project_history_create(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/projects/(\d+)/photos$", api_path)
+        if m and method == "POST":
+            self._handle_project_photo_upload(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/projects/(\d+)/photo-folders$", api_path)
+        if m and method == "POST":
+            self._handle_project_photo_folder_add(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/projects/(\d+)/history/(\d+)/replies$", api_path)
+        if m and method == "POST":
+            self._handle_history_reply_create(int(m.group(1)), int(m.group(2)))
+            return
+
+        # ── v2 API: Resources ──
+        if api_path == "/api/v2/stages" and method == "POST":
+            self._handle_stage_create()
+            return
+        m = re.match(r"^/api/v2/stages/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_stage_update(int(m.group(1)))
+            return
+        if api_path == "/api/v2/tags" and method == "POST":
+            self._handle_tag_create()
+            return
+        m = re.match(r"^/api/v2/tags/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_tag_update(int(m.group(1)))
+            return
+        if api_path == "/api/v2/custom-fields" and method == "POST":
+            self._handle_custom_field_create()
+            return
+        m = re.match(r"^/api/v2/custom-fields/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_custom_field_update(int(m.group(1)))
+            return
+        if api_path == "/api/v2/contacts" and method == "POST":
+            self._handle_contact_create()
+            return
+        m = re.match(r"^/api/v2/contacts/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_contact_update(int(m.group(1)))
+            return
+        if api_path == "/api/v2/tasks" and method == "POST":
+            self._handle_task_create()
+            return
+        m = re.match(r"^/api/v2/tasks/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_task_update(int(m.group(1)))
+            return
+        if api_path == "/api/v2/users" and method == "POST":
+            self._handle_user_create()
+            return
+        m = re.match(r"^/api/v2/users/(\d+)$", api_path)
+        if m and method == "PUT":
+            self._handle_user_update(int(m.group(1)))
+            return
+
+        # ── DELETE handlers ──
+        m = re.match(r"^/api/v2/history/(\d+)$", api_path)
+        if m and method == "DELETE":
+            self._handle_history_event_delete(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/history-replies/(\d+)$", api_path)
+        if m and method == "DELETE":
+            self._handle_history_reply_delete(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/photos/(\d+)$", api_path)
+        if m and method == "DELETE":
+            self._handle_photo_delete(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/photo-folders/(\d+)$", api_path)
+        if m and method == "DELETE":
+            self._handle_photo_folder_delete(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/notifications/(\d+)/read$", api_path)
+        if m and method == "PUT":
+            self._handle_notification_mark_read(int(m.group(1)))
+            return
+        if api_path == "/api/v2/notifications/read-all" and method == "PUT":
+            self._handle_notifications_mark_all_read()
+            return
+
+        self.send_error(404)
+
+    # ════════════════════════════════════════════════════════════════════════
+    # v2 API ENDPOINT HANDLERS
+    # ════════════════════════════════════════════════════════════════════════
+
+    # ── Projects ────────────────────────────────────────────────────────────
+
+    def _handle_projects_list(self, qs: dict) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        where = ["1=1"]
+        params: list = []
+        if "stage_type" in qs:
+            where.append("o.stage_type = %s")
+            params.append(int(qs["stage_type"][0]))
+        if "contact_id" in qs:
+            where.append("o.contact_id = %s")
+            params.append(int(qs["contact_id"][0]))
+        if "responsible_user_id" in qs:
+            where.append("o.responsible_user_id = %s")
+            params.append(int(qs["responsible_user_id"][0]))
+        if "search" in qs:
+            where.append("o.title ILIKE %s")
+            params.append(f"%{qs['search'][0]}%")
+        if "tag_id" in qs:
+            where.append("o.id IN (SELECT opportunity_id FROM opportunity_tags WHERE tag_id = %s)")
+            params.append(int(qs["tag_id"][0]))
+
+        count = int(qs.get("count", ["500"])[0])
+        start = int(qs.get("startIndex", ["0"])[0])
+        sort_by = qs.get("sort_by", ["date_created"])[0]
+        sort_order = qs.get("sort_order", ["descending"])[0]
+        order = "DESC" if sort_order == "descending" else "ASC"
+        sort_col = {"date_created": "o.created_at", "title": "o.title", "bid_value": "o.bid_value"}.get(sort_by, "o.created_at")
+
+        where_sql = " AND ".join(where)
+        rows = db.query(
+            f"""SELECT o.id, o.title, o.description, o.stage_id, o.stage_type, o.bid_value,
+                       o.expected_close_date, o.probability, o.contact_id, o.responsible_user_id,
+                       o.is_private, o.created_at, o.created_by, o.updated_at,
+                       s.title as stage_title, s.color as stage_color,
+                       c.first_name, c.last_name, c.company
+                FROM opportunities o
+                LEFT JOIN stages s ON o.stage_id = s.id
+                LEFT JOIN contacts c ON o.contact_id = c.id
+                WHERE {where_sql}
+                ORDER BY {sort_col} {order}
+                LIMIT %s OFFSET %s""",
+            (*params, count, start),
+        )
+        projects = []
+        for r in rows:
+            projects.append({
+                "id": r[0], "title": r[1], "description": r[2],
+                "stageId": r[3], "stageType": r[4], "bidValue": float(r[5]) if r[5] else None,
+                "expectedCloseDate": str(r[6]) if r[6] else None, "probability": r[7],
+                "contactId": r[8], "responsibleUserId": r[9], "isPrivate": r[10],
+                "created": r[11].isoformat() if r[11] else None,
+                "stage": {"title": r[15], "color": r[16]} if r[15] else None,
+                "contact": {"displayName": f"{r[17] or ''} {r[18] or ''}".strip(), "company": r[19]} if r[17] or r[18] else None,
+            })
+        _json_response(self, 200, projects)
+
+    def _handle_project_get(self, opp_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        row = db.query(
+            """SELECT o.id, o.title, o.description, o.stage_id, o.stage_type, o.bid_value,
+                      o.expected_close_date, o.probability, o.contact_id, o.responsible_user_id,
+                      o.is_private, o.created_at, o.created_by, o.updated_at,
+                      s.title, s.color,
+                      u1.display_name, u2.display_name,
+                      c.first_name, c.last_name, c.company, c.email, c.phone
+               FROM opportunities o
+               LEFT JOIN stages s ON o.stage_id = s.id
+               LEFT JOIN users u1 ON o.created_by = u1.id
+               LEFT JOIN users u2 ON o.responsible_user_id = u2.id
+               LEFT JOIN contacts c ON o.contact_id = c.id
+               WHERE o.id = %s""",
+            (opp_id,), fetch="one",
+        )
+        if not row:
+            _json_response(self, 404, {"error": "Project not found"})
+            return
+        _json_response(self, 200, {
+            "id": row[0], "title": row[1], "description": row[2],
+            "stageId": row[3], "stageType": row[4], "bidValue": float(row[5]) if row[5] else None,
+            "expectedCloseDate": str(row[6]) if row[6] else None, "probability": row[7],
+            "contactId": row[8], "responsibleUserId": row[9], "isPrivate": row[10],
+            "created": row[11].isoformat() if row[11] else None,
+            "createdBy": row[12], "updatedAt": row[13].isoformat() if row[13] else None,
+            "stage": {"title": row[14], "color": row[15]} if row[14] else None,
+            "responsible": {"displayName": row[17]} if row[17] else None,
+            "contact": {"displayName": f"{row[18] or ''} {row[19] or ''}".strip(), "company": row[20], "email": row[21], "phone": row[22]} if row[18] or row[19] else None,
+        })
+
+    def _handle_project_create(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        title = str(payload.get("title") or "").strip()
+        if not title:
+            _json_response(self, 400, {"error": "Title is required"})
+            return
+        stage_id = payload.get("stageId")
+        bid_value = payload.get("bidValue")
+        contact_id = payload.get("contactId")
+        responsible_user_id = payload.get("responsibleUserId") or user["id"]
+        description = str(payload.get("description") or "").strip() or None
+        expected_close = str(payload.get("expectedCloseDate") or "").strip() or None
+        is_private = bool(payload.get("isPrivate"))
+
+        opp_id = db.insert_returning(
+            """INSERT INTO opportunities (title, description, stage_id, stage_type, bid_value,
+                   expected_close_date, contact_id, responsible_user_id, created_by, is_private)
+               VALUES (%s, %s, %s, 0, %s, %s, %s, %s, %s, %s)
+               RETURNING id""",
+            (title, description, stage_id, bid_value, expected_close, contact_id, responsible_user_id, user["id"], is_private),
+        )
+        _json_response(self, 201, {"id": opp_id, "ok": True})
+
+    def _handle_project_update(self, opp_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        sets = ["updated_at = NOW()", "updated_by = %s"]
+        params: list = [user["id"]]
+        for field, col in [("title", "title"), ("description", "description"), ("stageId", "stage_id"),
+                           ("bidValue", "bid_value"), ("contactId", "contact_id"),
+                           ("responsibleUserId", "responsible_user_id"), ("isPrivate", "is_private"),
+                           ("expectedCloseDate", "expected_close_date"), ("probability", "probability"),
+                           ("stageType", "stage_type")]:
+            if field in payload:
+                sets.append(f"{col} = %s")
+                params.append(payload[field])
+        params.append(opp_id)
+        db.execute(f"UPDATE opportunities SET {', '.join(sets)} WHERE id = %s", (*params,))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_project_delete(self, opp_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        db.execute("DELETE FROM opportunities WHERE id = %s", (opp_id,))
+        _json_response(self, 200, {"ok": True})
+
+    # ── Project Tags ────────────────────────────────────────────────────────
+
+    def _handle_project_tags_get(self, opp_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        rows = db.query(
+            """SELECT t.id, t.title, t.color FROM tag_definitions t
+               JOIN opportunity_tags ot ON t.id = ot.tag_id
+               WHERE ot.opportunity_id = %s""",
+            (opp_id,),
+        )
+        _json_response(self, 200, [{"id": r[0], "title": r[1], "color": r[2]} for r in rows])
+
+    def _handle_project_tag_add(self, opp_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        tag_id = payload.get("tagId")
+        tag_title = str(payload.get("title") or "").strip()
+        if not tag_id and tag_title:
+            row = db.query("SELECT id FROM tag_definitions WHERE title = %s", (tag_title,), fetch="one")
+            if row:
+                tag_id = row[0]
+            else:
+                tag_id = db.insert_returning(
+                    "INSERT INTO tag_definitions (title) VALUES (%s) RETURNING id", (tag_title,)
+                )
+        if not tag_id:
+            _json_response(self, 400, {"error": "tagId or title is required"})
+            return
+        db.execute(
+            "INSERT INTO opportunity_tags (opportunity_id, tag_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            (opp_id, tag_id),
+        )
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_project_tag_remove(self, opp_id: int, tag_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        db.execute(
+            "DELETE FROM opportunity_tags WHERE opportunity_id = %s AND tag_id = %s",
+            (opp_id, tag_id),
+        )
+        _json_response(self, 200, {"ok": True})
+
+    # ── Custom Fields ───────────────────────────────────────────────────────
+
+    def _handle_custom_fields_get(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        rows = db.query(
+            """SELECT id, field_key, label, field_type, is_required, default_value,
+                      sort_order, show_on_create, show_on_edit
+               FROM custom_field_definitions WHERE is_active = TRUE ORDER BY sort_order"""
+        )
+        fields = []
+        for r in rows:
+            opts = db.query(
+                "SELECT option_value, option_label FROM custom_field_options WHERE field_id = %s ORDER BY sort_order",
+                (r[0],),
+            )
+            fields.append({
+                "id": r[0], "key": r[1], "label": r[2], "type": r[3],
+                "isRequired": r[4], "defaultValue": r[5], "sortOrder": r[6],
+                "showOnCreate": r[7], "showOnEdit": r[8],
+                "options": [{"value": o[0], "label": o[1]} for o in opts],
+            })
+        _json_response(self, 200, fields)
+
+    def _handle_project_custom_fields_get(self, opp_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        rows = db.query(
+            """SELECT cfv.field_id, cfv.field_value, cfd.field_key, cfd.label, cfd.field_type
+               FROM opportunity_custom_field_values cfv
+               JOIN custom_field_definitions cfd ON cfv.field_id = cfd.id
+               WHERE cfv.opportunity_id = %s""",
+            (opp_id,),
+        )
+        _json_response(self, 200, [
+            {"fieldId": r[0], "value": r[1], "key": r[2], "label": r[3], "type": r[4]}
+            for r in rows
+        ])
+
+    def _handle_project_custom_fields_update(self, opp_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        fields = payload.get("fields", payload.get("customFieldList", []))
+        for f in fields:
+            field_id = f.get("fieldId") or f.get("id")
+            value = f.get("value") or f.get("fieldValue") or ""
+            if field_id is not None:
+                db.execute(
+                    """INSERT INTO opportunity_custom_field_values (opportunity_id, field_id, field_value)
+                       VALUES (%s, %s, %s)
+                       ON CONFLICT (opportunity_id, field_id) DO UPDATE SET field_value = EXCLUDED.field_value""",
+                    (opp_id, field_id, str(value)),
+                )
+        _json_response(self, 200, {"ok": True})
+
+    # ── History ─────────────────────────────────────────────────────────────
+
+    def _handle_project_history_get(self, opp_id: int, qs: dict) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        count = int(qs.get("count", ["10"])[0])
+        start = int(qs.get("startIndex", ["0"])[0])
+        rows = db.query(
+            """SELECT h.id, h.category_id, hc.title, h.title, h.content,
+                      h.created_by, h.created_at, h.backdated_created_at,
+                      u.display_name
+               FROM history_events h
+               LEFT JOIN history_categories hc ON h.category_id = hc.id
+               LEFT JOIN users u ON h.created_by = u.id
+               WHERE h.opportunity_id = %s
+               ORDER BY h.created_at DESC
+               LIMIT %s OFFSET %s""",
+            (opp_id, count, start),
+        )
+        events = []
+        for r in rows:
+            events.append({
+                "id": r[0], "categoryId": r[1], "category": {"title": r[2]},
+                "title": r[3], "content": r[4], "createdBy": r[5],
+                "created": r[6].isoformat() if r[6] else None,
+                "backdatedCreated": r[7].isoformat() if r[7] else None,
+                "author": r[8] or "",
+            })
+        _json_response(self, 200, events)
+
+    def _handle_project_history_create(self, opp_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        content = str(payload.get("content") or "").strip()
+        category_id = payload.get("categoryId") or 1
+        backdated = str(payload.get("created") or "").strip() or None
+        event_id = db.insert_returning(
+            """INSERT INTO history_events (opportunity_id, category_id, content, created_by, backdated_created_at)
+               VALUES (%s, %s, %s, %s, %s) RETURNING id""",
+            (opp_id, category_id, content, user["id"], backdated),
+        )
+        # Insert notify users
+        notify_list = payload.get("notifyUserList") or []
+        for uid in notify_list:
+            try:
+                db.execute(
+                    "INSERT INTO history_notify_users (event_id, user_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                    (event_id, int(uid)),
+                )
+            except (TypeError, ValueError):
+                pass
+        _json_response(self, 201, {"id": event_id, "ok": True})
+
+    def _handle_history_event_delete(self, event_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        db.execute("DELETE FROM history_events WHERE id = %s", (event_id,))
+        _json_response(self, 200, {"ok": True})
+
+    # ── Threaded Replies ────────────────────────────────────────────────────
+
+    def _handle_history_replies_get(self, opp_id: int, event_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        rows = db.query(
+            """SELECT r.id, r.parent_reply_id, r.content, r.created_by, r.created_at,
+                      r.is_deleted, u.display_name
+               FROM history_replies r
+               LEFT JOIN users u ON r.created_by = u.id
+               WHERE r.event_id = %s
+               ORDER BY r.created_at ASC""",
+            (event_id,),
+        )
+        replies = []
+        for r in rows:
+            replies.append({
+                "id": r[0], "parentReplyId": r[1], "content": "" if r[5] else r[2],
+                "createdBy": r[3], "created": r[4].isoformat() if r[4] else None,
+                "isDeleted": r[5], "author": r[6] or "",
+            })
+        _json_response(self, 200, replies)
+
+    def _handle_history_reply_create(self, opp_id: int, event_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        content = str(payload.get("content") or "").strip()
+        if not content:
+            _json_response(self, 400, {"error": "Content is required"})
+            return
+        parent_reply_id = payload.get("parentReplyId")
+        reply_id = db.insert_returning(
+            """INSERT INTO history_replies (event_id, parent_reply_id, content, created_by)
+               VALUES (%s, %s, %s, %s) RETURNING id""",
+            (event_id, parent_reply_id, content, user["id"]),
+        )
+        _json_response(self, 201, {"id": reply_id, "ok": True})
+
+    def _handle_history_reply_delete(self, reply_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        db.execute(
+            "UPDATE history_replies SET is_deleted = TRUE, deleted_by = %s, deleted_at = NOW() WHERE id = %s",
+            (user["id"], reply_id),
+        )
+        _json_response(self, 200, {"ok": True})
+
+    # ── Stages ──────────────────────────────────────────────────────────────
+
+    def _handle_stages_get(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        rows = db.query(
+            "SELECT id, title, color, sort_order, stage_type, probability, is_active FROM stages ORDER BY sort_order"
+        )
+        _json_response(self, 200, [
+            {"id": r[0], "title": r[1], "color": r[2], "sortOrder": r[3],
+             "stageType": r[4], "probability": r[5], "isActive": r[6]}
+            for r in rows
+        ])
+
+    def _handle_stage_create(self) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        title = str(payload.get("title") or "").strip()
+        if not title:
+            _json_response(self, 400, {"error": "Title is required"})
+            return
+        sid = db.insert_returning(
+            """INSERT INTO stages (title, color, sort_order, stage_type, probability)
+               VALUES (%s, %s, %s, %s, %s) RETURNING id""",
+            (title, payload.get("color"), payload.get("sortOrder", 0), payload.get("stageType", 0), payload.get("probability", 0)),
+        )
+        _json_response(self, 201, {"id": sid, "ok": True})
+
+    def _handle_stage_update(self, stage_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        sets, params = [], []
+        for field, col in [("title", "title"), ("color", "color"), ("sortOrder", "sort_order"),
+                           ("stageType", "stage_type"), ("probability", "probability"), ("isActive", "is_active")]:
+            if field in payload:
+                sets.append(f"{col} = %s")
+                params.append(payload[field])
+        if sets:
+            params.append(stage_id)
+            db.execute(f"UPDATE stages SET {', '.join(sets)} WHERE id = %s", (*params,))
+        _json_response(self, 200, {"ok": True})
+
+    # ── Tags ────────────────────────────────────────────────────────────────
+
+    def _handle_tags_get(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        rows = db.query("SELECT id, title, color FROM tag_definitions ORDER BY title")
+        _json_response(self, 200, [{"id": r[0], "title": r[1], "color": r[2]} for r in rows])
+
+    def _handle_tag_create(self) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        title = str(payload.get("title") or "").strip()
+        if not title:
+            _json_response(self, 400, {"error": "Title is required"})
+            return
+        tid = db.insert_returning(
+            "INSERT INTO tag_definitions (title, color) VALUES (%s, %s) RETURNING id",
+            (title, payload.get("color")),
+        )
+        _json_response(self, 201, {"id": tid, "ok": True})
+
+    def _handle_tag_update(self, tag_id: int) -> None:
+        user = _require_admin(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        if "title" in payload:
+            db.execute("UPDATE tag_definitions SET title = %s WHERE id = %s", (payload["title"], tag_id))
+        if "color" in payload:
+            db.execute("UPDATE tag_definitions SET color = %s WHERE id = %s", (payload["color"], tag_id))
+        _json_response(self, 200, {"ok": True})
+
+    # ── Contacts ────────────────────────────────────────────────────────────
+
+    def _handle_contacts_get(self, qs: dict) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        where, params = ["1=1"], []
+        if "q" in qs:
+            where.append("(first_name ILIKE %s OR last_name ILIKE %s OR company ILIKE %s OR email ILIKE %s)")
+            q = f"%{qs['q'][0]}%"
+            params.extend([q, q, q, q])
+        rows = db.query(
+            f"SELECT id, first_name, last_name, email, phone, company FROM contacts WHERE {' AND '.join(where)} ORDER BY last_name, first_name LIMIT 200",
+            (*params,),
+        )
+        _json_response(self, 200, [
+            {"id": r[0], "firstName": r[1], "lastName": r[2], "email": r[3], "phone": r[4], "company": r[5],
+             "displayName": f"{r[1] or ''} {r[2] or ''}".strip()}
+            for r in rows
+        ])
+
+    def _handle_contact_create(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        cid = db.insert_returning(
+            """INSERT INTO contacts (first_name, last_name, email, phone, company, job_title, created_by)
+               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (payload.get("firstName"), payload.get("lastName"), payload.get("email"),
+             payload.get("phone"), payload.get("company"), payload.get("jobTitle"), user["id"]),
+        )
+        _json_response(self, 201, {"id": cid, "ok": True})
+
+    def _handle_contact_update(self, contact_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        sets, params = [], []
+        for field, col in [("firstName", "first_name"), ("lastName", "last_name"), ("email", "email"),
+                           ("phone", "phone"), ("company", "company"), ("jobTitle", "job_title")]:
+            if field in payload:
+                sets.append(f"{col} = %s")
+                params.append(payload[field])
+        if sets:
+            params.append(contact_id)
+            db.execute(f"UPDATE contacts SET {', '.join(sets)} WHERE id = %s", (*params,))
+        _json_response(self, 200, {"ok": True})
+
+    # ── Tasks ───────────────────────────────────────────────────────────────
+
+    def _handle_tasks_get(self, qs: dict) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        closed = qs.get("closed", ["false"])[0].lower() == "true"
+        where = ["t.is_closed = %s"]
+        params: list = [closed]
+        if "responsible_user_id" in qs:
+            where.append("t.responsible_user_id = %s")
+            params.append(int(qs["responsible_user_id"][0]))
+        rows = db.query(
+            f"""SELECT t.id, t.title, t.description, t.opportunity_id, t.responsible_user_id,
+                       t.due_date, t.priority, t.is_closed, t.closed_at, t.created_at,
+                       u.display_name, o.title
+                FROM tasks t
+                LEFT JOIN users u ON t.responsible_user_id = u.id
+                LEFT JOIN opportunities o ON t.opportunity_id = o.id
+                WHERE {' AND '.join(where)}
+                ORDER BY t.due_date ASC NULLS LAST""",
+            (*params,),
+        )
+        _json_response(self, 200, [
+            {"id": r[0], "title": r[1], "description": r[2], "opportunityId": r[3],
+             "responsibleUserId": r[4], "dueDate": r[5].isoformat() if r[5] else None,
+             "priority": r[6], "isClosed": r[7], "closedAt": r[8].isoformat() if r[8] else None,
+             "created": r[9].isoformat() if r[9] else None,
+             "responsible": {"displayName": r[10]} if r[10] else None,
+             "opportunity": {"title": r[11]} if r[11] else None}
+            for r in rows
+        ])
+
+    def _handle_task_create(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        title = str(payload.get("title") or "").strip()
+        if not title:
+            _json_response(self, 400, {"error": "Title is required"})
+            return
+        tid = db.insert_returning(
+            """INSERT INTO tasks (title, description, opportunity_id, responsible_user_id, due_date, priority, created_by)
+               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (title, payload.get("description"), payload.get("opportunityId"),
+             payload.get("responsibleUserId", user["id"]),
+             payload.get("dueDate"), payload.get("priority", 0), user["id"]),
+        )
+        _json_response(self, 201, {"id": tid, "ok": True})
+
+    def _handle_task_update(self, task_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        if "isClosed" in payload:
+            if payload["isClosed"]:
+                db.execute(
+                    "UPDATE tasks SET is_closed = TRUE, closed_at = NOW(), closed_by = %s WHERE id = %s",
+                    (user["id"], task_id),
+                )
+            else:
+                db.execute("UPDATE tasks SET is_closed = FALSE, closed_at = NULL WHERE id = %s", (task_id,))
+        for field, col in [("title", "title"), ("description", "description"), ("dueDate", "due_date"), ("priority", "priority")]:
+            if field in payload:
+                db.execute(f"UPDATE tasks SET {col} = %s WHERE id = %s", (payload[field], task_id))
+        _json_response(self, 200, {"ok": True})
+
+    # ── Users ───────────────────────────────────────────────────────────────
+
+    def _handle_users_get(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        rows = db.query(
+            "SELECT id, email, display_name, first_name, last_name, is_admin, is_active FROM users ORDER BY display_name"
+        )
+        _json_response(self, 200, [
+            {"id": r[0], "email": r[1], "displayName": r[2], "firstName": r[3],
+             "lastName": r[4], "isAdmin": r[5], "isActive": r[6]}
+            for r in rows
+        ])
+
+    def _handle_me_get(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        _json_response(self, 200, user)
+
+    def _handle_user_create(self) -> None:
+        admin = _require_admin(self)
+        if not admin:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        email = str(payload.get("email") or "").strip().lower()
+        if not email:
+            _json_response(self, 400, {"error": "Email is required"})
+            return
+        temp_password = str(payload.get("password") or "changeme")
+        pw_hash, salt = auth_mod.hash_password(temp_password)
+        uid = db.insert_returning(
+            """INSERT INTO users (email, password_hash, password_salt, display_name, first_name, last_name, is_admin, must_change_password)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE) RETURNING id""",
+            (email, pw_hash, salt, payload.get("displayName"), payload.get("firstName"),
+             payload.get("lastName"), payload.get("isAdmin", False)),
+        )
+        _json_response(self, 201, {"id": uid, "ok": True})
+
+    def _handle_user_update(self, user_id: int) -> None:
+        admin = _require_admin(self)
+        if not admin:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        sets, params = [], []
+        for field, col in [("displayName", "display_name"), ("firstName", "first_name"),
+                           ("lastName", "last_name"), ("isAdmin", "is_admin"), ("isActive", "is_active")]:
+            if field in payload:
+                sets.append(f"{col} = %s")
+                params.append(payload[field])
+        if "password" in payload and payload["password"]:
+            pw_hash, salt = auth_mod.hash_password(payload["password"])
+            sets.extend(["password_hash = %s", "password_salt = %s", "must_change_password = FALSE"])
+            params.extend([pw_hash, salt])
+        if sets:
+            params.append(user_id)
+            db.execute(f"UPDATE users SET {', '.join(sets)} WHERE id = %s", (*params,))
+        _json_response(self, 200, {"ok": True})
+
+    # ── Notifications ───────────────────────────────────────────────────────
+
+    def _handle_notifications_get(self, qs: dict) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        unread_only = qs.get("unread", ["false"])[0].lower() == "true"
+        where = ["n.user_id = %s"]
+        params: list = [user["id"]]
+        if unread_only:
+            where.append("n.is_read = FALSE")
+        rows = db.query(
+            f"""SELECT n.id, n.type, n.opportunity_id, n.message, n.payload, n.is_read, n.created_at,
+                       u.display_name, o.title
+                FROM notifications n
+                LEFT JOIN users u ON n.actor_user_id = u.id
+                LEFT JOIN opportunities o ON n.opportunity_id = o.id
+                WHERE {' AND '.join(where)}
+                ORDER BY n.created_at DESC LIMIT 100""",
+            (*params,),
+        )
+        _json_response(self, 200, [
+            {"id": r[0], "type": r[1], "opportunityId": r[2], "message": r[3],
+             "payload": r[4], "isRead": r[5], "created": r[6].isoformat() if r[6] else None,
+             "actor": r[7], "projectTitle": r[8]}
+            for r in rows
+        ])
+
+    def _handle_notification_mark_read(self, notif_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        db.execute(
+            "UPDATE notifications SET is_read = TRUE WHERE id = %s AND user_id = %s",
+            (notif_id, user["id"]),
+        )
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_notifications_mark_all_read(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        db.execute("UPDATE notifications SET is_read = TRUE WHERE user_id = %s AND is_read = FALSE", (user["id"],))
+        _json_response(self, 200, {"ok": True})
+
+    # ── History Categories ──────────────────────────────────────────────────
+
+    def _handle_history_categories_get(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        rows = db.query("SELECT id, title, display_color FROM history_categories ORDER BY sort_order")
+        _json_response(self, 200, [{"id": r[0], "title": r[1], "color": r[2]} for r in rows])
+
+    # ── Photos ──────────────────────────────────────────────────────────────
+
+    def _handle_project_photos_get(self, opp_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        rows = db.query(
+            """SELECT id, filename, file_path, file_size, mime_type, exif_data,
+                      thumbnail_path, alt_description, uploaded_by, uploaded_at
+               FROM project_photos WHERE opportunity_id = %s AND is_deleted = FALSE
+               ORDER BY uploaded_at DESC""",
+            (opp_id,),
+        )
+        photos = []
+        for r in rows:
+            photos.append({
+                "id": r[0], "filename": r[1], "filePath": r[2],
+                "fileSize": r[3], "mimeType": r[4], "exifData": r[5],
+                "thumbnailPath": r[6], "altDescription": r[7],
+                "uploadedBy": r[8], "uploadedAt": r[9].isoformat() if r[9] else None,
+            })
+        # Total size for quota display
+        total = db.query(
+            "SELECT COALESCE(SUM(file_size), 0) FROM project_photos WHERE opportunity_id = %s AND is_deleted = FALSE",
+            (opp_id,), fetch="one",
+        )
+        _json_response(self, 200, {"photos": photos, "totalSize": total[0] if total else 0, "quota": 157286400})
+
+    def _handle_project_photo_upload(self, opp_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        # TODO: multipart file upload handling (Phase 2E)
+        _json_response(self, 501, {"error": "Photo upload not yet implemented"})
+
+    def _handle_project_photo_folders_get(self, opp_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        rows = db.query(
+            """SELECT id, folder_type, label, external_url, external_provider, created_at
+               FROM project_photo_folders WHERE opportunity_id = %s""",
+            (opp_id,),
+        )
+        _json_response(self, 200, [
+            {"id": r[0], "folderType": r[1], "label": r[2], "externalUrl": r[3],
+             "externalProvider": r[4], "createdAt": r[5].isoformat() if r[5] else None}
+            for r in rows
+        ])
+
+    def _handle_project_photo_folder_add(self, opp_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        url = str(payload.get("externalUrl") or "").strip()
+        if not url:
+            _json_response(self, 400, {"error": "externalUrl is required"})
+            return
+        fid = db.insert_returning(
+            """INSERT INTO project_photo_folders (opportunity_id, folder_type, label, external_url, external_provider, created_by)
+               VALUES (%s, 'external', %s, %s, %s, %s) RETURNING id""",
+            (opp_id, payload.get("label"), url, payload.get("externalProvider"), user["id"]),
+        )
+        _json_response(self, 201, {"id": fid, "ok": True})
+
+    def _handle_photo_delete(self, photo_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        db.execute(
+            "UPDATE project_photos SET is_deleted = TRUE, deleted_at = NOW() WHERE id = %s",
+            (photo_id,),
+        )
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_photo_folder_delete(self, folder_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        db.execute("DELETE FROM project_photo_folders WHERE id = %s", (folder_id,))
+        _json_response(self, 200, {"ok": True})
+
+    # ── Batch Tags ──────────────────────────────────────────────────────────
+
+    def _handle_batch_opportunity_tags(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        qs = parse_qs(urlparse(self.path).query)
+        ids_raw = (qs.get("ids") or [""])[0]
+        if not ids_raw:
+            _json_response(self, 400, {"error": "ids parameter required"})
+            return
+        try:
+            ids = [int(x.strip()) for x in ids_raw.split(",") if x.strip()]
+        except ValueError:
+            _json_response(self, 400, {"error": "Invalid ids"})
+            return
+        result = {}
+        for opp_id in ids:
+            rows = db.query(
+                """SELECT t.id, t.title, t.color FROM tag_definitions t
+                   JOIN opportunity_tags ot ON t.id = ot.tag_id WHERE ot.opportunity_id = %s""",
+                (opp_id,),
+            )
+            result[str(opp_id)] = [{"id": r[0], "title": r[1], "color": r[2]} for r in rows]
+        _json_response(self, 200, result)
+
+    # ── Admin check ─────────────────────────────────────────────────────────
+
+    def _handle_check_admin(self) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        _json_response(self, 200, {"isAdmin": user.get("is_admin", False)})
+
+    # ── Calendar feed (unchanged) ───────────────────────────────────────────
 
     def _handle_calendar_feed(self) -> None:
         parsed = urlparse(self.path)
@@ -512,21 +1572,17 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not is_allowed_calendar_url(feed_url):
             _json_response(self, 400, {"error": "Invalid or disallowed calendar URL"})
             return
+        import urllib.request, urllib.error
         req = urllib.request.Request(
             feed_url,
-            headers={"Accept": "text/calendar", "User-Agent": "CRM-Kanban-Calendar/1.0"},
+            headers={"Accept": "text/calendar", "User-Agent": "Vanguard-CRM-Calendar/3.0"},
             method="GET",
         )
         try:
-            with urllib.request.urlopen(req, context=_ssl_context(), timeout=45) as resp:
+            with urllib.request.urlopen(req, timeout=45) as resp:
                 raw = resp.read(_MAX_ICS_BYTES + 1)
         except urllib.error.HTTPError as exc:
-            detail = exc.read(500).decode("utf-8", errors="replace")
-            _json_response(
-                self,
-                exc.code,
-                {"error": "Could not fetch calendar feed", "detail": detail[:300]},
-            )
+            _json_response(self, exc.code, {"error": "Could not fetch calendar feed"})
             return
         except urllib.error.URLError as exc:
             _json_response(self, 502, {"error": str(exc.reason)})
@@ -545,19 +1601,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         _json_response(self, 200, payload)
 
+    # ── User Profile (local store, unchanged) ───────────────────────────────
+
     def _handle_user_profile_get(self) -> None:
-        auth = _require_auth(self)
-        if not auth:
+        user = _require_auth(self)
+        if not user:
             return
-        portal, _token, user_id = auth
-        profile = load_user_profile(portal, user_id)
+        profile = load_user_profile("vanguard", str(user["id"]))
         _json_response(self, 200, profile)
 
     def _handle_user_profile_put(self) -> None:
-        auth = _require_auth(self)
-        if not auth:
+        user = _require_auth(self)
+        if not user:
             return
-        portal, _token, user_id = auth
         try:
             payload = json.loads(_read_body(self) or b"{}")
         except json.JSONDecodeError:
@@ -566,23 +1622,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not isinstance(payload, dict):
             _json_response(self, 400, {"error": "Profile object is required"})
             return
-        profile = save_user_profile(portal, user_id, payload)
+        profile = save_user_profile("vanguard", str(user["id"]), payload)
         _json_response(self, 200, {"ok": True, **profile})
 
     def _handle_dashboard_notes_get(self) -> None:
-        """Backward-compatible notes endpoint."""
-        auth = _require_auth(self)
-        if not auth:
+        user = _require_auth(self)
+        if not user:
             return
-        portal, _token, user_id = auth
-        profile = load_user_profile(portal, user_id)
+        profile = load_user_profile("vanguard", str(user["id"]))
         _json_response(self, 200, {"tiles": profile.get("notesTiles", [])})
 
     def _handle_dashboard_notes_put(self) -> None:
-        auth = _require_auth(self)
-        if not auth:
+        user = _require_auth(self)
+        if not user:
             return
-        portal, _token, user_id = auth
         try:
             payload = json.loads(_read_body(self) or b"{}")
         except json.JSONDecodeError:
@@ -592,65 +1645,24 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not isinstance(tiles, list):
             _json_response(self, 400, {"error": "tiles array is required"})
             return
-        existing = load_user_profile(portal, user_id)
+        existing = load_user_profile("vanguard", str(user["id"]))
         existing["notesTiles"] = tiles
-        profile = save_user_profile(portal, user_id, existing)
-        _json_response(self, 200, {"ok": True, "tiles": profile.get("notesTiles", [])})
+        save_user_profile("vanguard", str(user["id"]), existing)
+        _json_response(self, 200, {"ok": True, "tiles": tiles})
 
-    # ---------------- Event Log / Health (server-side persistence, admin for kenc) ----------------
-
-    def _current_user_email(self, portal: str, token: str) -> str:
-        try:
-            url = f"{portal.rstrip('/')}/api/2.0/people/@self.json"
-            req = urllib.request.Request(
-                url,
-                headers={"Accept": "application/json", "Authorization": token},
-                method="GET",
-            )
-            with urllib.request.urlopen(req, context=_ssl_context(), timeout=20) as resp:
-                me_data = json.loads(resp.read().decode("utf-8"))
-                me = me_data.get("response") or me_data.get("result") or me_data
-                if isinstance(me, dict):
-                    return str(me.get("email") or me.get("Email") or "").strip().lower()
-        except Exception:
-            pass
-        return ""
-
-    def _current_user_is_admin(self, portal: str, token: str) -> bool:
-        try:
-            url = f"{portal.rstrip('/')}/api/2.0/people/@self.json"
-            req = urllib.request.Request(
-                url,
-                headers={"Accept": "application/json", "Authorization": token},
-                method="GET",
-            )
-            with urllib.request.urlopen(req, context=_ssl_context(), timeout=20) as resp:
-                me_data = json.loads(resp.read().decode("utf-8"))
-                me = me_data.get("response") or me_data.get("result") or me_data
-                if isinstance(me, dict):
-                    return me.get("isAdmin") is True
-        except Exception:
-            pass
-        return False
-
-    def _is_admin(self, portal: str, token: str) -> bool:
-        if self._current_user_is_admin(portal, token):
-            return True
-        return self._current_user_email(portal, token) == "kenc@vanguardadj.com"
+    # ── Event Log (local store, unchanged) ──────────────────────────────────
 
     def _handle_event_log_get(self) -> None:
-        auth = _require_auth(self)
-        if not auth:
+        user = _require_auth(self)
+        if not user:
             return
-        portal, _token, user_id = auth
-        events = load_event_log(portal, user_id)
+        events = load_event_log("vanguard", str(user["id"]))
         _json_response(self, 200, {"events": events})
 
     def _handle_event_log_put(self) -> None:
-        auth = _require_auth(self)
-        if not auth:
+        user = _require_auth(self)
+        if not user:
             return
-        portal, _token, user_id = auth
         try:
             payload = json.loads(_read_body(self) or b"{}")
         except json.JSONDecodeError:
@@ -660,519 +1672,170 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not isinstance(entries, list):
             _json_response(self, 400, {"error": "events array is required"})
             return
-        events = append_event_log(portal, user_id, entries)
+        events = append_event_log("vanguard", str(user["id"]), entries)
         _json_response(self, 200, {"ok": True, "events": events})
 
     def _handle_event_log_users(self) -> None:
-        auth = _require_auth(self)
-        if not auth:
+        user = _require_admin(self)
+        if not user:
             return
-        portal, token, _user_id = auth
-        if not self._is_admin(portal, token):
-            _json_response(self, 403, {"error": "Forbidden"})
-            return
-        users = list_users_with_logs(portal)
+        users = list_users_with_logs("vanguard")
         _json_response(self, 200, {"users": users})
 
     def _handle_event_log_admin_get(self) -> None:
-        auth = _require_auth(self)
-        if not auth:
-            return
-        portal, token, _user_id = auth
-        if not self._is_admin(portal, token):
-            _json_response(self, 403, {"error": "Forbidden"})
+        user = _require_admin(self)
+        if not user:
             return
         qs = parse_qs(urlparse(self.path).query)
         target_user = (qs.get("userId") or [""])[0]
         if not target_user:
             _json_response(self, 400, {"error": "userId is required"})
             return
-        events = load_event_log(portal, target_user)
+        events = load_event_log("vanguard", target_user)
         _json_response(self, 200, {"events": events})
 
-    # ---------------- Bot customers (admin) ----------------
+    # ── Bot Endpoints (DB-backed, no CRM proxy needed) ──────────────────────
 
     def _handle_bot_customers_list(self) -> None:
-        auth = _require_auth(self)
-        if not auth:
+        user = _require_admin(self)
+        if not user:
             return
-        portal, token, _user_id = auth
-        if not self._is_admin(portal, token):
-            _json_response(self, 403, {"error": "Forbidden"})
-            return
-        mappings = list_mappings(portal)
-        pending = get_pending_codes(portal)
+        mappings = list_mappings("vanguard")
+        pending = get_pending_codes("vanguard")
         _json_response(self, 200, {"mappings": mappings, "pendingCodes": pending})
 
-    def _handle_bot_customers_generate_code(self) -> None:
-        auth = _require_auth(self)
-        if not auth:
-            return
-        portal, token, _user_id = auth
-        if not self._is_admin(portal, token):
-            _json_response(self, 403, {"error": "Forbidden"})
-            return
-        try:
-            payload = json.loads(_read_body(self) or b"{}")
-        except json.JSONDecodeError:
-            _json_response(self, 400, {"error": "Invalid JSON body"})
-            return
-        contact_id = payload.get("contactId")
-        contact_name = str(payload.get("contactName") or "").strip()
-        notes_category_id = payload.get("notesCategoryId")
-        nickname = str(payload.get("nickname") or "").strip()
-        employee = payload.get("employee", False)
-        if not employee and not contact_id:
-            _json_response(self, 400, {"error": "contactId is required"})
-            return
-        result = generate_code(portal,
-                               int(contact_id) if contact_id else None,
-                               contact_name,
-                               int(notes_category_id) if notes_category_id else None,
-                               nickname,
-                               employee=bool(employee))
-        _json_response(self, 200, result)
-
-    def _handle_bot_customers_cancel_code(self) -> None:
-        auth = _require_auth(self)
-        if not auth:
-            return
-        portal, token, _user_id = auth
-        if not self._is_admin(portal, token):
-            _json_response(self, 403, {"error": "Forbidden"})
-            return
-        try:
-            payload = json.loads(_read_body(self) or b"{}")
-        except json.JSONDecodeError:
-            _json_response(self, 400, {"error": "Invalid JSON body"})
-            return
-        contact_id = payload.get("contactId")
-        code = str(payload.get("code") or "").strip()
-        if contact_id:
-            ok = cancel_code(portal, int(contact_id))
-        elif code:
-            ok = cancel_code_by_value(portal, code)
-        else:
-            _json_response(self, 400, {"error": "contactId or code is required"})
-            return
-        _json_response(self, 200, {"ok": ok})
-
-    def _handle_bot_customers_unlink(self) -> None:
-        auth = _require_auth(self)
-        if not auth:
-            return
-        portal, token, _user_id = auth
-        if not self._is_admin(portal, token):
-            _json_response(self, 403, {"error": "Forbidden"})
-            return
-        qs = parse_qs(urlparse(self.path).query)
-        # Prefer removing by chatId (unique per mapping) so deleting one mapping
-        # never removes multiple mappings that share a contactId or employee flag.
-        chat_id_raw = (qs.get("chatId") or [""])[0]
-        if chat_id_raw:
-            try:
-                chat_id = int(chat_id_raw)
-            except (TypeError, ValueError):
-                _json_response(self, 400, {"error": "Invalid chatId"})
+    def _handle_bot_customers_post_put(self, method: str) -> None:
+        api_path = urlparse(self.path).path
+        if api_path == "/api/bot-customers/generate-code" and method == "POST":
+            user = _require_admin(self)
+            if not user:
                 return
-            ok = remove_mapping_by_chat(portal, chat_id)
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON body"})
+                return
+            contact_id = payload.get("contactId")
+            contact_name = str(payload.get("contactName") or "").strip()
+            notes_category_id = payload.get("notesCategoryId")
+            nickname = str(payload.get("nickname") or "").strip()
+            employee = payload.get("employee", False)
+            if not employee and not contact_id:
+                _json_response(self, 400, {"error": "contactId is required"})
+                return
+            result = generate_code("vanguard", int(contact_id) if contact_id else None,
+                                   contact_name, int(notes_category_id) if notes_category_id else None,
+                                   nickname, employee=bool(employee))
+            _json_response(self, 200, result)
+            return
+        if api_path == "/api/bot-customers/cancel-code" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON body"})
+                return
+            contact_id = payload.get("contactId")
+            code = str(payload.get("code") or "").strip()
+            if contact_id:
+                ok = cancel_code("vanguard", int(contact_id))
+            elif code:
+                ok = cancel_code_by_value("vanguard", code)
+            else:
+                _json_response(self, 400, {"error": "contactId or code is required"})
+                return
             _json_response(self, 200, {"ok": ok})
             return
-        # Legacy fallback for any old callers still using contactId/employee.
-        is_employee = (qs.get("employee") or [""])[0].lower() == "true"
-        if is_employee:
-            ok = remove_mapping(portal, None)
-            _json_response(self, 200, {"ok": ok})
-            return
-        raw = (qs.get("contactId") or [""])[0]
-        if not raw:
-            _json_response(self, 400, {"error": "chatId or contactId is required"})
-            return
-        ok = remove_mapping(portal, int(raw))
-        _json_response(self, 200, {"ok": ok})
-
-    def _handle_bot_customers_set_nickname(self) -> None:
-        auth = _require_auth(self)
-        if not auth:
-            return
-        portal, token, _user_id = auth
-        if not self._is_admin(portal, token):
-            _json_response(self, 403, {"error": "Forbidden"})
-            return
-        try:
-            payload = json.loads(_read_body(self) or b"{}")
-        except json.JSONDecodeError:
-            _json_response(self, 400, {"error": "Invalid JSON body"})
-            return
-        contact_id = payload.get("contactId")
-        nickname = str(payload.get("nickname") or "").strip()
-        if contact_id is None:
-            ok = set_nickname(portal, None, nickname)
-        else:
-            ok = set_nickname(portal, int(contact_id), nickname)
-        _json_response(self, 200, {"ok": ok})
-
-    def _handle_bot_customers_verify_code(self) -> None:
-        """Called by the Telegram bot process (not browser). Uses TELEGRAM_BOT_TOKEN."""
-        bot_token = str(os.environ.get("TELEGRAM_BOT_TOKEN") or "")
-        if not bot_token:
-            _json_response(self, 503, {"error": "TELEGRAM_BOT_TOKEN not configured"})
-            return
-        auth_header = self.headers.get("Authorization", "").strip()
-        if auth_header != f"Bearer {bot_token}":
-            _json_response(self, 403, {"error": "Forbidden"})
-            return
-        try:
-            payload = json.loads(_read_body(self) or b"{}")
-        except json.JSONDecodeError:
-            _json_response(self, 400, {"error": "Invalid JSON body"})
-            return
-        code = str(payload.get("code") or "").strip()
-        chat_id = payload.get("chatId")
-        portal = str(payload.get("portal") or "").strip()
-        if not code or not chat_id or not portal:
-            _json_response(self, 400, {"error": "code, chatId, and portal are required"})
-            return
-        mapping = verify_code(portal, code)
-        if mapping is None:
-            _json_response(self, 404, {"error": "Invalid or expired code"})
-            return
-        if isinstance(mapping, str):
-            _json_response(self, 400, {"error": mapping})
-            return
-        set_verify_chat_id(portal, mapping["contactId"], int(chat_id))
-        _json_response(self, 200, mapping)
-
-    def _handle_check_admin(self) -> None:
-        auth = _require_auth(self)
-        if not auth:
-            return
-        portal, token, _user_id = auth
-        is_admin = self._is_admin(portal, token)
-        _json_response(self, 200, {"isAdmin": is_admin})
-
-    # ---------------- Bot endpoints (gated by TELEGRAM_BOT_TOKEN) ----------------
-
-    @staticmethod
-    def _bot_token() -> str:
-        return TELEGRAM_BOT_TOKEN
-
-    def _bot_verify_request(self) -> bool:
-        """Check Authorization: Bearer <bot_token> header."""
-        auth_header = self.headers.get("Authorization", "").strip()
-        expected = self._bot_token()
-        return bool(expected) and auth_header == f"Bearer {expected}"
-
-    _bot_crm_session: dict[str, Any] = {}  # {"token": "...", "expires": time}
-
-    def _bot_crm_token(self, portal: str) -> str | None:
-        """Get a CRM session token for the bot user, caching it."""
-        session = self._bot_crm_session
-        if session.get("token") and session.get("expires", 0) > time.time():
-            return session["token"]
-        if not BOT_CRM_EMAIL or not BOT_CRM_PASSWORD:
-            return None
-        body = json.dumps({"userName": BOT_CRM_EMAIL, "password": BOT_CRM_PASSWORD}).encode("utf-8")
-        req = urllib.request.Request(
-            f"{portal}/api/2.0/authentication.json",
-            data=body,
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, context=_ssl_context(), timeout=20) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                token = data.get("response", {}).get("token")
-                if token:
-                    session["token"] = token
-                    session["expires"] = time.time() + 3000  # 50 min cache
-                    return token
-        except Exception:
-            pass
-        return None
-
-    def _bot_crm_proxy(self, portal: str, method: str, api_path: str, query: str = "", body: bytes | None = None, timeout: int = 30) -> tuple[int, Any]:
-        """Make a CRM API call using bot credentials."""
-        token = self._bot_crm_token(portal)
-        if not token:
-            return 502, {"error": "Bot CRM auth failed"}
-        url = f"{portal}{api_path}"
-        if query:
-            url = f"{url}?{query}"
-        headers = {"Accept": "application/json", "Authorization": token}
-        if body is not None:
-            headers["Content-Type"] = "application/json"
-        req = urllib.request.Request(
-            url,
-            data=body,
-            headers=headers,
-            method=method,
-        )
-        try:
-            with urllib.request.urlopen(req, context=_ssl_context(), timeout=timeout) as resp:
-                return resp.status, json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            data = exc.read()
-            try:
-                return exc.code, json.loads(data.decode("utf-8"))
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                return exc.code, {"error": str(exc)}
-        except urllib.error.URLError as exc:
-            return 502, {"error": str(exc.reason)}
-
-    @staticmethod
-    def _extract_mail_message_id(ev: dict) -> int | None:
-        """Try to find the associated mail message ID in a CRM history event."""
-        # 1. Nested mail object
-        for key in ("mailMessage", "MailMessage", "mail", "Mail", "email", "Email", "message", "Message"):
-            nested = ev.get(key)
-            if isinstance(nested, dict):
-                for mid_key in ("message_id", "messageId", "MessageId", "mailMessageId", "id", "ID"):
-                    val = nested.get(mid_key)
-                    if val is not None:
-                        try:
-                            mid = int(val)
-                            if mid > 0:
-                                return mid
-                        except (TypeError, ValueError):
-                            pass
-
-        # 2. Top-level event fields
-        for key in ("messageId", "MessageId", "mailMessageId", "MailMessageId", "idMessage", "IdMessage"):
-            val = ev.get(key)
-            if val is not None:
-                try:
-                    mid = int(val)
-                    if mid > 0:
-                        return mid
-                except (TypeError, ValueError):
-                    pass
-
-        # 3. additionalData object or JSON string
-        additional = ev.get("additionalData") or ev.get("AdditionalData")
-        if isinstance(additional, str):
-            try:
-                additional = json.loads(additional)
-            except json.JSONDecodeError:
-                additional = None
-        if isinstance(additional, dict):
-            for key in ("message_id", "messageId", "MessageId", "mailMessageId", "MailMessageId"):
-                val = additional.get(key)
-                if val is not None:
-                    try:
-                        mid = int(val)
-                        if mid > 0:
-                            return mid
-                    except (TypeError, ValueError):
-                        pass
-            url = additional.get("message_url") or additional.get("messageUrl") or additional.get("MessageUrl")
-            if url:
-                m = re.search(r"[?&]id=(\d+)", str(url))
-                if m:
-                    try:
-                        mid = int(m.group(1))
-                        if mid > 0:
-                            return mid
-                    except (TypeError, ValueError):
-                        pass
-
-        # 4. Parse content JSON for message_id
-        content = ev.get("content") or ev.get("Content")
-        if isinstance(content, str):
-            try:
-                data = json.loads(content)
-                if isinstance(data, dict):
-                    for key in ("message_id", "messageId", "MessageId", "mailMessageId", "MailMessageId"):
-                        val = data.get(key)
-                        if val is not None:
-                            try:
-                                mid = int(val)
-                                if mid > 0:
-                                    return mid
-                            except (TypeError, ValueError):
-                                pass
-            except json.JSONDecodeError:
-                pass
-
-        # 5. Regex extraction from stringified event values
-        for value in (ev.get("additionalData"), ev.get("AdditionalData"), ev.get("content"), ev.get("Content")):
-            if value is None:
-                continue
-            s = json.dumps(value) if not isinstance(value, str) else value
-            m = re.search(r"(?:mail/messages/|messageId[=:]|message_id[=:]|#message/|action=mailmessage(?:&amp;|&)?message_id=|idmessage[=:]|mailmessageid[=:])(\d+)", s, re.IGNORECASE)
-            if m:
-                try:
-                    mid = int(m.group(1))
-                    if mid > 0:
-                        return mid
-                except (TypeError, ValueError):
-                    pass
-
-        return None
-
-    @staticmethod
-    def _extract_event_author(ev: dict) -> str:
-        """Return a display name for the user who created this history event."""
-        create_by = ev.get("createBy") or ev.get("CreateBy") or ev.get("createdBy") or ev.get("CreatedBy")
-        if not isinstance(create_by, dict):
-            return ""
-        author = (
-            create_by.get("displayName")
-            or create_by.get("DisplayName")
-            or create_by.get("userName")
-            or create_by.get("UserName")
-            or ""
-        )
-        return str(author).strip()
-
-    @staticmethod
-    def _extract_bot_user_fields(opp: dict) -> dict[str, str]:
-        """Extract ALL user fields from opportunity for bot display."""
-        result: dict[str, str] = {}
-        for list_key in ("customFields", "CustomFields", "customFieldList", "CustomFieldList", "fieldValues", "FieldValues"):
-            field_list = opp.get(list_key)
-            if not isinstance(field_list, list):
-                continue
-            for item in field_list:
-                if not isinstance(item, dict):
-                    continue
-                label = ""
-                for label_key in ("label", "Label", "name", "Name", "title", "Title"):
-                    raw = item.get(label_key)
-                    if raw and isinstance(raw, str):
-                        label = raw.strip()
-                        break
-                if not label:
-                    continue
-                raw_val = None
-                for val_key in ("value", "Value", "fieldValue", "FieldValue"):
-                    raw_val = item.get(val_key)
-                    if raw_val is not None:
-                        break
-                if raw_val is None:
-                    continue
-                if isinstance(raw_val, dict):
-                    raw_val = raw_val.get("title") or raw_val.get("text") or raw_val.get("value") or raw_val.get("Value") or ""
-                val_str = str(raw_val).strip()
-                if val_str:
-                    result[label] = val_str
-        return result
-
-    @staticmethod
-    def _extract_opp_tags(opp: dict) -> list[str]:
-        """Extract tag names from opportunity for bot Project Info display."""
-        tags: list[str] = []
-        for list_key in ("tags", "Tags"):
-            tag_list = opp.get(list_key)
-            if not isinstance(tag_list, list):
-                continue
-            for t in tag_list:
-                if isinstance(t, dict):
-                    name = t.get("title") or t.get("name") or t.get("Title") or t.get("Name") or ""
-                elif isinstance(t, str):
-                    name = t
-                else:
-                    continue
-                name = str(name).strip()
-                if name:
-                    tags.append(name)
-        return tags
-
-    def _fetch_full_mail_body(self, portal: str, mail_id: int) -> str | None:
-        """Fetch full mail message body from CRM mail API.
-
-        The CRM preview modal / MailViewer.aspx loads email bodies via the
-        legacy filehandler.ashx endpoint, not via /api/2.0/mail/messages/{id}.
-        We try the handler first, then fall back to the REST endpoint.
-        """
-        # 1. Try the same ASPX handler the CRM MailViewer uses.
-        handler_url = f"{portal}/Products/CRM/HttpHandlers/filehandler.ashx?action=mailmessage&message_id={mail_id}"
-        token = self._bot_crm_token(portal)
-        if token:
-            try:
-                req = urllib.request.Request(
-                    handler_url,
-                    headers={"Accept": "application/json, text/html, */*", "Authorization": token},
-                    method="GET",
-                )
-                with urllib.request.urlopen(req, context=_ssl_context(), timeout=30) as resp:
-                    raw = resp.read()
-                    ctype = resp.headers.get_content_type() if resp.headers else ""
-                    text = raw.decode("utf-8", errors="replace")
-                    self.log_message(
-                        "MAIL-DEBUG handler status=%d ctype=%s len=%d snippet=%s",
-                        resp.status, ctype, len(text), repr(text[:200]),
-                    )
-                    # Handler may return JSON or HTML.
-                    if "application/json" in ctype or text.lstrip().startswith(("{", "[")):
-                        try:
-                            payload = json.loads(text)
-                        except json.JSONDecodeError:
-                            payload = None
-                        body = self._extract_body_from_mail_payload(payload)
-                        if body:
-                            return body
-                    if text.strip():
-                        return text
-            except urllib.error.HTTPError as exc:
-                self.log_message("MAIL-DEBUG handler HTTPError %s for mail_id=%s", exc.code, mail_id)
-            except Exception as exc:
-                self.log_message("MAIL-DEBUG handler exception %s for mail_id=%s", exc, mail_id)
-
-        # 2. Fallback to the REST mail API.
-        code, data = self._bot_crm_proxy(portal, "GET", f"/api/2.0/mail/messages/{mail_id}")
-        self.log_message("MAIL-DEBUG REST status=%s keys=%s", code, list(data.keys()) if isinstance(data, dict) else type(data))
-        if code >= 400:
-            return None
-        return self._extract_body_from_mail_payload(data)
-
-    @staticmethod
-    def _extract_body_from_mail_payload(payload: Any) -> str | None:
-        """Pull the best available body text out of a CRM mail payload."""
-        if not isinstance(payload, dict):
-            return None
-        mail = payload.get("response") if isinstance(payload.get("response"), dict) else payload
-        if not isinstance(mail, dict):
-            return None
-        for key in ("htmlBody", "HtmlBody", "bodyHtml", "BodyHtml", "body", "Body", "textBody", "TextBody", "introduction", "Introduction", "preview", "Preview"):
-            val = mail.get(key)
-            if val is not None and str(val).strip():
-                return str(val)
-        return None
-
-    def _handle_bot_me(self) -> None:
-        if not self._bot_verify_request():
-            _json_response(self, 403, {"error": "Forbidden"})
-            return
-        qs = parse_qs(urlparse(self.path).query)
-        raw_chat = (qs.get("chatId") or [""])[0]
-        if not raw_chat:
-            _json_response(self, 400, {"error": "chatId is required"})
-            return
-        portal = _portal_base(self)
-        if not portal:
-            _json_response(self, 400, {"error": "Portal not configured"})
-            return
-        track_request(portal, int(raw_chat), "me")
-        mapping = get_mapping_by_chat(portal, int(raw_chat))
-        if not mapping:
-            _json_response(self, 404, {"error": "Not found"})
-            return
-        _json_response(self, 200, mapping)
-
-    def _handle_bot_deals(self) -> None:
-        try:
-            if not self._bot_verify_request():
+        if api_path == "/api/bot-customers/verify-code" and method == "POST":
+            bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+            if not bot_token:
+                _json_response(self, 503, {"error": "TELEGRAM_BOT_TOKEN not configured"})
+                return
+            auth_header = self.headers.get("Authorization", "").strip()
+            if auth_header != f"Bearer {bot_token}":
                 _json_response(self, 403, {"error": "Forbidden"})
                 return
-            qs = parse_qs(urlparse(self.path).query)
-            portal = _portal_base(self)
-            if not portal:
-                _json_response(self, 400, {"error": "Portal not configured"})
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON body"})
                 return
+            code = str(payload.get("code") or "").strip()
+            chat_id = payload.get("chatId")
+            portal = str(payload.get("portal") or "vanguard").strip()
+            if not code or not chat_id:
+                _json_response(self, 400, {"error": "code and chatId are required"})
+                return
+            mapping = verify_code(portal, code)
+            if mapping is None:
+                _json_response(self, 404, {"error": "Invalid or expired code"})
+                return
+            if isinstance(mapping, str):
+                _json_response(self, 400, {"error": mapping})
+                return
+            set_verify_chat_id(portal, mapping["contactId"], int(chat_id))
+            _json_response(self, 200, mapping)
+            return
+        if api_path == "/api/bot-customers/mapping" and method == "DELETE":
+            user = _require_admin(self)
+            if not user:
+                return
+            qs = parse_qs(urlparse(self.path).query)
+            chat_id_raw = (qs.get("chatId") or [""])[0]
+            if chat_id_raw:
+                try:
+                    ok = remove_mapping_by_chat("vanguard", int(chat_id_raw))
+                except (TypeError, ValueError):
+                    _json_response(self, 400, {"error": "Invalid chatId"})
+                    return
+                _json_response(self, 200, {"ok": ok})
+                return
+            _json_response(self, 400, {"error": "chatId is required"})
+            return
+        if api_path == "/api/bot-customers/nickname" and method == "PUT":
+            user = _require_admin(self)
+            if not user:
+                return
+            try:
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON body"})
+                return
+            contact_id = payload.get("contactId")
+            nickname = str(payload.get("nickname") or "").strip()
+            ok = set_nickname("vanguard", int(contact_id) if contact_id else None, nickname)
+            _json_response(self, 200, {"ok": ok})
+            return
+        self.send_error(404)
+
+    def _handle_bot_api_get(self) -> None:
+        api_path = urlparse(self.path).path
+        qs = parse_qs(urlparse(self.path).query)
+        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        auth_header = self.headers.get("Authorization", "").strip()
+        if not bot_token or auth_header != f"Bearer {bot_token}":
+            _json_response(self, 403, {"error": "Forbidden"})
+            return
+
+        if api_path == "/api/bot/me":
+            raw_chat = (qs.get("chatId") or [""])[0]
+            if not raw_chat:
+                _json_response(self, 400, {"error": "chatId is required"})
+                return
+            track_request("vanguard", int(raw_chat), "me")
+            mapping = get_mapping_by_chat("vanguard", int(raw_chat))
+            if not mapping:
+                _json_response(self, 404, {"error": "Not found"})
+                return
+            _json_response(self, 200, mapping)
+            return
+
+        if api_path == "/api/bot/deals":
             raw_chat_deals = (qs.get("chatId") or [""])[0]
             if raw_chat_deals:
-                track_request(portal, int(raw_chat_deals), "deals")
+                track_request("vanguard", int(raw_chat_deals), "deals")
             is_employee = (qs.get("employee") or [""])[0].lower() == "true"
             raw_contact = (qs.get("contactId") or [""])[0]
             if not is_employee and not raw_contact:
@@ -1180,862 +1843,154 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 return
             contact_id = int(raw_contact) if raw_contact else None
 
-            # Get mapping to check notesCategoryId
-            raw_chat = (qs.get("chatId") or [""])[0]
-            notes_category_id = None
-            if raw_chat:
-                mapping = get_mapping_by_chat(portal, int(raw_chat))
-                if mapping:
-                    notes_category_id = mapping.get("notesCategoryId")
-
-            # Fetch opportunities (all contacts for employee, filtered for customers)
-            filter_params = {
-                "startIndex": "0",
-                "count": "500",
-                "filterValue": "",
-                "sortBy": "date_created",
-                "sortOrder": "descending",
-            }
-            if contact_id is not None:
-                filter_params["contactId"] = str(contact_id)
-            filter_params = urlencode(filter_params)
-            code, data = self._bot_crm_proxy(portal, "GET", "/api/2.0/crm/opportunity/filter", filter_params)
-            if code >= 400:
-                _json_response(self, code, data)
-                return
-            opportunities = data.get("response") if isinstance(data, dict) else []
-            # Filter to only open-stage deals locally (stageType = 0 or null)
-            open_opps = []
-            for opp in (opportunities or []):
-                if not isinstance(opp, dict):
-                    continue
-                _stage = opp.get("stage") or opp.get("Stage") or {}
-                _st = _stage.get("stageType") if isinstance(_stage, dict) else None
-                if _st not in (0, "0", "Open", None, ""):
-                    continue
-                open_opps.append(opp)
-
-            # Early title search filter (before expensive history calls)
+            # Query PostgreSQL directly
+            where = ["o.stage_type = 0"]
+            params: list = []
+            if contact_id:
+                where.append("o.contact_id = %s")
+                params.append(contact_id)
             search = (qs.get("search") or [""])[0].strip().lower()
-            matched_opps = open_opps
             if search:
-                matched_opps = [
-                    opp for opp in open_opps
-                    if search in str(opp.get("title") or opp.get("Title") or "").lower()
-                ]
+                where.append("o.title ILIKE %s")
+                params.append(f"%{search}%")
 
-            # Tag filter (batch-fetch tags for matched deals, then filter)
-            tag_filter = (qs.get("tag") or [""])[0].strip().lower()
-            if tag_filter:
-                from concurrent.futures import ThreadPoolExecutor, as_completed
-                tag_matched: list[int] = []
-                tag_ids = [(opp.get("id") or opp.get("ID")) for opp in matched_opps if opp.get("id") or opp.get("ID")]
-                if tag_ids:
-                    def _fetch_tag_names(oid: int) -> tuple[int, list[str]]:
-                        c, d = self._bot_crm_proxy(portal, "GET", f"/api/2.0/crm/opportunity/tag/{oid}", timeout=10)
-                        if c >= 400:
-                            return oid, []
-                        tags = d.get("response") if isinstance(d, dict) else (d if isinstance(d, list) else [])
-                        if not isinstance(tags, list):
-                            return oid, []
-                        names = []
-                        for t in tags:
-                            if isinstance(t, dict):
-                                n = str(t.get("title") or t.get("name") or "").strip().lower()
-                            elif isinstance(t, str):
-                                n = t.strip().lower()
-                            else:
-                                continue
-                            if n:
-                                names.append(n)
-                        return oid, names
-                    with ThreadPoolExecutor(max_workers=12) as pool:
-                        futures = {pool.submit(_fetch_tag_names, oid): oid for oid in tag_ids}
-                        for fut in as_completed(futures):
-                            oid, names = fut.result()
-                            if tag_filter in names:
-                                tag_matched.append(oid)
-                matched_opps = [opp for opp in matched_opps if (opp.get("id") or opp.get("ID")) in tag_matched]
-
-            # Fetch history only for matched deals
+            rows = db.query(
+                f"""SELECT o.id, o.title, o.bid_value, o.description, o.created_at, o.expected_close_date,
+                           s.title, c.first_name, c.last_name, u.display_name
+                    FROM opportunities o
+                    LEFT JOIN stages s ON o.stage_id = s.id
+                    LEFT JOIN contacts c ON o.contact_id = c.id
+                    LEFT JOIN users u ON o.responsible_user_id = u.id
+                    WHERE {' AND '.join(where)} ORDER BY o.created_at DESC LIMIT 100""",
+                (*params,),
+            )
             deals = []
-            for opp in matched_opps:
-                try:
-                    opp_id = opp.get("id") or opp.get("ID")
-                    if not opp_id:
-                        continue
-                    title = str(opp.get("title") or opp.get("Title") or f"Deal #{opp_id}")
-                    stage = str(opp.get("stageTitle") or opp.get("StageTitle") or "")
-                    amount_raw = opp.get("amount") or opp.get("Amount")
-                    try:
-                        amount = float(amount_raw) if amount_raw else 0
-                    except (TypeError, ValueError):
-                        amount = 0
-                    currency = str(opp.get("currency") or opp.get("Currency") or "")
+            for r in rows:
+                deals.append({
+                    "id": r[0], "title": r[1], "amount": float(r[2]) if r[2] else 0,
+                    "stage": r[6] or "", "contact": f"{r[7] or ''} {r[8] or ''}".strip(),
+                    "responsible": r[9] or "",
+                })
+            _json_response(self, 200, deals)
+            return
 
-                    # Fetch recent history (last 5 events)
-                    hist_params = urlencode({
-                        "entityType": "opportunity",
-                        "entityId": str(opp_id),
-                        "startIndex": "0",
-                        "count": "5",
-                        "sortBy": "created",
-                        "sortOrder": "descending",
-                    })
-                    hcode, hdata = self._bot_crm_proxy(portal, "GET", "/api/2.0/crm/history/filter", hist_params, timeout=10)
-                    events = []
-                    if hcode < 400:
-                        raw_events = hdata.get("response") if isinstance(hdata, dict) else []
-                        if isinstance(raw_events, list):
-                            for ev in raw_events:
-                                if not isinstance(ev, dict):
-                                    continue
-                                ev_cat = ev.get("category") or ev.get("Category") or {}
-                                cat_id = None
-                                cat_name = ""
-                                if isinstance(ev_cat, dict):
-                                    cat_id = ev_cat.get("id") or ev_cat.get("ID") or ev_cat.get("categoryId") or ev_cat.get("CategoryId")
-                                    cat_name = str(ev_cat.get("title") or ev_cat.get("Title") or "")
-                                elif isinstance(ev_cat, (int, str)):
-                                    try:
-                                        cat_id = int(ev_cat)
-                                    except (TypeError, ValueError):
-                                        pass
-                                content = str(ev.get("content") or ev.get("Content") or "").strip()
-                                created = str(ev.get("created") or ev.get("Created") or "")
-                                if is_employee:
-                                    # Employee: collect up to 5 content-bearing events with category
-                                    if content and len(events) < 5:
-                                        # For mail events, fetch the full email body from the mail API
-                                        # because CRM history only stores a truncated summary/link.
-                                        event_content = content
-                                        if "mail" in cat_name.lower() or "email" in cat_name.lower():
-                                            mail_id = self._extract_mail_message_id(ev)
-                                            self.log_message(
-                                                "MAIL-DEBUG category=%s content_len=%d mail_id=%s",
-                                                cat_name, len(content), mail_id,
-                                            )
-                                            if mail_id:
-                                                full_body = self._fetch_full_mail_body(portal, mail_id)
-                                                self.log_message(
-                                                    "MAIL-DEBUG full_body_len=%s for mail_id=%s",
-                                                    len(full_body) if full_body else "None", mail_id,
-                                                )
-                                                if full_body:
-                                                    try:
-                                                        data = json.loads(content)
-                                                        if isinstance(data, dict):
-                                                            data["introduction"] = full_body
-                                                            event_content = json.dumps(data)
-                                                    except json.JSONDecodeError:
-                                                        event_content = full_body
-                                        events.append({
-                                            "content": event_content[:20000],
-                                            "created": created,
-                                            "categoryName": cat_name,
-                                            "categoryId": cat_id,
-                                            "author": self._extract_event_author(ev),
-                                        })
-                                elif notes_category_id:
-                                    if cat_id == notes_category_id and content:
-                                        events.append({
-                                            "content": content[:500],
-                                            "created": created,
-                                            "categoryName": cat_name,
-                                            "author": self._extract_event_author(ev),
-                                        })
-                                        break
-                                else:
-                                    if content and len(events) < 5:
-                                        events.append({
-                                            "content": content[:500],
-                                            "created": created,
-                                            "categoryName": cat_name,
-                                            "author": self._extract_event_author(ev),
-                                        })
+        if api_path == "/api/bot/categories":
+            rows = db.query("SELECT id, title FROM history_categories ORDER BY sort_order")
+            _json_response(self, 200, [{"id": r[0], "title": r[1]} for r in rows])
+            return
 
-                    deal_entry = {
-                        "id": int(opp_id),
-                        "title": title,
-                        "stage": stage,
-                        "amount": amount,
-                        "currency": currency,
-                        "latestUpdate": events[0] if events else None,
-                    }
-                    # Standard CRM fields for employee Project Info
-                    if is_employee:
-                        desc = str(opp.get("description") or opp.get("Description") or "").strip()
-                        if desc:
-                            deal_entry["description"] = desc
-                        contact = opp.get("contact") or opp.get("Contact") or {}
-                        if isinstance(contact, dict):
-                            cname = str(contact.get("displayName") or contact.get("DisplayName") or contact.get("title") or contact.get("Title") or "").strip()
-                        else:
-                            cname = str(contact).strip() if contact else ""
-                        if cname:
-                            deal_entry["contact"] = cname
-                        resp = opp.get("responsible") or opp.get("Responsible") or {}
-                        if isinstance(resp, dict):
-                            rname = str(resp.get("displayName") or resp.get("DisplayName") or resp.get("title") or resp.get("Title") or "").strip()
-                        else:
-                            rname = str(resp).strip() if resp else ""
-                        if rname:
-                            deal_entry["responsible"] = rname
-                        created = str(opp.get("createOn") or opp.get("created") or opp.get("Created") or "").strip()
-                        if created:
-                            deal_entry["created"] = created
-                        due = str(opp.get("dueDate") or opp.get("DueDate") or "").strip()
-                        if due:
-                            deal_entry["dueDate"] = due
-                        bid = str(opp.get("bidType") or opp.get("BidType") or "").strip()
-                        if bid:
-                            deal_entry["bidType"] = bid
-                        if opp.get("isPrivate") or opp.get("IsPrivate"):
-                            deal_entry["isPrivate"] = True
-                    # Extract user fields for bot display
-                    user_fields = self._extract_bot_user_fields(opp)
-                    if user_fields:
-                        deal_entry["userFields"] = user_fields
-                    # Include all tags for employee Project Info
-                    if is_employee:
-                        deal_entry["tags"] = self._extract_opp_tags(opp)
-                    if is_employee:
-                        deal_entry["events"] = events
-                    deals.append(deal_entry)
-                except Exception as exc:
-                    self.log_message("Error processing deal %s: %s", opp.get("id") or opp.get("ID"), exc)
+        if api_path == "/api/bot/tags":
+            rows = db.query("SELECT DISTINCT t.title FROM tag_definitions t JOIN opportunity_tags ot ON t.id = ot.tag_id")
+            _json_response(self, 200, [r[0] for r in rows])
+            return
 
-            _json_response(self, 200, {"deals": deals})
-        except Exception as exc:
-            self.log_message("Fatal in _handle_bot_deals: %s", exc)
-            _json_response(self, 502, {"error": "Internal error"})
+        if api_path == "/api/bot/usage":
+            user = _require_admin(self)
+            if not user:
+                return
+            stats = get_usage_stats("vanguard")
+            _json_response(self, 200, stats)
+            return
 
-    def _handle_bot_categories(self) -> None:
-        if not self._bot_verify_request():
-            _json_response(self, 403, {"error": "Forbidden"})
-            return
-        portal = _portal_base(self)
-        if not portal:
-            _json_response(self, 400, {"error": "Portal not configured"})
-            return
-        code, data = self._bot_crm_proxy(portal, "GET", "/api/2.0/crm/history/category")
-        if code >= 400:
-            _json_response(self, code, data)
-            return
-        categories = data.get("response") if isinstance(data, dict) else []
-        if not isinstance(categories, list):
-            categories = []
-        result = []
-        for cat in categories:
-            if isinstance(cat, dict):
-                cid = cat.get("id") or cat.get("ID")
-                title = cat.get("title") or cat.get("Title") or ""
-                if cid and title:
-                    result.append({"id": int(cid), "title": title})
-        _json_response(self, 200, result)
+        self.send_error(404)
 
-    def _handle_bot_tags(self) -> None:
-        if not self._bot_verify_request():
-            _json_response(self, 403, {"error": "Forbidden"})
-            return
-        portal = _portal_base(self)
-        if not portal:
-            _json_response(self, 400, {"error": "Portal not configured"})
-            return
-        # Fetch open deals (all stages) to extract tags from
-        filter_params = urlencode({
-            "startIndex": "0", "count": "250",
-            "filterValue": "", "sortBy": "date_created", "sortOrder": "descending",
-        })
-        code, data = self._bot_crm_proxy(portal, "GET", "/api/2.0/crm/opportunity/filter", filter_params)
-        if code >= 400:
-            _json_response(self, code, data)
-            return
-        opps = data.get("response") if isinstance(data, dict) else (data if isinstance(data, list) else [])
-        if not isinstance(opps, list):
-            opps = []
-        # Collect IDs of open deals (stageType=0 or null)
-        ids = []
-        for opp in opps:
-            if not isinstance(opp, dict):
-                continue
-            _stage = opp.get("stage") or opp.get("Stage") or {}
-            _st = _stage.get("stageType") if isinstance(_stage, dict) else None
-            if _st not in (0, "0", "Open", None, ""):
-                continue
-            oid = opp.get("id") or opp.get("ID")
-            if oid:
-                ids.append(int(oid))
-        # Batch-fetch tags per deal and deduplicate by name
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        seen_names: set[str] = set()
-        tags: list[dict] = []
-        def _fetch(oid: int) -> list[str]:
-            c, d = self._bot_crm_proxy(portal, "GET", f"/api/2.0/crm/opportunity/tag/{oid}", timeout=10)
-            if c >= 400:
-                return []
-            raw = d.get("response") if isinstance(d, dict) else (d if isinstance(d, list) else [])
-            if not isinstance(raw, list):
-                return []
-            result = []
-            for t in raw:
-                if isinstance(t, dict):
-                    name = str(t.get("title") or t.get("name") or "").strip()
-                elif isinstance(t, str):
-                    name = t.strip()
-                else:
-                    continue
-                if name:
-                    result.append(name)
-            return result
-        with ThreadPoolExecutor(max_workers=12) as pool:
-            futures = {pool.submit(_fetch, oid): oid for oid in ids}
-            for fut in as_completed(futures):
-                for name in fut.result():
-                    key = name.lower()
-                    if key not in seen_names:
-                        seen_names.add(key)
-                        tags.append({"name": name})
-        _json_response(self, 200, {"tags": tags})
+    def _handle_bot_api_post(self, method: str) -> None:
+        api_path = urlparse(self.path).path
+        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        auth_header = self.headers.get("Authorization", "").strip()
 
-    def _handle_bot_note(self) -> None:
-        if not self._bot_verify_request():
-            _json_response(self, 403, {"error": "Forbidden"})
-            return
-        try:
-            payload = json.loads(_read_body(self) or b"{}")
-        except json.JSONDecodeError:
-            _json_response(self, 400, {"error": "Invalid JSON body"})
-            return
-        chat_id = payload.get("chatId")
-        deal_id = payload.get("dealId")
-        content = str(payload.get("content") or "").strip()
-        category_id = payload.get("categoryId")
-        if not chat_id or not deal_id or not content:
-            _json_response(self, 400, {"error": "chatId, dealId, and content are required"})
-            return
-        portal = _portal_base(self)
-        if not portal:
-            _json_response(self, 400, {"error": "Portal not configured"})
-            return
-        track_request(portal, int(chat_id), "note")
-        # Verify the chat mapping exists and is an employee
-        mapping = get_mapping_by_chat(portal, int(chat_id))
-        if not mapping:
-            _json_response(self, 403, {"error": "Chat not mapped"})
-            return
-        if not mapping.get("employee"):
-            _json_response(self, 403, {"error": "Only employees can add notes"})
-            return
-        # Build the CRM history POST body
-        post_body = {
-            "entityType": "opportunity",
-            "entityId": int(deal_id),
-            "contactId": 0,
-            "content": content,
-        }
-        if category_id is not None:
+        if api_path == "/api/bot/note" and method == "POST":
+            if not bot_token or auth_header != f"Bearer {bot_token}":
+                _json_response(self, 403, {"error": "Forbidden"})
+                return
             try:
-                post_body["categoryId"] = int(category_id)
-            except (TypeError, ValueError):
-                pass
-        code, data = self._bot_crm_proxy(portal, "POST", "/api/2.0/crm/history", body=json.dumps(post_body).encode("utf-8"))
-        if code >= 400:
-            _json_response(self, code, data)
-            return
-        _json_response(self, 200, {"ok": True})
-
-    def _handle_bot_usage(self) -> None:
-        auth = _require_auth(self)
-        if not auth:
-            return
-        portal, token, _user_id = auth
-        if not self._is_admin(portal, token):
-            _json_response(self, 403, {"error": "Forbidden"})
-            return
-        raw_stats = get_usage_stats(portal)
-        mappings = list_mappings(portal)
-        enriched: list[dict] = []
-        for m in mappings:
-            chat_id = str(m.get("chatId", ""))
-            s = raw_stats.get(chat_id, {})
-            enriched.append({**m, "usage": s})
-        _json_response(self, 200, {"usage": enriched})
-
-    def _handle_mail_message_get(self, mail_id: int) -> None:
-        """Fetch a single mail message for the preview modal.
-
-        Uses the same filehandler.ashx endpoint the CRM MailViewer uses,
-        with the user's own session token. Linked emails are accessible to
-        all deal users. Falls back to the REST API if the handler fails.
-        """
-        auth = _require_auth(self)
-        if not auth:
-            return
-        portal, token, _user_id = auth
-
-        # 1. Try filehandler.ashx (the endpoint the CRM MailViewer actually uses)
-        handler_url = f"{portal}/Products/CRM/HttpHandlers/filehandler.ashx?action=mailmessage&message_id={mail_id}"
-        try:
-            req = urllib.request.Request(
-                handler_url,
-                headers={"Accept": "application/json, text/html, */*", "Authorization": token},
-                method="GET",
+                payload = json.loads(_read_body(self) or b"{}")
+            except json.JSONDecodeError:
+                _json_response(self, 400, {"error": "Invalid JSON body"})
+                return
+            opp_id = payload.get("opportunityId")
+            content = str(payload.get("content") or "").strip()
+            category_id = int(payload.get("categoryId") or 1)
+            if not opp_id or not content:
+                _json_response(self, 400, {"error": "opportunityId and content are required"})
+                return
+            event_id = db.insert_returning(
+                """INSERT INTO history_events (opportunity_id, category_id, content, created_by)
+                   VALUES (%s, %s, %s, NULL) RETURNING id""",
+                (int(opp_id), category_id, content),
             )
-            with urllib.request.urlopen(req, context=_ssl_context(), timeout=30) as resp:
-                raw = resp.read()
-                ctype = resp.headers.get_content_type() if resp.headers else ""
-                text = raw.decode("utf-8", errors="replace")
-                self.log_message("MAIL-MSG handler status=%d ctype=%s len=%d", resp.status, ctype, len(text))
-                # Handler may return JSON (with the full mail object) or HTML (just the body).
-                if "application/json" in ctype or text.lstrip().startswith(("{", "[")):
-                    try:
-                        payload = json.loads(text)
-                    except json.JSONDecodeError:
-                        payload = None
-                    if isinstance(payload, dict):
-                        # If the JSON has a 'response' or 'result' wrapper, unwrap it.
-                        mail = payload.get("response") if isinstance(payload.get("response"), dict) else payload
-                        mail = mail.get("result") if isinstance(mail, dict) and isinstance(mail.get("result"), dict) else mail
-                        if isinstance(mail, dict):
-                            _json_response(self, 200, mail)
-                            return
-                # If we got HTML, wrap it in a minimal mail object.
-                if text.strip():
-                    _json_response(self, 200, {
-                        "id": mail_id,
-                        "htmlBody": text,
-                        "textBody": "",
-                    })
-                    return
-        except urllib.error.HTTPError as exc:
-            self.log_message("MAIL-MSG handler HTTPError %s for mail_id=%s", exc.code, mail_id)
-        except Exception as exc:
-            self.log_message("MAIL-MSG handler exception %s for mail_id=%s", exc, mail_id)
-
-        # 2. Fallback: try the REST API directly (may work for some messages).
-        code, raw_data, _ctype = _proxy_request(self, "GET", f"/api/2.0/mail/messages/{mail_id}")
-        self.log_message("MAIL-MSG REST status=%s", code)
-        if 200 <= code < 400:
-            try:
-                data = json.loads(raw_data)
-                if isinstance(data, dict):
-                    _json_response(self, 200, data)
-                    return
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        # 3. Both failed — return 404 so the client shows the fallback message.
-        _json_response(self, 404, {"error": "Mail message not found"})
-
-    # --------------- Telegram HTML sanitizer (shared) ---------------
-
-    class _TelegramHTMLSanitizer(HTMLParser):
-        """Strip unsupported tags (keep their text) and preserve allowed Telegram tags."""
-
-        ALLOWED_TAGS = frozenset({
-            'b', 'strong', 'i', 'em', 'u', 'ins',
-            's', 'strike', 'del',
-            'a', 'code', 'pre',
-        })
-
-        def __init__(self) -> None:
-            super().__init__(convert_charrefs=False)
-            self.result: list[str] = []
-            self.open_tags: list[str] = []
-
-        def _escape_text(self, text: str) -> str:
-            return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-
-        def _build_attrs(self, attrs: list[tuple[str, str | None]]) -> str:
-            parts: list[str] = []
-            for key, value in attrs:
-                if value is None:
-                    continue
-                if key.lower() == 'href':
-                    continue
-                escaped = (value
-                           .replace('&', '&amp;')
-                           .replace('"', '&quot;')
-                           .replace("'", '&#39;')
-                           .replace('<', '&lt;')
-                           .replace('>', '&gt;'))
-                parts.append(f' {key.lower()}="{escaped}"')
-            return ''.join(parts)
-
-        def _rebuild_a_tag(self, attrs: list[tuple[str, str | None]]) -> str | None:
-            href = None
-            for key, value in attrs:
-                if key.lower() == 'href' and value:
-                    href = value
-                    break
-            if not href:
-                return None
-            href = (href
-                    .replace('&', '&amp;')
-                    .replace('"', '&quot;')
-                    .replace("'", '&#39;')
-                    .replace('<', '&lt;')
-                    .replace('>', '&gt;'))
-            return f'<a href="{href}">'
-
-        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-            tag_lower = tag.lower()
-            if tag_lower == 'br':
-                self.result.append('\n')
-                return
-            if tag_lower not in self.ALLOWED_TAGS:
-                return
-            if tag_lower == 'a':
-                rebuilt = self._rebuild_a_tag(attrs)
-                if rebuilt:
-                    self.result.append(rebuilt)
-                    self.open_tags.append('a')
-                return
-            attrs_str = self._build_attrs(attrs)
-            self.result.append(f'<{tag_lower}{attrs_str}>')
-            self.open_tags.append(tag_lower)
-
-        def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-            tag_lower = tag.lower()
-            if tag_lower == 'br':
-                self.result.append('\n')
-                return
-            if tag_lower not in self.ALLOWED_TAGS:
-                return
-            if tag_lower == 'a':
-                return
-            attrs_str = self._build_attrs(attrs)
-            self.result.append(f'<{tag_lower}{attrs_str}/>')
-
-        def handle_endtag(self, tag: str) -> None:
-            tag_lower = tag.lower()
-            if tag_lower not in self.ALLOWED_TAGS:
-                return
-            if self.open_tags and self.open_tags[-1] == tag_lower:
-                self.open_tags.pop()
-                self.result.append(f'</{tag_lower}>')
-
-        def handle_data(self, data: str) -> None:
-            self.result.append(self._escape_text(data))
-
-        def handle_entityref(self, name: str) -> None:
-            ch = html.unescape(f'&{name};')
-            self.result.append(self._escape_text(ch))
-
-        def handle_charref(self, name: str) -> None:
-            ch = html.unescape(f'&#{name};')
-            self.result.append(self._escape_text(ch))
-
-        def close(self) -> str:  # type: ignore[override]
-            super().close()
-            for tag in reversed(self.open_tags):
-                self.result.append(f'</{tag}>')
-            return ''.join(self.result)
-
-    @classmethod
-    def _sanitize_telegram_html(cls, text: str) -> str:
-        """Strip non-Telegram HTML tags, keep allowed ones, escape stray <>&."""
-        if not text:
-            return ""
-        parser = cls._TelegramHTMLSanitizer()
-        parser.feed(text)
-        return parser.close()
-
-    def _handle_bot_send_message(self) -> None:
-        auth = _require_auth(self)
-        if not auth:
+            _json_response(self, 200, {"ok": True, "eventId": event_id})
             return
-        portal, token, _user_id = auth
-        if not self._is_admin(portal, token):
-            _json_response(self, 403, {"error": "Forbidden"})
-            return
-        try:
-            payload = json.loads(_read_body(self) or b"{}")
-        except json.JSONDecodeError:
-            _json_response(self, 400, {"error": "Invalid JSON body"})
-            return
-        chat_id = payload.get("chatId")
-        raw_text = str(payload.get("text") or "").strip()
-        if not chat_id or not raw_text:
-            _json_response(self, 400, {"error": "chatId and text are required"})
-            return
-        # Sanitize: only allow Telegram-safe HTML tags
-        safe_text = self._sanitize_telegram_html(raw_text)
-        # Wrap with system prefix and no-reply footer
-        text = f"<b>-System Message-</b>\n\n{safe_text}\n\n<i>Please do not reply to this message.</i>"
-        # Verify the mapping exists
-        mapping = get_mapping_by_chat(portal, int(chat_id))
-        if not mapping:
-            _json_response(self, 404, {"error": "User not found"})
-            return
-        # Send via Telegram Bot API
-        bot_token = self._bot_token()
-        if not bot_token:
-            _json_response(self, 503, {"error": "Bot token not configured"})
-            return
-        try:
-            tg_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-            tg_body = json.dumps({
-                "chat_id": int(chat_id),
-                "text": text,
-                "parse_mode": "HTML",
-            }).encode("utf-8")
-            req = urllib.request.Request(
-                tg_url,
-                data=tg_body,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                result = json.loads(resp.read().decode("utf-8"))
-                if result.get("ok"):
-                    _json_response(self, 200, {"ok": True})
-                else:
-                    desc = result.get("description", "Unknown error")
-                    _json_response(self, 502, {"error": f"Telegram API error: {desc}"})
-        except Exception as exc:
-            self.log_message("Telegram sendMessage failed: %s", exc)
-            _json_response(self, 502, {"error": f"Telegram API call failed: {exc}"})
 
-    def _handle_health_check(self) -> None:
-        auth = _require_auth(self)
-        if not auth:
+        if api_path == "/api/bot/send-message" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            # TODO: send Telegram message (Phase 1G)
+            _json_response(self, 501, {"error": "Telegram send not yet implemented"})
             return
-        portal, token, _user_id = auth
-        reachable = False
-        try:
-            url = f"{portal.rstrip('/')}/api/2.0/people/@self.json"
-            req = urllib.request.Request(
-                url,
-                headers={"Accept": "application/json", "Authorization": token},
-                method="GET",
-            )
-            with urllib.request.urlopen(req, context=_ssl_context(), timeout=15) as resp:
-                if resp.status == 200:
-                    reachable = True
-        except Exception:
-            reachable = False
-        _json_response(self, 200, {
-            "ok": reachable,
-            "crmReachable": reachable,
-            "portalUrl": portal,
-            "checkedAt": datetime.now(timezone.utc).isoformat(),
-        })
 
-    # ---------------- Presence / Team (user status, heartbeats, basic DMs, admin for kenc) ----------------
+        self.send_error(404)
+
+    # ── Presence (local store, ported from v2 — unchanged) ──────────────────
 
     def _handle_presence_users(self) -> None:
-        """Return the CRM people list (mediated). Client caches this until next login.
-        Uses the caller's token so permissions/visibility are correct.
-        """
-        auth = _require_auth(self)
-        if not auth:
+        user = _require_auth(self)
+        if not user:
             return
-        portal, token, _user_id = auth
-        # Mediate the people list request (same as client would do directly to CRM)
-        url = f"{portal.rstrip('/')}/api/2.0/people.json"
-        req = urllib.request.Request(
-            url,
-            headers={"Accept": "application/json", "Authorization": token},
-            method="GET",
+        # Return users from DB instead of CRM API
+        rows = db.query(
+            "SELECT id, email, display_name, first_name, last_name, is_admin FROM users WHERE is_active = TRUE"
         )
-        try:
-            with urllib.request.urlopen(req, context=_ssl_context(), timeout=30) as resp:
-                body = resp.read()
-                ctype = resp.headers.get_content_type() or "application/json"
-        except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
-            _json_response(self, 502, {"error": f"Could not load users: {exc}"})
-            return
-        self.send_response(200)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        people = [{"id": r[0], "email": r[1], "displayName": r[2] or f"{r[3] or ''} {r[4] or ''}".strip()} for r in rows]
+        _json_response(self, 200, people)
 
     def _handle_presence_get(self) -> None:
-        """Live presence snapshot + merged user info + DM hints.
-        Admin-only fields (last* activity) are only included when the requester is a CRM admin.
-        """
-        auth = _require_auth(self)
-        if not auth:
+        user = _require_auth(self)
+        if not user:
             return
-        portal, token, user_id = auth
-
-        is_admin = self._is_admin(portal, token)
-        my_email = self._current_user_email(portal, token)
-
-        # Base people list (small, mediated)
-        people: list[dict[str, Any]] = []
-        try:
-            url = f"{portal.rstrip('/')}/api/2.0/people.json"
-            req = urllib.request.Request(
-                url,
-                headers={"Accept": "application/json", "Authorization": token},
-                method="GET",
-            )
-            with urllib.request.urlopen(req, context=_ssl_context(), timeout=30) as resp:
-                pdata = json.loads(resp.read().decode("utf-8"))
-                people = pdata.get("response") or pdata.get("result") or []
-                if not isinstance(people, list):
-                    people = []
-        except Exception:
-            people = []
-
-        # Presence overlays (from our store)
+        portal = "vanguard"
         overlays = get_portal_presence_snapshot(portal)
-        # Clean up stale presence records (browser closed without beforeunload)
         clean_stale_presence_records(portal)
-
-        # Build response list
         now = datetime.now(timezone.utc)
-        out_users: list[dict[str, Any]] = []
-        for p in people:
-            if not isinstance(p, dict):
-                continue
-            uid = str(p.get("id") or p.get("ID") or p.get("userId") or p.get("UserId") or "")
-            if not uid:
-                continue
-            ov = overlays.get(uid) or {}
-            status = ov.get("status") or ""
-            hb = self._parse_iso_datetime(ov.get("lastHeartbeat") or "")
-            last_crm = self._parse_iso_datetime(ov.get("lastCrmActivity") or "")
-            last_dash = self._parse_iso_datetime(ov.get("lastDashboardActivity") or "")
 
-            online = False
-            idle = False
-            afd = False
-            if hb:
-                delta = (now - hb).total_seconds()
-                online = delta < (10 * 60)  # 10 min window for "online"
-                idle = delta > (2 * 60 * 60) and online  # >2h idle flag (visual only while "online")
-                if not online:
-                    # Has a (non-cleared) heartbeat record → had an active dashboard session.
-                    # If within the ~3h auto-logout window, this is "tabbed away" (AFD), not signed out.
-                    # Signed-out users have their lastHeartbeat cleared in _handle_logout.
-                    # Very old (>3h) heartbeats without logout are treated as offline (aged out).
-                    if delta < (3 * 60 * 60):
-                        afd = True
-
-            auto_status = ov.get("autoStatus") or ""
-            needs_cleanup = False
-            # Strip auto-status if user is not actively online or last dashboard activity is too old
-            # (client-side 5-min timeout may not have fired if the browser was closed)
-            if auto_status:
-                if not online:
-                    auto_status = ""
-                    needs_cleanup = True
-                elif last_dash and (now - last_dash).total_seconds() > PRESENCE_AUTO_STATUS_TIMEOUT_S:
-                    auto_status = ""
-                    needs_cleanup = True
-            if needs_cleanup:
-                clear_auto_status(portal, uid)
-
-            row: dict[str, Any] = {
-                "id": uid,
-                "displayName": _crm_display_name(p, uid),
-                "email": str(p.get("email") or p.get("Email") or "").strip().lower(),
-                "online": online,
-                "idle": idle and online,
-                "afd": afd,
-                "status": status,
-                "inferred": bool(ov.get("inferred") or False),
-                "autoStatus": auto_status,
-                "lastSeen": ov.get("lastHeartbeat") or ov.get("lastDashboardActivity") or "",
-            }
-
-            if is_admin:
-                # Only for the admin user – extra details (never shown on the main "Team" list)
-                row["admin"] = {
-                    "lastHeartbeat": ov.get("lastHeartbeat") or "",
-                    "lastCrmActivity": ov.get("lastCrmActivity") or "",
-                    "lastDashboardActivity": ov.get("lastDashboardActivity") or "",
-                    "lastHeartbeatMinutesAgo": int((now - hb).total_seconds() / 60) if hb else None,
-                    "lastCrmMinutesAgo": int((now - last_crm).total_seconds() / 60) if last_crm else None,
-                    "lastDashMinutesAgo": int((now - last_dash).total_seconds() / 60) if last_dash else None,
-                }
-
-            out_users.append(row)
-
-        # Include overlay-only users who have heartbeats but aren't in the CRM people list
-        # (e.g. when CRM is unreachable). Uses the user ID as display name fallback.
-        for uid, ov in overlays.items():
-            if uid == user_id: continue
-            if not any(u.get("id") == uid for u in out_users):
-                ov_hb = self._parse_iso_datetime(ov.get("lastHeartbeat") or "")
-                ov_online = False
-                ov_idle = False
-                ov_afd = False
-                if ov_hb:
-                    delta = (now - ov_hb).total_seconds()
-                    ov_online = delta < (10 * 60)
-                    ov_idle = delta > (2 * 60 * 60) and ov_online
-                    if not ov_online and delta < (3 * 60 * 60):
-                        ov_afd = True
-                ov_auto = ov.get("autoStatus") or ""
-                ov_needs_cleanup = False
-                if ov_auto:
-                    if not ov_online:
-                        ov_auto = ""
-                        ov_needs_cleanup = True
-                    else:
-                        ov_last_dash = self._parse_iso_datetime(ov.get("lastDashboardActivity") or "")
-                        if ov_last_dash and (now - ov_last_dash).total_seconds() > PRESENCE_AUTO_STATUS_TIMEOUT_S:
-                            ov_auto = ""
-                            ov_needs_cleanup = True
-                if ov_needs_cleanup:
-                    clear_auto_status(portal, uid)
-                out_users.append({
-                    "id": uid,
-                    "displayName": uid,
-                    "email": "",
-                    "online": ov_online,
-                    "idle": ov_idle and ov_online,
-                    "afd": ov_afd,
-                    "status": ov.get("status", ""),
-                    "inferred": bool(ov.get("inferred", False)),
-                    "autoStatus": ov_auto,
-                    "lastSeen": ov.get("lastHeartbeat") or ov.get("lastDashboardActivity") or "",
-                })
-
-        # Also surface the caller's own presence record (for the modal to know "me")
-        my_presence = load_user_presence(portal, user_id)
-        my_last_read = load_user_last_read_dms(portal, user_id)
-
-        # Apply same auto-status expiration to the caller's own record
-        my_auto_status = my_presence.get("autoStatus", "")
-        if my_auto_status:
-            my_last_dash = self._parse_iso_datetime(my_presence.get("lastDashboardActivity") or "")
-            if my_last_dash and (now - my_last_dash).total_seconds() > PRESENCE_AUTO_STATUS_TIMEOUT_S:
-                my_auto_status = ""
-                clear_auto_status(portal, user_id)
-
-        _json_response(
-            self,
-            200,
-            {
-                "users": out_users,
-                "me": {
-                    "id": user_id,
-                    "email": my_email,
-                    "status": my_presence.get("status", ""),
-                    "inferred": bool(my_presence.get("inferred") or False),
-                    "autoStatus": my_auto_status,
-                    "lastHeartbeat": my_presence.get("lastHeartbeat", ""),
-                },
-                "isAdmin": is_admin,
-                "myRecentDms": get_recent_dms_for_user(portal, user_id, 50),
-                "lastReadDms": my_last_read,
-            },
+        rows = db.query(
+            "SELECT id, email, display_name, first_name, last_name FROM users WHERE is_active = TRUE"
         )
+        out_users = []
+        for r in rows:
+            uid = str(r[0])
+            ov = overlays.get(uid) or {}
+            hb = _parse_iso_datetime(ov.get("lastHeartbeat") or "")
+            online = bool(hb and (now - hb).total_seconds() < 600)
+            afd = bool(hb and not online and (now - hb).total_seconds() < 10800)
+            auto_status = ov.get("autoStatus") or ""
+            if auto_status and not online:
+                auto_status = ""
+
+            out_users.append({
+                "id": uid,
+                "displayName": r[2] or f"{r[3] or ''} {r[4] or ''}".strip(),
+                "email": r[1] or "",
+                "online": online,
+                "afd": afd,
+                "status": ov.get("status", ""),
+                "inferred": bool(ov.get("inferred")),
+                "autoStatus": auto_status,
+            })
+
+        my_presence = load_user_presence(portal, str(user["id"]))
+        _json_response(self, 200, {
+            "users": out_users,
+            "me": {"id": user["id"], "email": user["email"], "status": my_presence.get("status", ""), "inferred": bool(my_presence.get("inferred"))},
+            "isAdmin": user.get("is_admin", False),
+        })
 
     def _handle_presence_heartbeat(self) -> None:
-        auth = _require_auth(self)
-        if not auth:
+        user = _require_auth(self)
+        if not user:
             return
-        portal, _token, user_id = auth
-        offline = False
-        visible = False
+        offline, visible = False, False
         try:
             body = _read_body(self)
             if body:
@@ -2044,73 +1999,59 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 visible = bool(payload.get("visible"))
         except (json.JSONDecodeError, ValueError):
             pass
-        touch_heartbeat(portal, user_id, offline=offline, visible=visible)
+        touch_heartbeat("vanguard", str(user["id"]), offline=offline, visible=visible)
         _json_response(self, 200, {"ok": True})
 
     def _handle_presence_status(self) -> None:
-        auth = _require_auth(self)
-        if not auth:
+        user = _require_auth(self)
+        if not user:
             return
-        portal, _token, user_id = auth
         try:
             payload = json.loads(_read_body(self) or b"{}")
         except json.JSONDecodeError:
             _json_response(self, 400, {"error": "Invalid JSON body"})
             return
-        # Only update status if explicitly provided in the payload
         has_status = "status" in payload
         status_text = str(payload.get("status") or "")[:200] if has_status else None
-        auto_status = payload.get("autoStatus")  # None if not provided
-        inferred = bool(payload.get("inferred") or False)
-        rec = set_status(portal, user_id, status_text, inferred=inferred, autoStatus=auto_status)
-        _json_response(self, 200, {"ok": True, "status": rec.get("status", ""), "inferred": rec.get("inferred", False), "autoStatus": rec.get("autoStatus", "")})
+        auto_status = payload.get("autoStatus")
+        inferred = bool(payload.get("inferred"))
+        rec = set_status("vanguard", str(user["id"]), status_text, inferred=inferred, autoStatus=auto_status)
+        _json_response(self, 200, {"ok": True, "status": rec.get("status", ""), "inferred": rec.get("inferred", False)})
 
     def _handle_presence_last_read(self) -> None:
-        """Persist a last-read timestamp for a DM conversation (cross-device read state)."""
-        auth = _require_auth(self)
-        if not auth:
+        user = _require_auth(self)
+        if not user:
             return
-        portal, _token, user_id = auth
         try:
             payload = json.loads(_read_body(self) or b"{}")
         except json.JSONDecodeError:
             _json_response(self, 400, {"error": "Invalid JSON body"})
             return
-        other = str(payload.get("with") or payload.get("other") or payload.get("to") or "").strip()
-        at = str(payload.get("at") or payload.get("ts") or "")
+        other = str(payload.get("with") or "").strip()
+        at = str(payload.get("at") or "")
         if not other:
             _json_response(self, 400, {"error": "with=<userId> is required"})
             return
-        set_last_read_dm(portal, user_id, other, at or None)
+        set_last_read_dm("vanguard", str(user["id"]), other, at or None)
         _json_response(self, 200, {"ok": True})
 
     def _handle_presence_dm_get(self) -> None:
-        auth = _require_auth(self)
-        if not auth:
+        user = _require_auth(self)
+        if not user:
             return
-        portal, _token, user_id = auth
-        query = parse_qs(urlparse(self.path).query)
-        with_id = (query.get("with") or [""])[0]
+        qs = parse_qs(urlparse(self.path).query)
+        with_id = (qs.get("with") or [""])[0]
         if not with_id:
             _json_response(self, 400, {"error": "with=<userId> is required"})
             return
-        offset_str = (query.get("offset") or [""])[0]
-        offset = 0
-        if offset_str:
-            try:
-                offset = int(offset_str)
-            except ValueError:
-                pass
-        # Mark incoming messages as read (for read receipts) before returning
-        mark_messages_read(portal, user_id, with_id)
-        msgs, has_more = get_conversation(portal, user_id, with_id, offset=offset)
+        mark_messages_read("vanguard", str(user["id"]), with_id)
+        msgs, has_more = get_conversation("vanguard", str(user["id"]), with_id)
         _json_response(self, 200, {"messages": msgs, "has_more": has_more})
 
     def _handle_presence_dm_post(self) -> None:
-        auth = _require_auth(self)
-        if not auth:
+        user = _require_auth(self)
+        if not user:
             return
-        portal, _token, user_id = auth
         try:
             payload = json.loads(_read_body(self) or b"{}")
         except json.JSONDecodeError:
@@ -2121,411 +2062,33 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not to_id or not text:
             _json_response(self, 400, {"error": "to and text are required"})
             return
-        reply_to = payload.get("reply_to")
-        reply_text = payload.get("reply_text")
-        msg = append_dm(portal, user_id, to_id, text, reply_to, reply_text)
+        msg = append_dm("vanguard", str(user["id"]), to_id, text, payload.get("reply_to"), payload.get("reply_text"))
         _json_response(self, 200, {"ok": True, "message": msg})
 
     def _handle_presence_dm_clear(self) -> None:
-        auth = _require_auth(self)
-        if not auth:
+        user = _require_auth(self)
+        if not user:
             return
-        portal, _token, user_id = auth
-        query = parse_qs(urlparse(self.path).query)
-        with_id = (query.get("with") or [""])[0]
+        qs = parse_qs(urlparse(self.path).query)
+        with_id = (qs.get("with") or [""])[0]
         if not with_id:
             _json_response(self, 400, {"error": "with=<userId> is required"})
             return
-        clear_conversation(portal, user_id, with_id)
+        clear_conversation("vanguard", str(user["id"]), with_id)
         _json_response(self, 200, {"ok": True})
 
-    def _maybe_touch_crm_activity_for_current_request(self) -> None:
-        """Best-effort resolution of the current user from the session cookie and touch CRM activity.
-        Never sends error responses; used from the generic proxy path.
-        """
-        try:
-            token = _session_token(self)
-            if not token:
-                return
-            portal = _portal_base(self)
-            if not portal:
-                return
-            # Resolve user id without using _require_auth (which would send 4xx/5xx on failure)
-            user_id = _fetch_crm_user_id(portal, token)
-            if user_id:
-                touch_crm_activity(portal, user_id)
-        except Exception:
-            # Never let presence tracking break a real proxy response
-            pass
 
-    def _parse_iso_datetime(self, value: str):
-        raw = str(value or "").strip()
-        if not raw:
-            return None
-        try:
-            if raw.endswith("Z"):
-                raw = raw[:-1] + "+00:00"
-            dt = datetime.fromisoformat(raw)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt.astimezone(timezone.utc)
-        except Exception:
-            return None
-
-    def _handle_batch_opportunity_tags(self) -> None:
-        """Batch-fetch tags for multiple opportunity IDs in parallel.
-        GET /api/batch-opportunity-tags?ids=1,2,3
-        Returns {"tags": {"1": [...], "2": [...], ...}}
-        """
-        auth = _require_auth(self)
-        if not auth:
-            return
-        portal, token, _user_id = auth
-        qs = parse_qs(urlparse(self.path).query)
-        raw = qs.get("ids", [None])[0]
-        if not raw:
-            _json_response(self, 400, {"error": "Missing ids parameter"})
-            return
-        ids = [x.strip() for x in raw.split(",") if x.strip().isdigit()]
-        if not ids:
-            _json_response(self, 400, {"error": "No valid ids provided"})
-            return
-
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        result: dict[str, list[Any]] = {}
-        base_url = portal.rstrip("/")
-
-        def fetch_tags(opp_id: str) -> tuple[str, list[Any]]:
-            url = f"{base_url}/api/2.0/crm/opportunity/tag/{opp_id}"
-            req = urllib.request.Request(
-                url,
-                headers={"Accept": "application/json", "Authorization": token},
-                method="GET",
-            )
-            try:
-                with urllib.request.urlopen(req, context=_ssl_context(), timeout=15) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    tags = data.get("response") or data.get("result") or data
-                    if isinstance(tags, list):
-                        return opp_id, tags
-                    return opp_id, []
-            except Exception:
-                return opp_id, []
-
-        with ThreadPoolExecutor(max_workers=12) as pool:
-            futures = {pool.submit(fetch_tags, oid): oid for oid in ids}
-            for fut in as_completed(futures):
-                oid, tags = fut.result()
-                result[oid] = tags
-
-        _json_response(self, 200, {"tags": result})
-
-    def _handle_crm_proxy(self, method: str) -> None:
-        path = urlparse(self.path).path
-        # Strip /crm-proxy/ prefix to get the actual CRM path
-        target = path[len("/crm-proxy"):]  # e.g., /Default.aspx
-        if not target.startswith("/"):
-            target = "/" + target
-        portal = _portal_base(self)
-        if not portal:
-            self.send_error(400, "Portal not configured")
-            return
-        jar = cookies.SimpleCookie(self.headers.get("Cookie", ""))
-        token = jar.get(SESSION_COOKIE)
-        if token is None:
-            self.send_error(401, "Not authenticated")
-            return
-        url = f"{portal}{target}"
-        headers = {"Authorization": token.value, "Accept": "*/*"}
-        req = urllib.request.Request(url, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(req, context=_ssl_context(), timeout=120) as resp:
-                body = resp.read()
-                ctype = resp.headers.get_content_type() or "text/html"
-        except urllib.error.HTTPError as exc:
-            body = exc.read()
-            ctype = exc.headers.get_content_type() if exc.headers else "text/html"
-            self.send_response(exc.code)
-        except urllib.error.URLError as exc:
-            self.send_response(502)
-            self.send_header("Content-Type", "text/plain")
-            self.end_headers()
-            self.wfile.write(str(exc.reason).encode("utf-8"))
-            return
-        else:
-            self.send_response(200)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
-        # Explicitly strip X-Frame-Options to allow iframe embedding
-        self.end_headers()
-        self.wfile.write(body)
-
-    def _handle_api_get(self) -> None:
-        api_path = urlparse(self.path).path
-
-        # Presence / Team endpoints (before any other /api/ handling or proxy fallback).
-        # Use exact match on the path (query is stripped by .path). This must come early
-        # so direct /api/presence/* calls from the client are not treated as proxied CRM calls.
-        if api_path.startswith("/api/presence"):
-            if api_path == "/api/presence/users":
-                self._handle_presence_users()
-                return
-            if api_path == "/api/presence":
-                self._handle_presence_get()
-                return
-            if api_path == "/api/presence/dm":
-                self._handle_presence_dm_get()
-                return
-            # Unknown /api/presence/* path -> explicit 404 (do not fall through to proxy logic)
-            self.send_error(404)
-            return
-
-        if api_path == "/api/event-log":
-            self._handle_event_log_get()
-            return
-        if api_path == "/api/event-log/users":
-            self._handle_event_log_users()
-            return
-        if api_path == "/api/event-log/all":
-            self._handle_event_log_admin_get()
-            return
-        if api_path == "/api/health":
-            self._handle_health_check()
-            return
-
-        if api_path == "/api/batch-opportunity-tags":
-            self._handle_batch_opportunity_tags()
-            return
-        if api_path == "/api/user-profile":
-            self._handle_user_profile_get()
-            return
-        if api_path == "/api/dashboard-notes":
-            self._handle_dashboard_notes_get()
-            return
-        if api_path == "/api/calendar/feed":
-            self._handle_calendar_feed()
-            return
-        if api_path == "/api/config":
-            _json_response(
-                self,
-                200,
-                {
-                    "portalUrl": PORTAL_URL or DEFAULT_PORTAL,
-                    "defaultPortalConfigured": bool(PORTAL_URL or DEFAULT_PORTAL),
-                    "version": APP_VERSION,
-                },
-            )
-            return
-        if api_path == "/api/changelog":
-            changelog_path = Path(__file__).parent / "CHANGELOG.md"
-            if changelog_path.exists():
-                body = changelog_path.read_text("utf-8")
-            else:
-                body = "# Changelog\n\nNo changelog available."
-            self.send_response(200)
-            self.send_header("Content-Type", "text/markdown; charset=utf-8")
-            self.send_header("Content-Length", str(len(body.encode("utf-8"))))
-            self.end_headers()
-            self.wfile.write(body.encode("utf-8"))
-            return
-        if api_path == "/api/session":
-            jar = cookies.SimpleCookie(self.headers.get("Cookie", ""))
-            _json_response(self, 200, {"authenticated": SESSION_COOKIE in jar})
-            return
-        if api_path == "/api/check-admin":
-            self._handle_check_admin()
-            return
-        if api_path == "/api/bot-customers":
-            self._handle_bot_customers_list()
-            return
-        if api_path == "/api/bot/me":
-            self._handle_bot_me()
-            return
-        if api_path == "/api/bot/deals":
-            self._handle_bot_deals()
-            return
-        if api_path == "/api/bot/categories":
-            self._handle_bot_categories()
-            return
-        if api_path == "/api/bot/tags":
-            self._handle_bot_tags()
-            return
-        if api_path == "/api/bot/usage":
-            self._handle_bot_usage()
-            return
-
-        # Client-side mail message fetch (uses filehandler.ashx like the CRM MailViewer)
-        # Client calls api('/api/mail/message/...') which becomes /api/proxy/api/mail/message/...
-        m = re.match(r"^/api/proxy/api/mail/message/(\d+)$", api_path)
-        if m:
-            self._handle_mail_message_get(int(m.group(1)))
-            return
-
-        route = self._api_route()
-        if not route:
-            self.send_error(404)
-            return
-        api_path, query = route
-
-        # Server-side response cache (GET only, specific endpoints)
-        ttl = _proxy_cache_ttl(api_path)
-        force_refresh = bool(self.headers.get("X-Force-Refresh"))
-        if ttl is not None and not force_refresh:
-            portal = _portal_base(self)
-            token = _session_token(self) or ""
-            ck = _cache_key("GET", api_path, query, portal, token)
-            cached = _proxy_cache.get(ck)
-            if cached is not None:
-                status, body, ctype = cached
-                self.send_response(status)
-                self.send_header("Content-Type", ctype or "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_header("X-Proxy-Cache", "HIT")
-                self.end_headers()
-                self.wfile.write(body)
-                return
-
-        status, body, ctype = _proxy_request(self, "GET", api_path, query)
-
-        # Cache successful GET responses
-        if ttl is not None and 200 <= status < 400 and not force_refresh:
-            portal = _portal_base(self)
-            token = _session_token(self) or ""
-            ck = _cache_key("GET", api_path, query, portal, token)
-            _proxy_cache.set(ck, (status, body, ctype), ttl)
-
-        # Best-effort: record CRM activity for presence (only when we can resolve the user without failing the response)
-        if status < 400 and ("/crm/" in api_path.lower() or "/people/" in api_path.lower()):
-            self._maybe_touch_crm_activity_for_current_request()
-        self.send_response(status)
-        self.send_header("Content-Type", ctype or "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        if force_refresh:
-            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-            self.send_header("X-Proxy-Cache", "BYPASS-FORCE")
-        self.end_headers()
-        self.wfile.write(body)
-
-    def _handle_api_post_put(self, method: str) -> None:
-        api_path = urlparse(self.path).path
-
-        # Presence endpoints (before other /api/ or proxy fallback). Startswith guard + explicit 404
-        # for unknown presence paths so they never leak to the CRM proxy logic.
-        if api_path.startswith("/api/presence"):
-            if api_path == "/api/presence/heartbeat" and method == "POST":
-                self._handle_presence_heartbeat()
-                return
-            if api_path == "/api/presence/status" and method == "POST":
-                self._handle_presence_status()
-                return
-            if api_path == "/api/presence/last-read" and method == "POST":
-                self._handle_presence_last_read()
-                return
-            if api_path == "/api/presence/dm" and method == "POST":
-                self._handle_presence_dm_post()
-                return
-            if api_path == "/api/presence/dm" and method == "DELETE":
-                self._handle_presence_dm_clear()
-                return
-            # Unknown /api/presence/* + method -> 404 (do not proxy)
-            self.send_error(404)
-            return
-
-        if api_path == "/api/event-log" and method == "PUT":
-            self._handle_event_log_put()
-            return
-
-        if api_path == "/api/user-profile" and method == "PUT":
-            self._handle_user_profile_put()
-            return
-        if api_path == "/api/dashboard-notes" and method == "PUT":
-            self._handle_dashboard_notes_put()
-            return
-
-        # Bot-customers endpoints
-        if api_path.startswith("/api/bot-customers"):
-            if api_path == "/api/bot-customers/generate-code" and method == "POST":
-                self._handle_bot_customers_generate_code()
-                return
-            if api_path == "/api/bot-customers/cancel-code" and method == "POST":
-                self._handle_bot_customers_cancel_code()
-                return
-            if api_path == "/api/bot-customers/verify-code" and method == "POST":
-                self._handle_bot_customers_verify_code()
-                return
-            if api_path == "/api/bot-customers/mapping" and method == "DELETE":
-                self._handle_bot_customers_unlink()
-                return
-            if api_path == "/api/bot-customers/nickname" and method == "PUT":
-                self._handle_bot_customers_set_nickname()
-                return
-            self.send_error(404)
-            return
-
-        if api_path == "/api/bot/note" and method == "POST":
-            self._handle_bot_note()
-            return
-        if api_path == "/api/bot/send-message" and method == "POST":
-            self._handle_bot_send_message()
-            return
-
-        route = self._api_route()
-        if not route:
-            self.send_error(404)
-            return
-        api_path, query = route
-        body = _read_body(self)
-        incoming_ct = self.headers.get("Content-Type", "")
-        proxy_ct = None
-        if body and incoming_ct:
-            if "multipart/form-data" in incoming_ct.lower():
-                proxy_ct = incoming_ct
-            elif "application/json" in incoming_ct.lower():
-                proxy_ct = "application/json"
-            elif "application/x-www-form-urlencoded" in incoming_ct.lower():
-                proxy_ct = incoming_ct
-        status, resp_body, ctype = _proxy_request(
-            self, method, api_path, query, body if body else None, content_type=proxy_ct
-        )
-        if status < 400 and ("/crm/" in api_path.lower() or "/people/" in api_path.lower()):
-            self._maybe_touch_crm_activity_for_current_request()
-        # Invalidate proxy cache on successful mutations so long TTLs are safe.
-        if status < 400:
-            p = api_path.lower()
-            if "/crm/opportunity/tag" in p or re.search(r"/crm/opportunity/\d+/tag", p):
-                _proxy_cache.invalidate_prefix("GET:/api/2.0/crm/opportunity/tag")
-                _proxy_cache.invalidate_prefix("GET:/api/2.0/crm/opportunity/filter")
-                # Also invalidate the single-opp cache line for the affected opportunity
-                m = re.search(r"/crm/opportunity/(\d+)", p)
-                if m:
-                    _proxy_cache.invalidate_prefix(f"GET:/api/2.0/crm/opportunity/{m.group(1)}")
-            elif "/crm/opportunity/stage" in p:
-                _proxy_cache.invalidate_prefix("GET:/api/2.0/crm/opportunity/stage")
-            elif "/crm/opportunity/customfield" in p or "/customfield/" in p:
-                _proxy_cache.invalidate_prefix("GET:/api/2.0/crm/opportunity/")  # nuke all opp caches (rare mutation)
-            elif "/crm/opportunity/" in p and method in ("PUT", "POST", "DELETE"):
-                # Opp update — invalidate filter results + this specific opp's single-opp cache line
-                _proxy_cache.invalidate_prefix("GET:/api/2.0/crm/opportunity/filter")
-                _proxy_cache.invalidate_prefix(f"GET:{api_path}")
-            elif "/crm/history" in p:
-                _proxy_cache.invalidate_prefix("GET:/api/2.0/crm/history")
-        self.send_response(status)
-        self.send_header("Content-Type", ctype or "application/json")
-        self.send_header("Content-Length", str(len(resp_body)))
-        self.end_headers()
-        self.wfile.write(resp_body)
-
+# ── Main ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    if not PUBLIC.is_dir():
-        raise SystemExit(f"Missing public directory: {PUBLIC}")
     server = ThreadingHTTPServer(("0.0.0.0", PORT), KanbanHandler)
-    print(f"CRM Kanban dashboard: http://127.0.0.1:{PORT}")
-    if PORTAL_URL:
-        print(f"OnlyOffice portal (default): {PORTAL_URL}")
-    else:
-        print("Set ONLYOFFICE_PORTAL_URL or enter portal URL in the login screen.")
-    server.serve_forever()
+    print(f"Vanguard CRM v3.0 starting on port {PORT}")
+    print(f"Version: {APP_VERSION}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        server.shutdown()
 
 
 if __name__ == "__main__":
