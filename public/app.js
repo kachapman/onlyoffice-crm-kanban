@@ -18791,7 +18791,7 @@ document.addEventListener("visibilitychange", () => {
     setTimeout(() => {
       for (const group of state.groups) {
         if (group._el && !tileBodyCollapsed(`group-${group.id}`)) {
-          observeOpportunityCardsInGroup(group);
+          // observeOpportunityCardsInGroup(group); // disabled to prevent flash; original hover only
         }
       }
     }, 500);
