@@ -8551,42 +8551,34 @@ function layoutSideBySideDealEditAndBookmark() {
 /* Upload a single file for note attachment using the native CRM handler.
    Returns {id, title} on success. Throws on failure (25MB check + network/CRM error).
    Uses state.currentUserId (from loadCurrentUser). */
-async function uploadAttachmentForNote(file) {
+async function uploadAttachmentForNote(file, oppId) {
   if (!file) throw new Error("No file");
   if (file.size > 25 * 1024 * 1024) {
     throw new Error(`File too large: ${file.name} (max 25 MB)`);
   }
+  const id = Number(oppId);
+  if (!Number.isFinite(id) || id <= 0) {
+    throw new Error("Opportunity id is required for attachment upload");
+  }
   if (!state.currentUserId) {
-    // Ensure we have it (safe to call; it is idempotent-ish)
     try { await loadCurrentUser(); } catch {}
   }
-  throw new Error("File upload not yet implemented (Phase 2E). Use the photo gallery after upload support is added.");
 
-  // Placeholder — upload not yet supported on v2 backend
   const fd = new FormData();
   fd.append("file", file);
 
-  const res = await fetch("/api/v2/projects/0/photos", {
+  const res = await fetch(`/api/v2/projects/${id}/documents`, {
     method: "POST",
     body: fd,
     credentials: "same-origin",
   });
   if (!res.ok) throw new Error(`Upload failed for ${file.name} (${res.status})`);
-  const text = await res.text();
-  let data = null;
-  try { data = JSON.parse(text); } catch {}
-  if (!data || !data.Success) {
-    try {
-      const m = text.match(/\{[\s\S]*\}/);
-      if (m) data = Function('"use strict";return (' + m[0] + ")")();
-    } catch {}
+  const data = await res.json();
+  if (!data || !data.id) {
+    throw new Error((data && data.error) || `Upload failed for ${file.name}`);
   }
-  if (!data || !data.Success) {
-    const msg = (data && data.Message) || (data && data.message) || `Upload failed for ${file.name}`;
-    throw new Error(msg);
-  }
-  let fileId = data.Data || data.data || data.id || data.Id || null;
-  if (fileId == null) {
+  return { id: data.id, title: data.title || file.name, fileSize: data.fileSize, mimeType: data.mimeType };
+}
     throw new Error(`Upload response missing file ID for ${file.name}`);
   }
   if (typeof fileId === "object") fileId = fileId.id || fileId.Id || fileId.Data || fileId.data || null;
@@ -8937,7 +8929,7 @@ async function submitDealEditForm(e) {
         // Upload all files in parallel to avoid sequential blocking (each upload is a full HTTP round-trip)
         const uploads = files.map(async (f) => {
           try {
-            const up = await uploadAttachmentForNote(f);
+            const up = await uploadAttachmentForNote(f, oppId);
             return { file: f, up, error: null };
           } catch (e) {
             return { file: f, up: null, error: e };
@@ -9321,7 +9313,7 @@ async function submitQuickNoteForm(e) {
       // Upload all files in parallel to avoid sequential blocking
       const uploads = files.map(async (f) => {
         try {
-          const up = await uploadAttachmentForNote(f);
+          const up = await uploadAttachmentForNote(f, oppId);
           return { file: f, up, error: null };
         } catch (e) {
           return { file: f, up: null, error: e };
@@ -14546,12 +14538,16 @@ function extractHistoryAttachments(ev) {
       raw.Url ||
       raw.link ||
       raw.Link;
+    // v2 attachments from server have filename + filePath; build local editor URL
+    if (!url && id && raw.filename) {
+      url = `/api/v2/documents/${id}/editor-config`;
+    }
     if (!url && id) url = portalFileDownloadUrl(id);
     if (!url && !title) return;
     const file = {
       id: id != null ? String(id) : "",
       title: String(title || "Attachment").trim(),
-      url: url ? portalAbsoluteUrl(url) : "",
+      url: url ? (url.startsWith("/") ? url : portalAbsoluteUrl(url)) : "",
     };
     const key = attachmentDedupeKey(file);
     if (!key || seen.has(key)) return;
@@ -15005,16 +15001,16 @@ function renderHistoryAttachmentsAside(parent, attachments) {
   const aside = document.createElement("aside");
   aside.className = "opp-preview-history-attachments";
   aside.setAttribute("aria-label", "Attachments");
-  const base = (state.portalUrl || "").replace(/\/$/, "");
   for (const file of attachments) {
-    const fid = file.id ?? file.fileId ?? "";
+    const docId = file.id ?? file.documentId ?? file.fileId ?? "";
+    const filename = file.filename || file.title || file.name || "Attachment";
     const a = document.createElement("a");
     a.className = "opp-preview-attachment-link";
-    a.href = fid ? `${base}/Products/Files/DocEditor.aspx?fileid=${encodeURIComponent(fid)}` : (file.url || "#");
+    a.href = docId ? `/api/v2/documents/${docId}/editor-config` : (file.url || "#");
     a.target = "_blank";
     a.rel = "noopener noreferrer";
-    a.title = file.title;
-    a.textContent = file.title;
+    a.title = filename;
+    a.textContent = filename;
     aside.appendChild(a);
   }
   parent.appendChild(aside);
@@ -15374,10 +15370,8 @@ async function fetchOpportunityDocuments(oppId) {
   const id = Number(oppId);
   if (!Number.isFinite(id) || id <= 0) return [];
   try {
-    // CRM opportunity attached files endpoint (proxy will forward)
-    const path = `/api/v2/projects/${id}/photos`;
-    const data = await api(path);
-    return unwrap(data);
+    const data = await api(`/api/v2/projects/${id}/documents`);
+    return (data && data.documents) ? data.documents : unwrap(data);
   } catch {
     return [];
   }
@@ -17940,12 +17934,11 @@ function renderOpportunityPreviewContent(container, data) {
     const ul = document.createElement("ul");
     ul.className = "opp-preview-documents";
     for (const d of docs) {
+      const docId = d.id ?? d.ID ?? "";
       const li = document.createElement("li");
-      const fid = d.id ?? d.ID ?? d.fileId ?? d.FileId ?? "";
-      const base = (state.portalUrl || "").replace(/\/$/, "");
 
       const a = document.createElement("a");
-      a.href = fid ? `${base}/Products/Files/DocEditor.aspx?fileid=${fid}` : "#";
+      a.href = docId ? `/api/v2/documents/${docId}/editor-config` : "#";
       a.target = "_blank";
       a.rel = "noopener noreferrer";
       a.textContent = d.title || d.Title || d.name || d.Name || "Document";
@@ -17953,9 +17946,9 @@ function renderOpportunityPreviewContent(container, data) {
       a.style.textDecoration = "none";
       li.appendChild(a);
 
-      if (fid) {
+      if (docId) {
         const dl = document.createElement("a");
-        dl.href = portalFileDownloadUrl ? portalFileDownloadUrl(fid) : `${base}/Products/Files/HttpHandlers/filehandler.ashx?action=download&fileid=${fid}`;
+        dl.href = `/api/v2/documents/${docId}`;
         dl.title = "Download";
         dl.setAttribute("aria-label", "Download document");
         dl.setAttribute("download", "");

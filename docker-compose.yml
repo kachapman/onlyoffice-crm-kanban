@@ -1,6 +1,6 @@
 services:
   dashboard:
-    container_name: vanguard-crm-v3
+    container_name: sietch-crm
     build: .
     restart: unless-stopped
     env_file:
@@ -10,11 +10,13 @@ services:
       COOKIE_SECURE: "true"
       DB_HOST: db
       DB_PORT: "5432"
+      DOCS_INTERNAL_URL: http://docserver:8080
     depends_on:
       db:
         condition: service_healthy
     volumes:
       - dashboard-data:/app/data
+      - dashboard-uploads:/app/uploads
     ports:
       - "127.0.0.1:8766:8766"
     networks:
@@ -22,7 +24,7 @@ services:
 
   db:
     image: postgres:16-alpine
-    container_name: vanguard-db
+    container_name: sietch-db
     restart: always
     env_file:
       - .env
@@ -41,9 +43,35 @@ services:
     networks:
       - vanguard-internal
 
+  docserver:
+    image: onlyoffice/documentserver:latest
+    container_name: sietch-docserver
+    restart: unless-stopped
+    environment:
+      - JWT_SECRET=${DOCS_JWT_SECRET:-change_me_in_production}
+      - REDIS_SERVER_HOST=redis
+      - REDIS_SERVER_PORT=6379
+    depends_on:
+      - redis
+    volumes:
+      - docserver-data:/var/www/onlyoffice/Data
+      - docserver-logs:/var/log/onlyoffice
+    networks:
+      - vanguard-internal
+
+  redis:
+    image: redis:7-alpine
+    container_name: sietch-redis
+    restart: unless-stopped
+    networks:
+      - vanguard-internal
+
 volumes:
   dashboard-data:
+  dashboard-uploads:
   db-data:
+  docserver-data:
+  docserver-logs:
 
 networks:
   vanguard-internal:

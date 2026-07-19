@@ -40,6 +40,30 @@ RETRY_BASE_DELAY = 1.0
 ATTACHMENT_DIR = Path(__file__).resolve().parent / "data" / "attachments"
 MIGRATION_REPORT = Path(__file__).resolve().parent / "migration_report.txt"
 
+
+MIME_TYPES = {
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "doc": "application/msword",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "xls": "application/vnd.ms-excel",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "ppt": "application/vnd.ms-powerpoint",
+    "pdf": "application/pdf",
+    "txt": "text/plain",
+    "csv": "text/csv",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "gif": "image/gif",
+    "bmp": "image/bmp",
+    "tiff": "image/tiff",
+    "webp": "image/webp",
+}
+
+
+def _guess_mime_type(ext: str) -> str:
+    return MIME_TYPES.get(ext.lower(), "application/octet-stream")
+
 # Map CRM user IDs to new v3 user IDs
 _crm_id_map: dict[str, dict[str, int]] = {
     "users": {},        # crm_user_id -> v3 user.id
@@ -90,20 +114,35 @@ def _crm_get(portal: str, token: str, path: str, retries: int = MAX_RETRIES) -> 
     return None
 
 
-def _crm_get_raw(portal: str, token: str, path: str) -> bytes | None:
-    """GET raw bytes (for file downloads)."""
+def _crm_get_raw(portal: str, token: str, path: str, retries: int = MAX_RETRIES) -> bytes | None:
+    """GET raw bytes (for file downloads) with retry."""
     url = f"{portal.rstrip('/')}{path}"
-    try:
-        req = urllib.request.Request(
-            url,
-            headers={"Accept": "application/json, */*", "Authorization": token},
-            method="GET",
-        )
-        with urllib.request.urlopen(req, context=_ssl_context(), timeout=60) as resp:
-            return resp.read()
-    except Exception as exc:
-        print(f"  [warn] Failed to download {path}: {exc}")
-        return None
+    for attempt in range(retries + 1):
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={"Accept": "application/json, */*", "Authorization": token},
+                method="GET",
+            )
+            with urllib.request.urlopen(req, context=_ssl_context(), timeout=60) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code in (429, 503) and attempt < retries:
+                delay = RETRY_BASE_DELAY * (2 ** attempt)
+                print(f"  [retry {attempt+1}] HTTP {exc.code} on {path}, waiting {delay}s...")
+                time.sleep(delay)
+                continue
+            print(f"  [warn] Failed to download {path}: HTTP {exc.code}")
+            return None
+        except Exception as exc:
+            if attempt < retries:
+                delay = RETRY_BASE_DELAY * (2 ** attempt)
+                print(f"  [retry {attempt+1}] download error on {path}: {exc}, waiting {delay}s...")
+                time.sleep(delay)
+                continue
+            print(f"  [warn] Failed to download {path}: {exc}")
+            return None
+    return None
 
 
 def _unwrap(data: Any) -> Any:
@@ -496,8 +535,8 @@ def _migrate_opportunities(conn, portal: str, token: str) -> tuple[int, int, int
 
                     # Notify users from this event
                     notify_list = h.get("notifyUserList") or h.get("NotifyUserList") or []
+                    event_id = cur.fetchone()[0]
                     if isinstance(notify_list, list):
-                        event_id = cur.fetchone()[0] if False else cur.lastrowid
                         for nu in notify_list:
                             if isinstance(nu, dict):
                                 nu_crm_id = str(nu.get("id") or nu.get("ID") or "")
@@ -525,20 +564,30 @@ def _migrate_opportunities(conn, portal: str, token: str) -> tuple[int, int, int
                     file_id = str(f_item.get("id") or f_item.get("ID") or "")
                     file_name = str(f_item.get("name") or f_item.get("Name") or f"file_{file_id}").strip()
                     file_size = int(f_item.get("size") or f_item.get("Size") or 0)
+                    file_ext = Path(file_name).suffix.lstrip(".").lower()
+                    mime_type = _guess_mime_type(file_ext)
+
+                    # Map file owner to v3 user
+                    owner = f_item.get("createdBy") or f_item.get("CreatedBy") or f_item.get("owner") or f_item.get("Owner") or {}
+                    owner_crm_id = str(owner.get("id") or owner.get("ID") or "") if isinstance(owner, dict) else ""
+                    v3_uploader_id = _crm_id_map["users"].get(owner_crm_id) or v3_author_id
 
                     # Download file
                     opp_dir = ATTACHMENT_DIR / str(v3_opp_id)
                     opp_dir.mkdir(parents=True, exist_ok=True)
                     safe_name = re.sub(r'[^\w.\-]', '_', file_name)
-                    file_path = opp_dir / safe_name
+                    if not safe_name:
+                        safe_name = f"file_{file_id}"
+                    unique_name = f"{int(time.time())}_{safe_name}"
+                    file_path = opp_dir / unique_name
 
                     raw = _crm_get_raw(portal, token, f"/api/2.0/files/{file_id}")
                     if raw:
                         file_path.write_bytes(raw)
                         cur.execute(
-                            """INSERT INTO history_attachments (filename, file_path, file_size, uploaded_by)
-                               VALUES (%s, %s, %s, %s)""",
-                            (file_name, str(file_path.relative_to(Path(__file__).resolve().parent)), file_size, v3_author_id),
+                            """INSERT INTO history_attachments (event_id, filename, file_path, file_size, mime_type, uploaded_by)
+                               VALUES (%s, %s, %s, %s, %s, %s)""",
+                            (event_id, file_name, str(file_path.relative_to(Path(__file__).resolve().parent)), file_size, mime_type, v3_uploader_id),
                         )
                         attachment_count += 1
             except Exception as exc:

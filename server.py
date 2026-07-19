@@ -7,18 +7,23 @@ All data owned locally. Zero external API calls.
 
 from __future__ import annotations
 
+import base64
 import gzip
+import hashlib
+import hmac
 import io
 import json
 import os
 import re
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from http import cookies
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlencode
 
 from ics_calendar import _MAX_ICS_BYTES, is_allowed_calendar_url, parse_ics_calendar
 
@@ -78,6 +83,10 @@ COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "false").lower() in ("1", "true"
 PRESENCE_AUTO_STATUS_TIMEOUT_S = 300
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 PHOTO_STORAGE_PATH = Path(os.getenv("PHOTO_STORAGE_PATH", str(DATA_DIR / "photos")))
+DOCUMENT_STORAGE_PATH = Path(os.getenv("DOCUMENT_STORAGE_PATH", str(DATA_DIR / "documents")))
+DOCS_JWT_SECRET = os.environ.get("DOCS_JWT_SECRET", "")
+DOCS_INTERNAL_URL = os.environ.get("DOCS_INTERNAL_URL", "").rstrip("/")
+DOCS_PUBLIC_URL = os.environ.get("DOCS_PUBLIC_URL", "").rstrip("/")
 
 # ── DB init ────────────────────────────────────────────────────────────────────
 import db
@@ -147,6 +156,118 @@ def _parse_iso_datetime(value: str):
         return dt.astimezone(timezone.utc)
     except Exception:
         return None
+
+
+# ── JWT helpers (HS256, minimal stdlib implementation) ─────────────────────────
+
+
+def _b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def _b64url_decode(s: str) -> bytes:
+    pad = 4 - len(s) % 4
+    if pad != 4:
+        s += "=" * pad
+    return base64.urlsafe_b64decode(s.encode("ascii"))
+
+
+def _sign_jwt(payload: dict, secret: str) -> str:
+    header = {"alg": "HS256", "typ": "JWT"}
+    enc_header = _b64url_encode(json.dumps(header, separators=(",", ":")).encode("utf-8"))
+    enc_payload = _b64url_encode(json.dumps(payload, separators=(",", ":"), default=str).encode("utf-8"))
+    signing_input = f"{enc_header}.{enc_payload}".encode("utf-8")
+    sig = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    return f"{enc_header}.{enc_payload}.{_b64url_encode(sig)}"
+
+
+def _proxy_document_server(method: str, ds_path: str, body: bytes | None = None, headers: dict | None = None, timeout: int = 30) -> tuple:
+    """Forward a request to the internal OnlyOffice Document Server. Returns (status, body, content_type)."""
+    if not DOCS_INTERNAL_URL:
+        return 503, b'{"error": "Document Server not configured"}', "application/json"
+    url = f"{DOCS_INTERNAL_URL}{ds_path}"
+    req_headers = {"Accept": "application/json"}
+    if headers:
+        req_headers.update(headers)
+    req = urllib.request.Request(url, data=body, method=method, headers=req_headers, unverifiable=True)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read(), resp.headers.get("Content-Type", "application/json")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(), e.headers.get("Content-Type", "application/json")
+    except Exception:
+        return 502, b'{"error": "Document Server unreachable"}', "application/json"
+
+
+_EXT_TO_MIME = {
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "doc": "application/msword",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "xls": "application/vnd.ms-excel",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "ppt": "application/vnd.ms-powerpoint",
+    "pdf": "application/pdf",
+    "txt": "text/plain",
+    "csv": "text/csv",
+}
+
+
+def _guess_mime(filename: str) -> str:
+    ext = Path(filename).suffix.lstrip(".").lower()
+    return _EXT_TO_MIME.get(ext, "application/octet-stream")
+
+
+def _document_type_from_ext(ext: str) -> str:
+    ext = ext.lower()
+    if ext in ("docx", "doc", "txt", "rtf", "odt"):
+        return "word"
+    if ext in ("xlsx", "xls", "csv", "ods"):
+        return "cell"
+    if ext in ("pptx", "ppt", "odp"):
+        return "slide"
+    return "word"
+
+
+def _parse_multipart(body: bytes, content_type: str) -> dict:
+    """Minimal multipart/form-data parser. Returns {fieldName: {filename, data, content-type}}."""
+    # Parse boundary
+    ct_parts = [p.strip() for p in content_type.split(";")]
+    boundary = None
+    for part in ct_parts:
+        if part.startswith("boundary="):
+            boundary = part[len("boundary="):].strip('"')
+            break
+    if not boundary:
+        raise ValueError("boundary missing")
+    b_boundary = ("--" + boundary).encode("latin-1")
+    b_end = ("--" + boundary + "--").encode("latin-1")
+    parts = body.split(b_boundary)
+    result = {}
+    for part in parts[1:]:
+        part = part.lstrip(b"\r\n")
+        if part.startswith(b_end):
+            continue
+        try:
+            header_end = part.index(b"\r\n\r\n")
+        except ValueError:
+            continue
+        headers_raw = part[:header_end].decode("latin-1")
+        data = part[header_end + 4:]
+        if data.endswith(b"\r\n"):
+            data = data[:-2]
+        # parse Content-Disposition
+        cd_match = re.search(r'Content-Disposition:\s*form-data;\s*name="([^"]+)"(?:;\s*filename="([^"]+)")?', headers_raw, re.IGNORECASE)
+        if not cd_match:
+            continue
+        name = cd_match.group(1)
+        filename = cd_match.group(2)
+        ct_match = re.search(r'Content-Type:\s*([^\r\n]+)', headers_raw, re.IGNORECASE)
+        content_type_part = ct_match.group(1).strip() if ct_match else None
+        if filename:
+            result[name] = {"filename": filename, "data": data, "content-type": content_type_part}
+        else:
+            result[name] = {"data": data}
+    return result
 
 
 # ── Request Handler ────────────────────────────────────────────────────────────
@@ -576,6 +697,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if m:
             self._handle_history_replies_get(int(m.group(1)), int(m.group(2)))
             return
+        m = re.match(r"^/api/v2/projects/(\d+)/documents$", api_path)
+        if m:
+            self._handle_project_documents_get(int(m.group(1)))
+            return
 
         # ── v2 API: Other resources ──
         if api_path == "/api/v2/stages":
@@ -604,6 +729,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         if api_path == "/api/v2/history-categories":
             self._handle_history_categories_get()
+            return
+        m = re.match(r"^/api/v2/documents/(\d+)$", api_path)
+        if m:
+            self._handle_document_download(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/documents/(\d+)/editor-config$", api_path)
+        if m:
+            self._handle_document_editor_config(int(m.group(1)))
             return
 
         # ── Batch tags ──
@@ -711,6 +844,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if m and method == "POST":
             self._handle_history_reply_create(int(m.group(1)), int(m.group(2)))
             return
+        m = re.match(r"^/api/v2/projects/(\d+)/documents$", api_path)
+        if m and method == "POST":
+            self._handle_project_document_upload(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/documents/(\d+)/callback$", api_path)
+        if m and method == "POST":
+            self._handle_document_callback(int(m.group(1)))
+            return
 
         # ── v2 API: Resources ──
         if api_path == "/api/v2/stages" and method == "POST":
@@ -772,6 +913,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         m = re.match(r"^/api/v2/photo-folders/(\d+)$", api_path)
         if m and method == "DELETE":
             self._handle_photo_folder_delete(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/documents/(\d+)$", api_path)
+        if m and method == "DELETE":
+            self._handle_document_delete(int(m.group(1)))
             return
         m = re.match(r"^/api/v2/notifications/(\d+)/read$", api_path)
         if m and method == "PUT":
@@ -1075,6 +1220,19 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                LIMIT %s OFFSET %s""",
             (opp_id, count, start),
         )
+        event_ids = [r[0] for r in rows]
+        attachments_by_event: dict[int, list] = {}
+        if event_ids:
+            att_rows = db.query(
+                """SELECT id, event_id, filename, file_path, file_size, mime_type, uploaded_by
+                   FROM history_attachments WHERE event_id = ANY(%s)""",
+                (event_ids,),
+            )
+            for ar in att_rows:
+                attachments_by_event.setdefault(ar[1], []).append({
+                    "id": ar[0], "filename": ar[2], "filePath": ar[3],
+                    "fileSize": ar[4], "mimeType": ar[5], "uploadedBy": ar[6],
+                })
         events = []
         for r in rows:
             events.append({
@@ -1083,6 +1241,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 "created": r[6].isoformat() if r[6] else None,
                 "backdatedCreated": r[7].isoformat() if r[7] else None,
                 "author": r[8] or "",
+                "attachments": attachments_by_event.get(r[0], []),
             })
         _json_response(self, 200, events)
 
@@ -1113,6 +1272,23 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 )
             except (TypeError, ValueError):
                 pass
+        # Link uploaded document IDs as history attachments
+        file_ids = payload.get("fileIds") or []
+        for fid in file_ids:
+            try:
+                fid_int = int(fid)
+            except (TypeError, ValueError):
+                continue
+            doc = db.query(
+                "SELECT id, title, file_path, file_size, mime_type, uploaded_by FROM project_documents WHERE id = %s AND is_deleted = FALSE",
+                (fid_int,), fetch="one",
+            )
+            if doc:
+                db.execute(
+                    """INSERT INTO history_attachments (event_id, filename, file_path, file_size, mime_type, uploaded_by)
+                       VALUES (%s, %s, %s, %s, %s, %s)""",
+                    (event_id, doc[1], doc[2], doc[3], doc[4], doc[5]),
+                )
         _json_response(self, 201, {"id": event_id, "ok": True})
 
     def _handle_history_event_delete(self, event_id: int) -> None:
@@ -1618,6 +1794,172 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         db.execute("DELETE FROM project_photo_folders WHERE id = %s", (folder_id,))
         _json_response(self, 200, {"ok": True})
+
+    # ── Documents ─────────────────────────────────────────────────────────────
+
+    def _handle_project_documents_get(self, opp_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        rows = db.query(
+            """SELECT id, title, file_path, file_size, mime_type, uploaded_by, uploaded_at
+               FROM project_documents WHERE opportunity_id = %s AND is_deleted = FALSE
+               ORDER BY uploaded_at DESC""",
+            (opp_id,),
+        )
+        docs = []
+        for r in rows:
+            docs.append({
+                "id": r[0], "title": r[1], "filePath": r[2],
+                "fileSize": r[3], "mimeType": r[4], "uploadedBy": r[5],
+                "uploadedAt": r[6].isoformat() if r[6] else None,
+                "editUrl": f"/api/v2/documents/{r[0]}/editor-config",
+            })
+        _json_response(self, 200, {"documents": docs})
+
+    def _handle_project_document_upload(self, opp_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.startswith("multipart/form-data"):
+            _json_response(self, 400, {"error": "Expected multipart/form-data"})
+            return
+        try:
+            parsed = _parse_multipart(_read_body(self), content_type)
+        except Exception as exc:
+            _json_response(self, 400, {"error": f"Invalid multipart body: {exc}"})
+            return
+        file_info = parsed.get("file")
+        if not file_info:
+            _json_response(self, 400, {"error": "file field required"})
+            return
+        filename = file_info["filename"]
+        data = file_info["data"]
+        mime_type = file_info.get("content-type") or _guess_mime(filename)
+        safe_name = re.sub(r'[^\w.\-]', '_', filename)
+        if not safe_name:
+            safe_name = "document"
+        opp_dir = DOCUMENT_STORAGE_PATH / str(opp_id)
+        opp_dir.mkdir(parents=True, exist_ok=True)
+        # avoid collisions
+        unique_name = f"{int(time.time())}_{safe_name}"
+        file_path = opp_dir / unique_name
+        file_path.write_bytes(data)
+        file_size = len(data)
+        doc_id = db.insert_returning(
+            """INSERT INTO project_documents (opportunity_id, title, file_path, file_size, mime_type, uploaded_by)
+               VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+            (opp_id, filename, str(file_path.relative_to(ROOT)), file_size, mime_type, user["id"]),
+        )
+        _json_response(self, 201, {
+            "id": doc_id, "title": filename, "fileSize": file_size,
+            "mimeType": mime_type, "editUrl": f"/api/v2/documents/{doc_id}/editor-config",
+        })
+
+    def _handle_document_download(self, doc_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        row = db.query(
+            "SELECT opportunity_id, title, file_path, file_size, mime_type FROM project_documents WHERE id = %s AND is_deleted = FALSE",
+            (doc_id,), fetch="one",
+        )
+        if not row:
+            self.send_error(404)
+            return
+        opp_id, title, file_path, file_size, mime_type = row
+        full_path = ROOT / file_path
+        if not full_path.exists():
+            self.send_error(404)
+            return
+        data = full_path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", mime_type or "application/octet-stream")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", f'inline; filename="{title}"')
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _handle_document_editor_config(self, doc_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        row = db.query(
+            "SELECT opportunity_id, title, file_path, file_size, mime_type FROM project_documents WHERE id = %s AND is_deleted = FALSE",
+            (doc_id,), fetch="one",
+        )
+        if not row:
+            self.send_error(404)
+            return
+        opp_id, title, file_path, file_size, mime_type = row
+        if not DOCS_PUBLIC_URL:
+            _json_response(self, 503, {"error": "Document Server public URL not configured"})
+            return
+        if not DOCS_JWT_SECRET:
+            _json_response(self, 503, {"error": "Document Server JWT secret not configured"})
+            return
+        file_ext = Path(title).suffix.lstrip(".").lower() or "docx"
+        doc_type = _document_type_from_ext(file_ext)
+        # Public URL that Document Server will use to download the file
+        download_url = f"{DOCS_PUBLIC_URL}/api/v2/documents/{doc_id}/download"
+        key = _sign_jwt({"id": doc_id, "path": file_path, "ts": int(time.time())}, DOCS_JWT_SECRET)
+        config = {
+            "document": {
+                "fileType": file_ext,
+                "key": key,
+                "title": title,
+                "url": download_url,
+            },
+            "documentType": doc_type,
+            "editorConfig": {
+                "callbackUrl": f"{DOCS_PUBLIC_URL}/api/v2/documents/{doc_id}/callback",
+                "mode": "edit",
+                "user": {"id": str(user["id"]), "name": user.get("display_name") or user.get("email") or "User"},
+            },
+        }
+        token = _sign_jwt({"payload": config}, DOCS_JWT_SECRET)
+        config["token"] = token
+        _json_response(self, 200, config)
+
+    def _handle_document_delete(self, doc_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        db.execute(
+            "UPDATE project_documents SET is_deleted = TRUE, deleted_at = NOW() WHERE id = %s",
+            (doc_id,),
+        )
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_document_callback(self, doc_id: int) -> None:
+        """OnlyOffice Document Server save callback. Saves updated file if provided."""
+        try:
+            payload = json.loads(_read_body(self) or b"{}")
+        except json.JSONDecodeError:
+            _json_response(self, 200, {"error": 0})
+            return
+        status = payload.get("status")
+        if status in (2, 6):
+            url = payload.get("url")
+            if url:
+                try:
+                    with urllib.request.urlopen(url, timeout=60) as resp:
+                        data = resp.read()
+                    row = db.query(
+                        "SELECT file_path FROM project_documents WHERE id = %s AND is_deleted = FALSE",
+                        (doc_id,), fetch="one",
+                    )
+                    if row:
+                        file_path = ROOT / row[0]
+                        file_path.write_bytes(data)
+                        db.execute(
+                            "UPDATE project_documents SET file_size = %s WHERE id = %s",
+                            (len(data), doc_id),
+                        )
+                except Exception:
+                    pass
+        _json_response(self, 200, {"error": 0})
 
     # ── Batch Tags ──────────────────────────────────────────────────────────
 
