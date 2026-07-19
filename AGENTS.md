@@ -1,7 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** Phase 2H frontend fully completed: documents modal (JS + HTML + CSS) with sidebar scopes (Projects/My Docs/Company), toolbar with upload/delete/move/copy, drag-drop upload, right-click context menu (open/download/rename/move/copy/delete), double-click open editor; #documents-btn header button wired. Documents tab in project preview modal overhauled with icons, size, date, checkboxes, select-all, upload, batch delete. Backend committed in 1a2e654. Commits c5de6e5, [new] pushed. Phase 2H complete pending LAN testing.
+**Last session summary (for next resume):** Phase 2H fully completed and tested on LAN. Test server updated with all needed v2 API stubs. Documents button icon fixed (Tabler files). Refresh button removed from header. App + admin console + documents modal now work on test server. Commits bd4bf66, d0d4300, [new] pushed.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 

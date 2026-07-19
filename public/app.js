@@ -20721,7 +20721,6 @@ async function init() {
   bindMailInboxButton();
   bindDocumentsModal();
 
-  $("#refresh-btn").addEventListener("click", () => refreshAll({ force: true }));
   // logout-btn attached early in init() for robustness (prevents sign-out doing nothing if later code errors)
 
   // Show the correct screen immediately (paints login or app shell before heavy work).

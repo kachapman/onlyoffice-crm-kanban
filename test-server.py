@@ -378,7 +378,35 @@ class TestChaosHandler(SimpleHTTPRequestHandler):
         if path == "/api/v2/projects/simple":
             _json_response(self, 200, {"projects": [], "testMode": True})
             return
-            _json_response(self, 200, {"authenticated": True, "testMode": True})
+        if path == "/api/v2/stages":
+            _json_response(self, 200, {"stages": [], "testMode": True})
+            return
+        if path == "/api/v2/tags":
+            _json_response(self, 200, {"tags": [], "testMode": True})
+            return
+        if path == "/api/v2/custom-fields":
+            _json_response(self, 200, {"customFields": [], "testMode": True})
+            return
+        if path == "/api/v2/contacts":
+            _json_response(self, 200, {"contacts": [], "testMode": True})
+            return
+        if path == "/api/v2/users":
+            _json_response(self, 200, {"users": [], "testMode": True})
+            return
+        if path == "/api/v2/me":
+            _json_response(self, 200, {
+                "id": 999, "email": "test@test.com", "display_name": "Test User",
+                "is_admin": True, "testMode": True
+            })
+            return
+        if path == "/api/check-admin":
+            _json_response(self, 200, {"isAdmin": True, "testMode": True})
+            return
+        if path == "/api/v2/tasks":
+            _json_response(self, 200, {"tasks": [], "testMode": True})
+            return
+        if path == "/api/branding":
+            _json_response(self, 200, {"testMode": True})
             return
         if path == "/api/test/chaos":
             self._handle_chaos_control()
@@ -441,6 +469,19 @@ class TestChaosHandler(SimpleHTTPRequestHandler):
 
         if path == "/api/test/chaos":
             self._handle_chaos_control()
+            return
+
+        if path == "/api/v2/stages" and method == "POST":
+            _json_response(self, 200, {"id": 1, "testMode": True})
+            return
+        if path == "/api/v2/tags" and method == "POST":
+            _json_response(self, 200, {"id": 1, "testMode": True})
+            return
+        if path == "/api/v2/contacts" and method == "POST":
+            _json_response(self, 200, {"id": 1, "testMode": True})
+            return
+        if path == "/api/v2/custom-fields" and method == "POST":
+            _json_response(self, 200, {"id": 1, "testMode": True})
             return
 
         if path == "/api/v2/documents/personal/upload" or path == "/api/v2/documents/company/upload":
