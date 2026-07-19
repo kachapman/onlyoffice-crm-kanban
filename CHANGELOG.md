@@ -1,6 +1,50 @@
 # Changelog
 
-All notable changes to the CRM Kanban dashboard are documented here.
+All notable changes to the Sietch CRM dashboard are documented here.
+
+## [3.0.0] — 2026-07-18
+
+### Major Changes
+
+- **PostgreSQL migration.** Replaced OnlyOffice CRM dependency with self-contained PostgreSQL database. All data now lives in local database — no external CRM server required.
+- **New authentication system.** PBKDF2 password hashing, session cookies, password reset via SMTP. No more OnlyOffice Portal token dependency.
+- **New v2 REST API.** Complete rewrite of backend endpoints:
+  - `/api/v2/projects` — project CRUD with filtering
+  - `/api/v2/tasks` — task management
+  - `/api/v2/contacts` — contact directory
+  - `/api/v2/users` — user management
+  - `/api/v2/documents` — document storage
+  - `/api/v2/history` — event history with threaded replies
+  - `/api/v2/notifications` — user notifications
+- **OnlyOffice Document Server integration.** Documents now open in self-hosted Document Server for viewing and collaborative editing. No dependency on old OnlyOffice Portal for document access.
+- **Migration script.** One-time migration from OnlyOffice CRM to PostgreSQL. Preserves all projects, contacts, history events, tasks, and document files.
+- **Dead code removal.** Removed mutation queue system, crash banner, mail system, and OnlyOffice Portal URL handling from frontend (~500 lines removed).
+
+### Infrastructure
+
+- PostgreSQL 16 database (Alpine container)
+- OnlyOffice Document Server (for document editing)
+- Redis (session management for Document Server)
+- Docker Compose stack with internal networking
+
+### Breaking Changes
+
+- API paths changed from `/api/2.0/crm/*` to `/api/v2/*`
+- Authentication now uses session cookies instead of OnlyOffice Portal tokens
+- Document links now point to self-hosted Document Server
+
+### Files Changed
+
+- `init.sql` — Full PostgreSQL schema (34 tables)
+- `db.py` — PostgreSQL connection layer
+- `auth.py` — Authentication and session management
+- `smtp_client.py` — SMTP relay for password resets
+- `migrate_from_onlyoffice.py` — Migration script
+- `server.py` — Complete rewrite (direct DB queries, v2 API)
+- `docker-compose.yml` — Added PostgreSQL, Document Server, Redis
+- `Dockerfile` — Added psycopg2-binary, Pillow, ExifRead
+- `public/app.js` — API path swaps, dead code removal
+- `config.example.env` — Added DB, SMTP, Document Server variables
 
 ## [2.2.3] — 2026-07-15
 

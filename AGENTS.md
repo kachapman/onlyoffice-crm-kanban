@@ -1,7 +1,7 @@
-# AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
+# AGENTS.md — Sietch CRM (new-crm branch)
 
-**Current version:** 2.2.3 (released 2026-07-15; see CHANGELOG.md)  
-**Last session summary (for next resume):** v2.2.3 release: Search popup minimize with right-side "Search" trigger and profile-persisted parked tabs; max preview tabs 10; CSV export icon-only. Bookmark sidebar dividers — draggable visual separators organized via header button. Login screen refresh — "Vanguard Adjusting Dashboard" title, hidden portal URL, "Old CRM link" footer. Login body-portalUrl fix so local dev works without env var. Includes earlier confirm-modal z-index 2100 and note editor paste handler fixes.
+**Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
+**Last session summary (for next resume):** Phase 1A-1D foundation: PostgreSQL schema (34 tables), db.py connection layer, auth.py (PBKDF2 + sessions), smtp_client.py, migrate_from_onlyoffice.py, server.py rewrite (v2 API). Phase 1E: Frontend API path swaps (/api/2.0/crm/* → /api/v2/*), dead code removal (~500 lines: mutation queue, crash banner, mail system), body format updates. Document Server decision: Keep OnlyOffice Document Server for document editing (link-out initially, embedded later). README.md rewritten as Sietch CRM with Dune/Sietch branding. CHANGELOG.md updated with v3.0.0 entry. Next: Document Server docker-compose integration, migration script fixes, frontend document link updates.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 
@@ -11,14 +11,17 @@ This file is auto-loaded by Grok into the system prompt for every session in thi
 - For new sessions: `cd <project-root>` (sets workspace/cwd for rules + session grouping).
 
 ## Project Overview & Architecture (high level, reuse these)
-- Vanilla JS dashboard (no framework) + Python proxy for OnlyOffice CRM (Community Server / Workspace).
+- Vanilla JS dashboard (no framework) + Python backend for Sietch CRM.
 - **Frontend (public/):** 
   - index.html (modals, tiles, chrome)
   - app.js (main; state, rendering, api wrapper, profile sync, modals for deal-edit/create/quick-note/preview, group kanban, feed, tasks, calendars, notes)
   - styles.css
   - Static assets (favicons, ship logos)
-- **Backend (dev/prod proxy):** server.py (proxies /api/proxy/* to portal, handles /api/user-profile, /api/calendar/feed, /api/dashboard-notes, auth via oo_token cookie).
-- **Persistence (per CRM user + portal):** 
+- **Backend:** server.py (v2 REST API, auth, document storage, Document Server proxy, user profiles, notes, calendars, presence, bot integration).
+- **Database:** PostgreSQL 16 (init.sql schema, db.py connection layer).
+- **Document Server:** OnlyOffice Document Server (standalone Docker container for viewing/editing Word, Excel, PowerPoint files).
+- **Auth:** auth.py (PBKDF2 password hashing, session cookies, password reset via SMTP).
+- **Persistence (per CRM user):** 
   - user_profile_store.py (data/user-profiles/.../*.json; versioned; supports groups, calendarTiles, notesTiles, groupTemplates, tileLayout, hiddenFeedKeys, feedKeywordFilter)
   - notes_store.py (for notes tiles content)
   - LocalStorage fallbacks + debounce server saves (scheduleUserProfileSave).
@@ -26,13 +29,11 @@ This file is auto-loaded by Grok into the system prompt for every session in thi
 - **Key patterns to ALWAYS reuse:**
   - Profile: buildUserProfilePayload, applyUserProfile, loadUserProfileFromServer (prefers server), saveGroupsToStorage/scheduleUserProfileSave/saveUserProfileToServer, strip*RuntimeFields.
   - Tiles/layout: bindTileChrome, applyTileBodyCollapsed/applyTileLayoutClasses, createLayoutButtons, attachTileCollapseButton, tileLayout in state.
-  - API: `api(path, opts)` + parseApiError (throws on !ok); all CRM calls go through /api/proxy + X-OnlyOffice-Portal header.
-   - Errors: showToast(msg, true) only for non-transient; 5xx/unreachable now shows persistent right amber crash banner (text: "CRM is temporarily unreachable and may have crashed. Refresh again in 30 seconds or contact system administrator."); onCRMSuccess() hides it. Tiles always render (CRM pulls show empty content).
+  - API: `api(path, opts)` + parseApiError (throws on !ok); all CRM calls go through v2 API endpoints directly (no proxy).
   - New tile type (if adding): follow checklist in Toaster_Features (add to HTML+JS chooser, persist in profile py + frontend, refresh policy, empty states, update docs).
   - Modals: reuse .modal / .modal-card / backdrop / data-*-dismiss / escape; openDealEditModal, confirmDialog.
-  - History/feed: unwrapHistoryEvents, /api/2.0/crm/history/filter (entityType=opportunity), applyFeedKeywordFilter.
+  - History/feed: unwrapHistoryEvents, /api/v2/projects/{id}/history, applyFeedKeywordFilter.
   - Groups: fetchOpportunitiesForGroup + buildFilterQuery, renderCard, setupGroupToolbar (templates, remove, filters).
-   - After mutations (incl. note create/delete from side editor): renderXXX() + scheduleUserProfileSave() + optional openOpportunityPreviewModal refresh for side context.
 - **Custom fields on create (ISSUE-001/FEAT-002):** Fully implemented and enabled (CREATE_OPP_USER_FIELDS_ENABLED=true). customFieldList with {key,value} camelCase added to create body. See ISSUES.md for root cause.
 - **Do not:** Duplicate docs (link to FUTURE_FEATURES.md, ISSUES.md, Toaster_Features, docs/UPDATE_AND_DEPLOY.txt, README). No new abstractions unless the task requires. Prefer minimal changes following existing.
 
@@ -79,14 +80,14 @@ Legacy open items (lower priority unless asked): FEAT-003 attachments, new toast
 - **Production shared-hosting note:** The dashboard droplet also runs other web apps. As of 2026-07, public traffic for `dashboard.publicadjustermidwest.com` is handled by the **host's nginx** (systemd service at `/etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com`), **not** the Docker `estimate-nginx` container. The dashboard container binds to `127.0.0.1:8765`. The dashboard is in a separate Compose project but joins `estimate-enhancer_estimate-network` (harmless). **Required for uploads:** `client_max_body_size 100m; proxy_request_buffering off; proxy_read_timeout 120s;` in the host site file. Always read `docs/DASHBOARD_INFRASTRUCTURE.md` (especially the 2026-07 section) before touching nginx on the host. The old `/opt/estimate-enhancer/nginx.conf` is historical for this domain.
 
 ## How to Run / Test / Deploy
-- **Dev (normal):** `cd ~/crm-kanban && cp -n config.example.env .env && ./start.sh` (or `python3 server.py`). Opens http://127.0.0.1:8765. Login with your OnlyOffice CRM credentials (sets the `oo_token` cookie used by the proxy).
-- **Special test server (for mutation queue / offline resilience testing):** `python test-server.py`. This version supports controllable chaos mode (via `/api/test/chaos`) so you can simulate 5xx errors, delays, and network problems. (The client-side mutation queue / offline resilience is a completed implementation.)
-- **Test changes:** Browser + DevTools (Network tab for proxy/crm calls, Application → Local Storage for queue/profile, offline mode or the test server's chaos toggle). Always test both happy path and failure/retry scenarios for any new resilience code. Have test groups, tasks (with descriptions), history events, etc.
-- **No tests:** No automated suite; manual + visual + simulated failure testing.
-- **Agent memory rule (critical):** The agent has repeatedly forgotten completed work (e.g. backdate HTML inputs implemented and tested locally were never present in the committed tree; only JS/CSS were pushed). Going forward: after every feature or fix, explicitly confirm the exact files changed, run `git status --short && git diff --stat`, write a one-line summary in AGENTS.md under "Last session summary", and ensure the CHANGELOG entry exists before ending the session. Do not trust prior "done" claims without re-verifying the on-disk + git state. User will no longer argue; the record must be written.
-- **Deploy:** See docs/UPDATE_AND_DEPLOY.txt (stop local server, edit, test locally, git commit + push). Then on the production droplet follow the safe pull + rebuild steps in docs/DEPLOY_v1.1_VERIFY_STEPS.md. Never skip the VERIFY blocks.
-- **Debug:** server.py (or test-server.py) logs, browser console, `grep` in the codebase, read the exact function. The mutation queue processor runs in the browser (localStorage + background timer + online/visibility listeners).
-- **Profile data:** `data/user-profiles/...` (gitignored); survives restarts on both local and production.
+- **Dev (normal):** `cd ~/crm-kanban && cp -n config.example.env .env && ./start.sh` (or `python3 server.py`). Opens http://127.0.0.1:8766. Login with your credentials (session-cookie auth).
+- **Special test server (for chaos/failure testing):** `python test-server.py`. Supports controllable chaos mode via `/api/test/chaos`.
+- **Test changes:** Browser + DevTools (Network tab for API calls, Application → Local Storage for profile). Always test both happy path and failure scenarios.
+- **No tests:** No automated suite; manual + visual testing.
+- **Agent memory rule (critical):** After every feature or fix, explicitly confirm the exact files changed, run `git status --short && git diff --stat`, write a one-line summary in AGENTS.md under "Last session summary", and ensure the CHANGELOG entry exists before ending the session.
+- **Deploy:** See docs/UPDATE_AND_DEPLOY.txt (stop local server, edit, test locally, git commit + push). Then on the production droplet: `git pull`, `docker compose build`, `docker compose up -d`.
+- **Debug:** server.py logs, browser console, `grep` in the codebase.
+- **Profile data:** `data/user-profiles/...` (gitignored); survives restarts.
 
 ## Coding Conventions (follow existing)
 - Vanilla JS + CSS; no new libs.

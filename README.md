@@ -1,68 +1,150 @@
-# THIS APP WAS CREATED BY A TOASTER. LOOK ON IT YE MIGHTY AND DESPAIR
+# Sietch CRM
 
-# Vanguard CRM Dashboard (Standalone)
+> "The sietch is where the tribe gathers. Water is rationed. Strategy is planned. Nothing is lost."
 
-**Current version:** 2.2.0 — see [CHANGELOG.md](./CHANGELOG.md).
+**Current version:** 3.0.0 — see [CHANGELOG.md](./CHANGELOG.md)
 
-**This is a completely standalone web dashboard** for viewing and organizing OnlyOffice CRM opportunities, tasks, notifications, and notes.
+## Overview
 
-It is deliberately kept separate from OnlyOffice so there is no possibility of it affecting or breaking the OnlyOffice Community Server installation. The dashboard runs on its own server (DigitalOcean droplet) and talks to the CRM exclusively through the public API via its own proxy layer.
+Sietch CRM is a standalone project management dashboard built for public adjusters, independent adjusters, building consultants, and engineers who work on property loss claims and construction projects.
 
-`server.py` (and `test-server.py`) are **local development and testing tools only**. They are never used in production. All real usage happens after code is pushed to GitHub and pulled on the production dashboard droplet.
+Like the Fremen sietch fortresses of Arrakis in Frank Herbert's *Dune*, this is your team's command center — a fortified workspace where all project notes, correspondence, tasks, and communications are centralized, preserved, and strategically accessible.
 
-## Architecture (high level)
-- Standalone dashboard (vanilla JS UI + Python proxy) hosted on its own droplet.
-- OnlyOffice CRM runs on a separate droplet.
-- Local test servers on the developer's machine are used exclusively for verifying changes before `git push`.
+## Why "Sietch"?
 
-## Run (local development / testing only)
+The name draws from Frank Herbert's Dune universe, where sietches were hidden tribal fortresses carved into rock. Each sietch was a self-contained community where:
 
-```bash
-cd <project-root>
-cp -n config.example.env .env   # edit .env with your test portal if desired
-./start.sh
+- **Resources were centralized** — every note, email, and document stored in one protected place
+- **Strategy was planned** — timelines, deadlines, and task dependencies need oversight
+- **The tribe operated as one** — status updates, presence awareness, and coordination
+- **Nothing was lost** — audit trails, change logs, and event tracking protect from disputes
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Docker Compose Stack                      │
+│                                                              │
+│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────┐ │
+│  │  PostgreSQL   │  │  Sietch CRM  │  │ OnlyOffice Docs    │ │
+│  │  (database)   │  │  (dashboard) │  │ (Document Server)  │ │
+│  │  port 5432    │  │  port 8766   │  │ port 8080          │ │
+│  └──────────────┘  └──────────────┘  └────────────────────┘ │
+│         │                 │                 │                 │
+│         └─────────────────┴─────────────────┘                 │
+│                    vanguard-internal network                  │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-Default URL: http://127.0.0.1:8765 (override with `PORT` in `.env`).
+- **PostgreSQL 16** — project data, users, history, tasks, documents
+- **Python backend** — server.py (API, auth, document storage, Document Server proxy)
+- **Vanilla JS frontend** — no frameworks, no build step
+- **OnlyOffice Document Server** — collaborative document editing (view/edit Word, Excel, PowerPoint in browser)
+- **Redis** — session management for Document Server
 
-The client-side mutation queue / offline resilience (for transient CRM/proxy failures) is fully implemented and complete. For testing the queue features, use the special chaos test server instead:
+## Features
+
+| Category | Capabilities |
+|----------|--------------|
+| **Project Management** | Kanban boards, stages, tags, custom fields, calendar integration |
+| **Document Editing** | OnlyOffice integration — view/edit Word, Excel, PowerPoint in browser |
+| **Task Management** | Create, assign, track, close tasks linked to projects |
+| **Collaboration** | Team presence, direct messaging, activity feed |
+| **Customer Portal** | Telegram bot for automatic project updates |
+| **Data Integrity** | PostgreSQL persistence, session-based auth, offline resilience |
+| **Administration** | User management, stage/tag/custom field configuration |
+
+## Quick Start
+
+### Prerequisites
+- Docker and Docker Compose
+- Git
+
+### Run Locally
 
 ```bash
-python test-server.py
+git clone https://github.com/kachapman/onlyoffice-crm-kanban.git
+cd onlyoffice-crm-kanban
+git checkout new-crm
+
+# Configure
+cp config.example.env .env
+# Edit .env with your settings (DB credentials, JWT secret, etc.)
+
+# Start
+docker compose up -d
+
+# Access
+open http://localhost:8766
 ```
 
-(See the top of `test-server.py` for console commands to toggle simulated 5xx failures, delays, etc.)
+### First-Time Setup
 
-## Deploy (production)
-
-See **[DEPLOY.md](./DEPLOY.md)** for updating the DigitalOcean server after a GitHub commit.
-
-Workflow: Edit + test locally → `git push` → on the production droplet: `git pull`, rebuild, restart.
-
-## Important
-- This project is **not** an OnlyOffice module and is never installed into the OnlyOffice Community Server.
-- The `onlyoffice-module/` directory (if present) is legacy/separate and not part of the running dashboard.
-- Local servers exist solely for safe testing of the standalone dashboard code.
-
-## Dashboard tiles
-
-Use **Add Tile** to add an **Opportunity Group** (kanban), **Calendar** tile (ICS feed), or **Notes** tile (markdown). Calendar tiles load a public ICS URL via `GET /api/calendar/feed?url=…` and show a monthly grid. Calendar tiles auto-refresh on the same schedule as Tasks (hourly, unless the dashboard has been idle for 3 hours).
-
-Other built-in tiles: **Feed** (CRM notifications), **Tasks**, **Team presence** (status, DMs), **CRM Mail inbox** (quick view).
-
-**All dashboard settings** (groups, layout, calendars, notes, templates, feed preferences) auto-save to the server (`PUT /api/user-profile`) per CRM user + portal under `data/user-profiles/` in Docker (not committed to git).
-
-## Documentation
-
-- **[DEPLOY.md](./DEPLOY.md)** — update the production server after a GitHub commit
-- **[docs/PRODUCTION_SERVER_NOTES.txt](./docs/PRODUCTION_SERVER_NOTES.txt)** — droplet-only config (host nginx for dashboard, Docker network, certs; not overwritten by git pull)
-- **[FUTURE_FEATURES.md](./FUTURE_FEATURES.md)** — roadmap and feature ideas
-- **[Toaster_Features](./Toaster_Features)** — suggested dashboard tiles/widgets
-- **[ISSUES.md](./ISSUES.md)** — tracked bugs and follow-up work
+1. Open the dashboard at `http://localhost:8766`
+2. Create your admin account
+3. Add team members via the admin panel
+4. Start creating projects
 
 ## Configuration
 
-| Variable | Purpose |
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `PORT` | Dashboard HTTP port | `8766` |
+| `DB_HOST` | PostgreSQL host | `db` |
+| `DB_PORT` | PostgreSQL port | `5432` |
+| `DB_NAME` | Database name | `sietch_crm` |
+| `DB_USER` | Database user | `sietch` |
+| `DB_PASSWORD` | Database password | — |
+| `COOKIE_SECRET` | Session cookie secret | — |
+| `DOCS_JWT_SECRET` | Document Server JWT secret | — |
+| `DOCS_PUBLIC_URL` | Document Server public URL | `https://docs.publicadjustermidwest.com` |
+| `SMTP_HOST` | Mail server for password resets | — |
+| `SMTP_PORT` | SMTP port | `587` |
+| `SMTP_USER` | SMTP username | — |
+| `SMTP_PASSWORD` | SMTP password | — |
+
+## Documentation
+
+| Document | Purpose |
 |----------|---------|
-| `ONLYOFFICE_PORTAL_URL` | CRM portal base URL |
-| `PORT` | Local HTTP port (default 8765) |
+| [CHANGELOG.md](./CHANGELOG.md) | Version history and release notes |
+| [DEPLOY.md](./DEPLOY.md) | Production deployment guide |
+| [FUTURE_FEATURES.md](./FUTURE_FEATURES.md) | Roadmap and feature ideas |
+| [ISSUES.md](./ISSUES.md) | Tracked bugs and follow-up work |
+| [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) | Server setup and nginx configuration |
+
+## Development
+
+### Local Testing
+
+```bash
+# Normal development
+docker compose up -d
+
+# Or with chaos test server (simulates failures)
+python test-server.py
+```
+
+### API Reference
+
+The dashboard exposes a v2 REST API. See `server.py` for full endpoint documentation.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v2/auth/login` | POST | Authenticate user |
+| `/api/v2/projects` | GET/POST | List/create projects |
+| `/api/v2/projects/{id}` | GET/PUT/DELETE | Get/update/delete project |
+| `/api/v2/tasks` | GET/POST | List/create tasks |
+| `/api/v2/documents/{id}/download` | GET | Download document |
+| `/api/v2/contacts` | GET/POST | List/create contacts |
+| `/api/v2/users` | GET/POST | List/create users |
+
+## License
+
+AGPL v3 — see [LICENSE](./LICENSE)
+
+## Credits
+
+Built for **Vanguard Adjusting**.
+
+Inspired by the sietch fortresses of Arrakis — where strategy is planned, resources are preserved, and nothing is lost.
