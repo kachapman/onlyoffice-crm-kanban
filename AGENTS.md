@@ -1,7 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** Phase 2H fully completed and tested on LAN. Test server updated with all needed v2 API stubs. Documents button icon fixed (Tabler files). Refresh button removed from header. App + admin console + documents modal now work on test server. Commits bd4bf66, d0d4300, [new] pushed.
+**Last session summary (for next resume):** Phase 2H all code complete (commits 1a2e654, c5de6e5, bd4bf66, 4be8a1e pushed to new-crm). Documents modal (3 scopes, upload, batch ops, context menu), preview modal docs tab overhaul. Documents icon fixed (Tabler files), refresh button removed. Moving development to LAN server — see LAN_SERVER_SETUP.md for full setup instructions. AGENTS.md updated: test-server.py is chaos-only, not for functional testing. No further development until LAN server is operational.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 
@@ -87,17 +87,17 @@ Legacy open items (lower priority unless asked): FEAT-003 attachments, new toast
 - The **dashboard** (this entire project) runs on its own DigitalOcean Ubuntu droplet (production: https://dashboard.publicadjustermidwest.com, currently 159.89.229.126). It serves the vanilla JS UI from `public/` and acts as an API proxy (`server.py`) that forwards CRM calls to the OnlyOffice server while handling user profiles, notes, calendars, and auth.
 - The **OnlyOffice CRM** (Community Server / Workspace) runs on a **completely separate** DigitalOcean droplet. The two servers communicate over public HTTPS.
 - **Local testing workflow (mandatory before any push):**
-  - All development and verification happens on the developer's machine (this laptop).
-  - Use `./start.sh` (normal dev server) or `python test-server.py` (special chaos/failure simulation server) for local testing.
-  - The local servers are **only for testing features and fixes**. They are never used in production.
-  - After local verification (browser + DevTools, including simulated failures for the mutation queue), commit and `git push`.
+  - All development and verification happens on the developer's machine (this laptop) using `./start.sh` with a **real PostgreSQL database**.
+  - **`test-server.py` is NEVER for feature development or functional testing** — only chaos/mutation queue simulation (`/api/test/chaos`).
+  - If `./start.sh` cannot run (no DB available on the laptop), testing must move to the **LAN server** with a real DB. Do NOT fall back to `test-server.py` for functional testing.
+  - After local verification (browser + DevTools), commit and `git push`.
   - On the production dashboard droplet: `git pull`, `docker compose build`, `docker compose up -d` (see docs/UPDATE_AND_DEPLOY.txt and docs/DEPLOY_v1.1_VERIFY_STEPS.md for the exact safe checklist).
 - **Critical separation rule:** This project is a **standalone dashboard**. It is deliberately kept completely separate from OnlyOffice so there is zero risk of it affecting or breaking the OnlyOffice Community Server installation. The `onlyoffice-module/` directory (if present) is legacy/separate and not used for the main dashboard. Local test servers exist solely to allow safe iteration on the JS + proxy code before deploying the standalone dashboard.
 - **Production shared-hosting note:** The dashboard droplet also runs other web apps. As of 2026-07, public traffic for `dashboard.publicadjustermidwest.com` is handled by the **host's nginx** (systemd service at `/etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com`), **not** the Docker `estimate-nginx` container. The dashboard container binds to `127.0.0.1:8765`. The dashboard is in a separate Compose project but joins `estimate-enhancer_estimate-network` (harmless). **Required for uploads:** `client_max_body_size 100m; proxy_request_buffering off; proxy_read_timeout 120s;` in the host site file. Always read `docs/DASHBOARD_INFRASTRUCTURE.md` (especially the 2026-07 section) before touching nginx on the host. The old `/opt/estimate-enhancer/nginx.conf` is historical for this domain.
 
 ## How to Run / Test / Deploy
-- **Dev (normal):** `cd ~/crm-kanban && cp -n config.example.env .env && ./start.sh` (or `DB_HOST=127.0.0.1 ./.venv/bin/python3 server.py` if needed). Server prints LAN URLs on start (binds 0.0.0.0). Login with your credentials (session-cookie auth).
-- **Special test server (for chaos/failure testing):** `python test-server.py`. Supports controllable chaos mode via `/api/test/chaos`.
+- **Dev (normal):** `cd ~/new-crm && cp -n config.example.env .env && ./start.sh` (or `DB_HOST=127.0.0.1 ./.venv/bin/python3 server.py` if needed). Server prints LAN URLs on start (binds 0.0.0.0). Login with your credentials (session-cookie auth). **Requires a real PostgreSQL database.**
+- **Chaos testing only:** `python test-server.py` — this is **not** a development server. Only for simulating failures via `/api/test/chaos`. All functional development requires the real server with a real DB (or LAN server).
 - **Test changes:** Browser + DevTools (Network tab for API calls, Application → Local Storage for profile). Always test both happy path and failure scenarios.
 - **No tests:** No automated suite; manual + visual testing.
 - **Agent memory rule (critical):** After every feature or fix, explicitly confirm the exact files changed, run `git status --short && git diff --stat`, write a one-line summary in AGENTS.md under "Last session summary", and ensure the CHANGELOG entry exists before ending the session.
