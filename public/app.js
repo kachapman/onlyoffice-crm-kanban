@@ -6711,7 +6711,7 @@ async function enrichOpportunitiesTags(items, force = false) {
   try {
     const path = `/api/batch-opportunity-tags?ids=${ids.join(",")}`;
     const resp = await api(path);
-    const tagsByOpp = (resp && resp.tags) || {};
+    const tagsByOpp = resp || {};
     for (const opp of uncached) {
       const id = String(opp.id ?? opp.ID);
       const raw = tagsByOpp[id];
@@ -6754,9 +6754,7 @@ async function fetchOpportunitiesForGroup(group, opts = {}) {
   if (!force && cached) {
     // Cache hit: raw opps from cache, re-apply tag enrichment (from tag cache) + client-side filters
     let items = cached;
-    if (group.tagTitles?.length || group.groupBy === "tag") {
-      items = await enrichOpportunitiesTags(items, force);
-    }
+    items = await enrichOpportunitiesTags(items, force);
     if (group.tagTitles?.length) {
       items = items.filter((o) => oppMatchesSelectedTags(o, group.tagTitles, catalog));
     }
@@ -6776,9 +6774,7 @@ async function fetchOpportunitiesForGroup(group, opts = {}) {
   state.filterResultCache?.set(cacheKey, rawItems);
   let items = rawItems;
  
-  if (group.tagTitles?.length || group.groupBy === "tag") {
-    items = await enrichOpportunitiesTags(items, force);
-  }
+  items = await enrichOpportunitiesTags(items, force);
 
   if (group.tagTitles?.length) {
     items = items.filter((o) => oppMatchesSelectedTags(o, group.tagTitles, catalog));
@@ -11002,8 +10998,8 @@ function parseCustomFieldTextMaxLength(def) {
   }
 }
 
-function buildCreateOppCustomFieldInput(def, fieldId) {
-  const kind = createOppCustomFieldInputKind(def);
+function buildCreateOppCustomFieldInput(def, fieldId, overriddenKind) {
+  const kind = overriddenKind || createOppCustomFieldInputKind(def);
   const id = `create-opp-cf-${fieldId}`;
 
   if (kind === "checkbox") {
@@ -11171,7 +11167,10 @@ function renderCreateOppCustomFields() {
     if (isCreateOppExcludedUserField(def)) continue;
 
     const label = customFieldLabel(def) || `Field ${fieldId}`;
-    const kind = createOppCustomFieldInputKind(def);
+    let kind = createOppCustomFieldInputKind(def);
+
+    if (fieldNameMatches(label, ["Date of Loss"])) kind = "date";
+    if (fieldNameMatches(label, ["Measurement Report", "Insurance Documents", "Inspection Photos", "PA CONTRACT"])) kind = "checkbox";
 
     if (kind === "heading") {
       const head = document.createElement("p");
@@ -11185,7 +11184,7 @@ function renderCreateOppCustomFields() {
     field.className = "field";
     field.dataset.customFieldId = String(fieldId);
 
-    const input = buildCreateOppCustomFieldInput(def, fieldId);
+    const input = buildCreateOppCustomFieldInput(def, fieldId, kind);
 
     if (kind === "checkbox") {
       const lbl = document.createElement("label");
@@ -11418,7 +11417,9 @@ function renderDealEditUserFields(opp, customFieldValues) {
     if (isCreateOppExcludedUserField(def)) continue;
 
     const label = customFieldLabel(def) || `Field ${fieldId}`;
-    const kind = createOppCustomFieldInputKind(def);
+    let kind = createOppCustomFieldInputKind(def);
+    if (fieldNameMatches(label, ["Date of Loss"])) kind = "date";
+    if (fieldNameMatches(label, ["Measurement Report", "Insurance Documents", "Inspection Photos", "PA CONTRACT"])) kind = "checkbox";
     if (kind === "heading") continue;
 
     const savedItem = valuesByFieldId.get(String(fieldId));
@@ -11429,7 +11430,7 @@ function renderDealEditUserFields(opp, customFieldValues) {
     field.className = "field";
     field.dataset.customFieldId = String(fieldId);
 
-    const input = buildCreateOppCustomFieldInput(def, fieldId);
+    const input = buildCreateOppCustomFieldInput(def, fieldId, kind);
     const inputId = `deal-edit-cf-${fieldId}`;
     input.id = inputId;
     if (input.dataset) input.dataset.customFieldId = String(fieldId);
@@ -11673,7 +11674,17 @@ async function submitCreateOpportunityForm(e) {
       }
     }
 
-    const titleHint = ($("#create-opp-title")?.value || "").trim() || "Opportunity";
+    // Add tags
+    const createTags = state.createOppTags || [];
+    if (createTags.length) {
+      for (const tagTitle of createTags) {
+        try {
+          await addOpportunityTag(oppId, tagTitle);
+        } catch {}
+      }
+    }
+
+    const titleHint = ($("#create-opp-title")?.value || "").trim() || "Project";
     closeCreateOpportunityModal();
     hideCRMSyncStatus();
     onCRMSuccess();
@@ -11694,6 +11705,44 @@ async function submitCreateOpportunityForm(e) {
   }
 }
 
+function renderCreateOppTags() {
+  const wrap = $("#create-opp-tags");
+  const addSel = $("#create-opp-tag-add");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  const catalog = buildTagCatalog();
+  const current = new Set((state.createOppTags || []).map(t => normalizeTagTitle(t)).filter(Boolean));
+  for (const title of [...current].sort((a, b) => String(a).localeCompare(String(b)))) {
+    const chip = document.createElement("span");
+    chip.className = "deal-edit-tag";
+    chip.dataset.tagTitle = title;
+    chip.appendChild(document.createTextNode(title));
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.className = "deal-edit-tag-remove";
+    rm.setAttribute("aria-label", `Remove tag ${title}`);
+    rm.textContent = "\u00d7";
+    rm.addEventListener("click", () => {
+      state.createOppTags = (state.createOppTags || []).filter(t => !tagsEqual(t, title, catalog));
+      renderCreateOppTags();
+    });
+    chip.appendChild(rm);
+    wrap.appendChild(chip);
+  }
+  if (addSel) {
+    addSel.innerHTML = '<option value="">Add tag\u2026</option>';
+    for (const tag of state.allTags) {
+      const title = normalizeTagTitle(tag.title ?? tag);
+      if (!title || current.has(title)) continue;
+      const opt = document.createElement("option");
+      opt.value = title;
+      opt.textContent = title;
+      addSel.appendChild(opt);
+    }
+    addSel.value = "";
+  }
+}
+
 async function openCreateOpportunityModal() {
   const modal = $("#create-opportunity-modal");
   const form = $("#create-opportunity-form");
@@ -11702,15 +11751,18 @@ async function openCreateOpportunityModal() {
   setCreateOpportunityError("");
   form.reset();
   resetNewOpportunityDraft();
+  state.createOppTags = [];
 
   if (!state.stages.length) await loadStages();
   if (!state.portalUsers.length) await loadPortalUsers();
   if (CREATE_OPP_USER_FIELDS_ENABLED) await loadOpportunityCustomFieldDefs(true);
+  if (!state.allTags.length) await loadAllTags();
 
   populateCreateOppStageSelect();
   populateCreateOppResponsibleSelect();
   populateCreateOppAccessSelect();
   renderCreateOppCustomFields();
+  renderCreateOppTags();
   updateCreateOppContactSelectedUi();
   syncCreateOppPrivateFields();
 
@@ -15184,6 +15236,14 @@ function bindCreateOpportunityModal() {
 
   $("#create-opp-private")?.addEventListener("change", syncCreateOppPrivateFields);
 
+  $("#create-opp-tag-add")?.addEventListener("change", (e) => {
+    const title = e.target.value;
+    if (!title) return;
+    if (!state.createOppTags) state.createOppTags = [];
+    if (!state.createOppTags.some(t => tagsEqual(t, title))) state.createOppTags.push(title);
+    renderCreateOppTags();
+  });
+
   bindCreateOppContactPicker();
 }
 
@@ -16711,7 +16771,12 @@ function buildOpportunityPreviewStandardFields(opp) {
   push("Responsible", formatResponsibleLabel(opp));
 
   push("Value", formatMoney(opp));
-  push("Follow-up Due Date", formatPreviewDueDate(opportunityDueDateRaw(opp)));
+  const dueDateRaw = opportunityDueDateRaw(opp);
+  if (dueDateRaw) {
+    rows.push({ label: "Follow-up Due Date", value: formatPreviewDueDate(dueDateRaw), _rawDate: dueDateRaw });
+  } else {
+    push("Follow-up Due Date", formatPreviewDueDate(dueDateRaw));
+  }
   // Actual close hidden per user request (showActualClose field removed from preview)
   if (opp.isPrivate ?? opp.IsPrivate) push("Private", "Yes");
   push("Bid type", opp.bidType ?? opp.BidType);
@@ -20070,6 +20135,28 @@ function renderOpportunityPreviewContent(container, data) {
   const allUserRows = buildOpportunityPreviewUserFields(opp, customFieldValues);
   const userRows = allUserRows.filter((r) => !r._isCheckbox);
   const checklistRows = allUserRows.filter((r) => r._isCheckbox);
+
+  // Extract Supplement Request to render as full-width field at top
+  const supplementRequestRow = (() => {
+    const idx = userRows.findIndex((r) => fieldNameMatches(r.label, ["supplement request"]));
+    if (idx === -1) return null;
+    return userRows.splice(idx, 1)[0];
+  })();
+
+  // Move checkbox-mapped fields into checklist section
+  const THREE_CHECKLIST_NAMES = ["Measurement Report", "Insurance Documents", "Inspection Photos"];
+  const extractedChecklist = [];
+  for (let i = userRows.length - 1; i >= 0; i--) {
+    if (fieldNameMatches(userRows[i].label, THREE_CHECKLIST_NAMES)) {
+      extractedChecklist.push(userRows[i]);
+      userRows.splice(i, 1);
+    }
+  }
+  extractedChecklist.reverse();
+  for (const row of extractedChecklist) {
+    row._isCheckbox = true;
+    checklistRows.push(row);
+  }
   const description = String(opp.description ?? opp.Description ?? "").trim();
   const oppId = opp.id ?? opp.ID;
 
@@ -20095,110 +20182,146 @@ function renderOpportunityPreviewContent(container, data) {
   detailsContent.className = "opp-preview-tab-content";
   detailsContent.dataset.tabContent = "details";
 
-  // 1. Description (at top per 2I spec)
-  appendPreviewSection(detailsContent, "Description", (section) => {
-    if (!description) {
-      const p = document.createElement("p");
-      p.className = "opp-preview-empty";
-      p.textContent = "No description";
-      section.appendChild(p);
-      return;
-    }
+  // 1. Description — inline editable with little edit button
+  const descSection = document.createElement("section");
+  descSection.className = "opp-preview-section";
+  const descHead = document.createElement("div");
+  descHead.className = "opp-preview-section-head";
+  const descTitle = document.createElement("h3");
+  descTitle.className = "opp-preview-section-title";
+  descTitle.textContent = "Description";
+  descHead.appendChild(descTitle);
+  const descEditBtn = document.createElement("button");
+  descEditBtn.type = "button";
+  descEditBtn.className = "opp-preview-section-edit";
+  descEditBtn.setAttribute("aria-label", "Edit description");
+  descEditBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10.5-10.5a2 2 0 0 0-2.83-2.83L6 16v4"/><path d="M13.5 6.5l4 4"/></svg>`;
+  descHead.appendChild(descEditBtn);
+  descSection.appendChild(descHead);
+
+  const descBody = document.createElement("div");
+  descBody.className = "opp-preview-section-body";
+
+  if (!description) {
+    const p = document.createElement("p");
+    p.className = "opp-preview-empty";
+    p.textContent = "No description";
+    descBody.appendChild(p);
+  } else {
     const p = document.createElement("p");
     p.className = "opp-preview-description";
     p.textContent = description;
-    section.appendChild(p);
-  });
+    descBody.appendChild(p);
+  }
 
-  // 2. Project Fields — merged standard + user fields, Stage as dropdown
-  appendPreviewSection(detailsContent, "Project fields", (section) => {
-    const allRows = [...standardRows, ...userRows];
-    if (!allRows.length) {
-      const p = document.createElement("p");
-      p.className = "opp-preview-empty";
-      p.textContent = "None";
-      section.appendChild(p);
-      return;
-    }
-    const dl = document.createElement("dl");
-    dl.className = "opp-preview-fields";
-    for (const row of allRows) {
-      const field = document.createElement("div");
-      field.className = "opp-preview-field";
-      const dt = document.createElement("dt");
-      dt.textContent = row.label;
-      const dd = document.createElement("dd");
+  descSection.appendChild(descBody);
+  detailsContent.appendChild(descSection);
 
-      if (row._isStage) {
-        // Stage dropdown
-        const select = document.createElement("select");
-        select.className = "opp-preview-stage-select";
-        const currentStageId = String(row._stageId || "");
-        for (const stage of state.stages) {
-          const sid = String(stage.id ?? stage.ID ?? "");
-          const opt = document.createElement("option");
-          opt.value = sid;
-          opt.textContent = stage.title || stage.Title || "";
-          if (sid === currentStageId) opt.selected = true;
-          select.appendChild(opt);
-        }
-        select.addEventListener("change", async () => {
-          const newStageId = select.value;
-          try {
-            await api(`/api/v2/projects/${oppId}`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ stageId: newStageId }),
-            });
-            const stageName = state.stages.find((s) => String(s.id ?? s.ID) === newStageId)?.title || "";
-            showToast(`Stage changed to ${stageName}`);
-            addEventLogEntry("update", oppId, opp.title || opp.Title || "", `Stage changed to ${stageName}`, true);
-            openOpportunityPreviewModal(oppId, opp.title || opp.Title || "", oppPreviewContext?.group || null).catch(() => {});
-          } catch (err) {
-            showToast("Failed to change stage: " + (err.message || err), true);
-            const fallbackStage = state.stages.find((s) => String(s.id ?? s.ID) === currentStageId);
-            if (fallbackStage) select.value = currentStageId;
-          }
+  // Inline edit: click the pen icon to enter edit mode
+  descEditBtn.addEventListener("click", () => {
+    const currentText = description;
+    descBody.innerHTML = "";
+    const textarea = document.createElement("textarea");
+    textarea.className = "opp-preview-desc-edit";
+    textarea.value = currentText;
+    textarea.rows = 3;
+    const actions = document.createElement("div");
+    actions.className = "opp-preview-desc-actions";
+    const confirmBtn = document.createElement("button");
+    confirmBtn.type = "button";
+    confirmBtn.className = "btn btn-primary btn-small";
+    confirmBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+    confirmBtn.setAttribute("aria-label", "Save description");
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "btn btn-ghost btn-small";
+    cancelBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+    cancelBtn.setAttribute("aria-label", "Cancel");
+    actions.appendChild(confirmBtn);
+    actions.appendChild(cancelBtn);
+    descBody.appendChild(textarea);
+    descBody.appendChild(actions);
+    textarea.focus();
+
+    confirmBtn.addEventListener("click", async () => {
+      const newDesc = textarea.value.trim();
+      if (newDesc === currentText) {
+        // No change — just restore
+        descEditBtn.click();
+        return;
+      }
+      confirmBtn.disabled = true;
+      try {
+        await api(`/api/v2/projects/${oppId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ description: newDesc }),
         });
-        dd.appendChild(select);
-      } else if (row.value === "Yes" || row.value === "No") {
-        const tag = document.createElement("span");
-        tag.className = "field-value-tag";
-        tag.textContent = row.value;
-        dd.appendChild(tag);
-      } else {
-        dd.textContent = row.value;
+        addEventLogEntry("update", oppId, opp.title || opp.Title || "", "Description updated", true);
+        // Re-render preview to show saved state
+        openOpportunityPreviewModal(oppId, opp.title || opp.Title || "", oppPreviewContext?.group || null).catch(() => {});
+      } catch (err) {
+        showToast("Failed to update description: " + (err.message || err), true);
+        confirmBtn.disabled = false;
       }
+    });
 
-      field.appendChild(dt);
-      field.appendChild(dd);
-      dl.appendChild(field);
-    }
-    section.appendChild(dl);
+    cancelBtn.addEventListener("click", () => {
+      // Restore original view
+      descBody.innerHTML = "";
+      if (!currentText) {
+        const p = document.createElement("p");
+        p.className = "opp-preview-empty";
+        p.textContent = "No description";
+        descBody.appendChild(p);
+      } else {
+        const p = document.createElement("p");
+        p.className = "opp-preview-description";
+        p.textContent = currentText;
+        descBody.appendChild(p);
+      }
+    });
   });
 
-  // 3. Checklist — specialty checkboxes in 3-column grid
-  if (checklistRows.length) {
-    appendPreviewSection(detailsContent, "Checklist", (section) => {
-      const grid = document.createElement("div");
-      grid.className = "opp-preview-checklist-grid";
-      for (const row of checklistRows) {
-        const item = document.createElement("span");
-        item.className = "opp-preview-checklist-item";
-        const icon = document.createElement("span");
-        icon.className = row.value === "Yes" ? "opp-preview-checklist-check" : "opp-preview-checklist-uncheck";
-        icon.textContent = row.value === "Yes" ? "\u2611" : "\u2610";
-        const lbl = document.createElement("span");
-        lbl.textContent = row.label;
-        item.appendChild(icon);
-        item.appendChild(lbl);
-        grid.appendChild(item);
+  // 2. Stage — standalone dropdown section
+  const stageRow = standardRows.find((r) => r._isStage);
+  const nonStageStandardRows = standardRows.filter((r) => !r._isStage);
+  if (stageRow) {
+    appendPreviewSection(detailsContent, "Stage", (section) => {
+      const select = document.createElement("select");
+      select.className = "opp-preview-stage-select";
+      const currentStageId = String(stageRow._stageId || "");
+      for (const stage of state.stages) {
+        const sid = String(stage.id ?? stage.ID ?? "");
+        const opt = document.createElement("option");
+        opt.value = sid;
+        opt.textContent = stage.title || stage.Title || "";
+        if (sid === currentStageId) opt.selected = true;
+        select.appendChild(opt);
       }
-      section.appendChild(grid);
+      select.addEventListener("change", async () => {
+        const newStageId = select.value;
+        try {
+          await api(`/api/v2/projects/${oppId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ stageId: newStageId }),
+          });
+          const stageName = state.stages.find((s) => String(s.id ?? s.ID) === newStageId)?.title || "";
+          showToast(`Stage changed to ${stageName}`);
+          addEventLogEntry("update", oppId, opp.title || opp.Title || "", `Stage changed to ${stageName}`, true);
+          openOpportunityPreviewModal(oppId, opp.title || opp.Title || "", oppPreviewContext?.group || null).catch(() => {});
+        } catch (err) {
+          showToast("Failed to change stage: " + (err.message || err), true);
+          const fallbackStage = state.stages.find((s) => String(s.id ?? s.ID) === currentStageId);
+          if (fallbackStage) select.value = currentStageId;
+        }
+      });
+      section.appendChild(select);
     });
   }
 
-  // 4. Tags — interactive add/remove
+  // 3. Tags — between stage and project fields
   appendPreviewSection(detailsContent, "Tags", (section) => {
     const tagList = document.createElement("div");
     tagList.className = "opp-preview-tags";
@@ -20210,6 +20333,7 @@ function renderOpportunityPreviewContent(container, data) {
       for (const t of currentTags) {
         const chip = document.createElement("span");
         chip.className = "field-value-tag";
+        if (tagsEqual(t, "High Priority")) chip.classList.add("tag-amber");
         chip.textContent = t;
         const rm = document.createElement("button");
         rm.type = "button";
@@ -20238,7 +20362,7 @@ function renderOpportunityPreviewContent(container, data) {
       const addSel = document.createElement("select");
       addSel.className = "opp-preview-tag-add";
       addSel.setAttribute("aria-label", "Add tag");
-      addSel.innerHTML = '<option value="">+ Add tag…</option>';
+      addSel.innerHTML = '<option value="">+ Add tag\u2026</option>';
       const usedLower = new Set(currentTags.map((t) => normalizeTagTitle(t).toLowerCase()));
       for (const tag of (state.allTags || [])) {
         const title = normalizeTagTitle(tag.title ?? tag);
@@ -20267,6 +20391,86 @@ function renderOpportunityPreviewContent(container, data) {
 
     renderTagChips();
     section.appendChild(tagList);
+  });
+
+  // 4. Project Fields — standard (non-stage) + user fields, 2-column grid
+  appendPreviewSection(detailsContent, "Project fields", (section) => {
+    const allRows = supplementRequestRow
+      ? [supplementRequestRow, ...nonStageStandardRows, ...userRows]
+      : [...nonStageStandardRows, ...userRows];
+    if (!allRows.length) {
+      const p = document.createElement("p");
+      p.className = "opp-preview-empty";
+      p.textContent = "None";
+      section.appendChild(p);
+      return;
+    }
+    const dl = document.createElement("dl");
+    dl.className = "opp-preview-fields";
+    for (const row of allRows) {
+      const field = document.createElement("div");
+      field.className = "opp-preview-field";
+      if (row === supplementRequestRow) field.classList.add("opp-preview-field-full");
+      if (row._rawDate) {
+        const d = parseCrmDateOnly(row._rawDate);
+        if (d && !Number.isNaN(d.getTime()) && d < new Date(new Date().toDateString())) {
+          field.classList.add("opp-preview-field-overdue");
+        }
+      }
+      const dt = document.createElement("dt");
+      dt.textContent = row.label;
+      const dd = document.createElement("dd");
+
+      if (row.value === "Yes" || row.value === "No") {
+        if (fieldNameMatches(row.label, ["PA CONTRACT"])) {
+          const ico = document.createElement("span");
+          const checked = row.value === "Yes";
+          ico.className = checked ? "opp-preview-chk-yes" : "opp-preview-chk-no";
+          ico.textContent = checked ? "\u2713" : "\u2717";
+          dd.appendChild(ico);
+        } else {
+          const tag = document.createElement("span");
+          tag.className = "field-value-tag";
+          tag.textContent = row.value;
+          dd.appendChild(tag);
+        }
+      } else if (fieldNameMatches(row.label, ["PA CONTRACT"])) {
+        const ico = document.createElement("span");
+        const lower = (row.value || "").toLowerCase();
+        const checked = lower === "true" || lower === "yes" || lower === "1";
+        ico.className = checked ? "opp-preview-chk-yes" : "opp-preview-chk-no";
+        ico.textContent = checked ? "\u2713" : "\u2717";
+        dd.appendChild(ico);
+      } else {
+        dd.textContent = row.value;
+      }
+
+      field.appendChild(dt);
+      field.appendChild(dd);
+      dl.appendChild(field);
+    }
+    section.appendChild(dl);
+
+    // Checklist items as 3-column field cards (same styling, no section title)
+    if (checklistRows.length) {
+      const dl2 = document.createElement("dl");
+      dl2.className = "opp-preview-fields opp-preview-fields-3col";
+      dl2.style.marginTop = "0.5rem";
+      for (const row of checklistRows) {
+        const field = document.createElement("div");
+        field.className = "opp-preview-field opp-preview-field-chk";
+        const ico = document.createElement("span");
+        const checked = row.value === "Yes";
+        ico.className = checked ? "opp-preview-chk-yes" : "opp-preview-chk-no";
+        ico.textContent = checked ? "\u2713" : "\u2717";
+        const lbl = document.createElement("span");
+        lbl.textContent = row.label;
+        field.appendChild(ico);
+        field.appendChild(lbl);
+        dl2.appendChild(field);
+      }
+      section.appendChild(dl2);
+    }
   });
 
   appendPreviewSection(detailsContent, "History & notes", (section) => {

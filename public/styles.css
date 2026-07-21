@@ -844,6 +844,10 @@ body {
   border-color: var(--muted);
 }
 
+.card--high-priority:hover {
+  border-color: var(--warn);
+}
+
 .card-title {
   margin: 0 0 0.35rem;
   font-weight: 600;
@@ -2115,7 +2119,7 @@ body {
 .card--high-priority {
   background: rgba(240, 180, 41, 0.08);
   border-color: var(--warn);
-  border-left: 3px solid var(--warn);
+  border-left: 4px solid var(--warn);
 }
 
 .task-row label {
@@ -2889,6 +2893,29 @@ body {
 .modal-card-create-opp {
   width: min(520px, 94vw);
   max-height: min(92vh, 800px);
+  display: flex;
+  flex-direction: column;
+  overflow-y: hidden;
+}
+.create-opp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.8rem 1rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.create-opp-header .modal-title {
+  margin: 0;
+  padding: 0;
+  white-space: nowrap;
+}
+
+.modal-card-create-opp .modal-form {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding-bottom: 1rem;
 }
 
 .create-opp-legend {
@@ -4709,6 +4736,80 @@ body {
   color: var(--muted);
 }
 
+.opp-preview-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+.opp-preview-section-head .opp-preview-section-title {
+  margin: 0;
+}
+.opp-preview-section-edit {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.opp-preview-section-edit:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.opp-preview-section-body {
+  /* wraps section content */
+}
+
+.opp-preview-desc-edit {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 0.84rem;
+  padding: 0.5rem;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  resize: vertical;
+  min-height: 3.5rem;
+}
+.opp-preview-desc-edit:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.opp-preview-desc-actions {
+  display: flex;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+}
+
+.opp-preview-field-chk {
+  align-items: center;
+  gap: 0.4rem;
+}
+.opp-preview-chk-yes {
+  color: var(--success, #22c55e);
+  font-size: 1rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.opp-preview-chk-no {
+  color: var(--muted);
+  font-size: 1rem;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
 .field-value-tag {
   display: inline-block;
   font-size: 0.75rem;
@@ -4730,14 +4831,15 @@ body {
 
 .opp-preview-fields {
   display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 0.5rem 1rem;
   margin: 0;
 }
 
 .opp-preview-field {
-  display: grid;
-  grid-template-columns: minmax(7rem, 34%) 1fr;
-  gap: 0.35rem 0.75rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.15rem 0.75rem;
   padding: 0.5rem 0.7rem;
   font-size: 0.84rem;
   background: var(--surface-2);
@@ -4750,12 +4852,24 @@ body {
   margin: 0;
   font-weight: 600;
   color: var(--muted);
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .opp-preview-field dd {
   margin: 0;
   color: var(--text);
   word-break: break-word;
+  min-width: 0;
+}
+
+.opp-preview-field-full {
+  grid-column: 1 / -1;
+}
+
+.opp-preview-field-overdue {
+  border-color: rgba(220, 38, 38, 0.45);
+  background: rgba(220, 38, 38, 0.06);
 }
 
 .opp-preview-description {
@@ -5182,30 +5296,18 @@ body {
   color: var(--muted);
   cursor: pointer;
 }
+.opp-preview-tag-add option {
+  background: var(--surface);
+  color: var(--text);
+}
 .opp-preview-tag-add:focus {
   outline: none;
   border-color: var(--accent);
 }
 
 /* Phase 2I: Checklist 3-column grid */
-.opp-preview-checklist-grid {
-  display: grid;
+.opp-preview-fields-3col {
   grid-template-columns: repeat(3, 1fr);
-  gap: 0.4rem 0.75rem;
-}
-.opp-preview-checklist-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 0.84rem;
-}
-.opp-preview-checklist-check {
-  color: var(--success, #22c55e);
-  font-size: 1rem;
-}
-.opp-preview-checklist-uncheck {
-  color: var(--muted);
-  font-size: 1rem;
 }
 
 .opp-preview-documents {

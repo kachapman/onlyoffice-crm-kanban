@@ -2,6 +2,19 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 2I — Preview modal + tile revamp
+
+- **Preview modal restructured:** Description moved to top with inline edit (pencil button → textarea with confirm/cancel). Stage split into its own section with dropdown. Tags section moved between Stage and Project Fields.
+- **Project Fields in 2-column grid layout** with Supplement Request as full-width first field. Follow-up Due Date gets faint red border/background when overdue.
+- **Checklist fields** (Measurement Report, Insurance Documents, Inspection Photos) rendered as 3-column field cards at bottom with green ✓ / muted ✗ icons instead of text Yes/No.
+- **PA CONTRACT** rendered as check/X icon in its original field position.
+- **Create modal user field overrides:** Date of Loss forced to date picker; Measurement Report, Insurance Documents, Inspection Photos, PA CONTRACT forced to checkboxes. Same overrides applied to deal-edit modal.
+- **Tags:** add-tag dropdown now dark-mode styled; High Priority tag chip gets amber highlight in preview modal.
+- **Create Project modal header:** fixed scrollbar overlapping header; header stays single row with `flex-shrink: 0` and `white-space: nowrap`; form body scrolls independently.
+- **High Priority deal tile highlight:** fixed batch tag endpoint response parsing (`resp.tags` → `resp`); tags now loaded for all groups unconditionally so `oppHasTag` detects High Priority on every group.
+- **Deal tile hover:** amber border preserved on hover via `.card--high-priority:hover` rule.
+- Cache-bust bumped to `v=1.95.2`.
+
 ## Unreleased (Phase 1 follow-up)
 
 - **Documents: sidebar folder tree.** My Documents and Company scopes show a navigable folder tree in the sidebar directly under their scope button. Chevron arrows expand/collapse subfolders. Tree repositions on scope switch. Clicking a folder navigates and highlights the active folder. Tree refreshes on create/rename/delete. New `GET /documents/folders/tree` backend endpoint returns all folders flat for tree building.

@@ -949,7 +949,12 @@
   <div id="create-opportunity-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="create-opportunity-modal-title">
     <div class="modal-backdrop" data-create-opp-dismiss></div>
     <div class="modal-card modal-card-form modal-card-create-opp">
-      <h2 id="create-opportunity-modal-title" class="modal-title">Create opportunity</h2>
+      <div class="create-opp-header">
+        <h2 id="create-opportunity-modal-title" class="modal-title">Create Project</h2>
+        <button type="button" id="create-opp-close" class="btn btn-icon-only modal-header-control" title="Close" data-create-opp-dismiss>
+          <i class="ti ti-x"></i>
+        </button>
+      </div>
       <form id="create-opportunity-form" class="modal-form">
         <div class="field">
           <label for="create-opp-title">Title</label>
@@ -974,7 +979,7 @@
           <select id="create-opp-stage" name="stageId" required></select>
         </div>
         <div class="field">
-          <label for="create-opp-expected-close">Change Deal Due Date</label>
+          <label for="create-opp-expected-close">Follow-up Due Date</label>
           <input type="date" id="create-opp-expected-close" name="expectedCloseDate" />
         </div>
         <div id="create-opp-custom-fields" class="create-opp-custom-fields"></div>
@@ -1003,7 +1008,7 @@
         <p id="create-opportunity-error" class="modal-error hidden" role="alert"></p>
         <div class="modal-actions">
           <button type="button" id="create-opportunity-cancel" class="btn btn-secondary">Cancel</button>
-          <button type="submit" id="create-opportunity-submit" class="btn btn-primary">Create opportunity</button>
+          <button type="submit" id="create-opportunity-submit" class="btn btn-primary">Create Project</button>
         </div>
       </form>
     </div>
@@ -1466,6 +1471,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=1.93.0" type="module"></script>
+  <script src="app.js?v=1.95.2" type="module"></script>
 </body>
 </html>
