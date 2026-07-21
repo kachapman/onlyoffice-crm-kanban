@@ -1751,7 +1751,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
              "responsibleUserId": r[4], "dueDate": r[5].isoformat() if r[5] else None,
              "priority": r[6], "isClosed": r[7], "closedAt": r[8].isoformat() if r[8] else None,
              "created": r[9].isoformat() if r[9] else None,
-             "responsible": {"displayName": r[10]} if r[10] else None,
+             "responsible": {"id": r[4], "displayName": r[10]} if r[10] else None,
              "opportunity": {"title": r[11]} if r[11] else None}
             for r in rows
         ])

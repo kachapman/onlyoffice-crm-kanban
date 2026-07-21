@@ -20979,7 +20979,7 @@ async function loadTasks({ force = false } = {}) {
   renderTasksTile();
   const params = new URLSearchParams({ startIndex: "0", count: "200", closed: "false" });
   const filterUser = $("#tasks-user-filter")?.value;
-  if (filterUser) params.set("responsibleid", filterUser);
+  if (filterUser) params.set("responsible_user_id", filterUser);
 
   const path = `/api/v2/tasks?${params}`;
   try {
@@ -21119,10 +21119,10 @@ async function openTasksListModal() {
       });
       label.appendChild(titleLink);
 
-      if (task.deadLine?.value || task.deadLine) {
+      if (task.dueDate || task.deadLine?.value || task.deadLine) {
         const dl = document.createElement("span");
         dl.className = "feed-meta";
-        dl.textContent = `Due ${new Date(task.deadLine?.value || task.deadLine).toLocaleDateString()}`;
+        dl.textContent = `Due ${new Date(task.dueDate || task.deadLine?.value || task.deadLine).toLocaleDateString()}`;
         label.appendChild(dl);
       }
 
@@ -21183,7 +21183,7 @@ function openTaskPreviewModal(task) {
   const createdStr = created ? new Date(created).toLocaleString() : "Unknown";
   const responsible = task.responsible ? (task.responsible.displayName || task.responsible.userName || task.responsible.id) : "Unknown";
   const desc = (task.description || task.Description || "No description").replace(/</g, "&lt;");
-  const due = task.deadLine?.value || task.deadLine ? new Date(task.deadLine?.value || task.deadLine).toLocaleDateString() : "None";
+  const due = task.dueDate || task.deadLine?.value || task.deadLine ? new Date(task.dueDate || task.deadLine?.value || task.deadLine).toLocaleDateString() : "None";
 
   let html = `
     <p><strong>Created by:</strong> ${responsible} on ${createdStr}</p>
@@ -21266,7 +21266,7 @@ function populateTasksUserFilter() {
 }
 
 function taskSortMs(task) {
-  const due = task.deadLine?.value ?? task.deadLine ?? task.deadline;
+  const due = task.dueDate ?? task.deadLine?.value ?? task.deadLine ?? task.deadline;
   if (due) {
     const t = new Date(due).getTime();
     if (!Number.isNaN(t)) return t;
@@ -21278,7 +21278,7 @@ function taskSortMs(task) {
 }
 
 function isTaskOverdue(task) {
-  const deadline = task.deadLine?.value || task.deadLine;
+  const deadline = task.dueDate || task.deadLine?.value || task.deadLine;
   if (!deadline) return false;
   const due = new Date(deadline);
   const now = new Date();
@@ -21323,10 +21323,10 @@ function createTaskRow(task) {
     openTaskPreviewModal(task);
   });
   label.appendChild(titleLink);
-  if (task.deadLine?.value || task.deadLine) {
+  if (task.dueDate || task.deadLine?.value || task.deadLine) {
     const dl = document.createElement("span");
     dl.className = "feed-meta";
-    dl.textContent = `Due ${new Date(task.deadLine?.value || task.deadLine).toLocaleDateString()}`;
+    dl.textContent = `Due ${new Date(task.dueDate || task.deadLine?.value || task.deadLine).toLocaleDateString()}`;
     label.appendChild(dl);
   }
   if (task.entity?.entityType === "opportunity" && task.entity.entityTitle) {
@@ -21377,8 +21377,8 @@ function renderTasksByUser() {
 
   if (fullWidth) {
     const sorted = [...tasks].sort((a, b) => {
-      const da = new Date(a.deadline || a.Deadline || 0).getTime() || Infinity;
-      const db = new Date(b.deadline || b.Deadline || 0).getTime() || Infinity;
+      const da = new Date(a.dueDate || a.deadline || a.Deadline || 0).getTime() || Infinity;
+      const db = new Date(b.dueDate || b.deadline || b.Deadline || 0).getTime() || Infinity;
       return da - db;
     });
     const colCount = 3;

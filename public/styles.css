@@ -1508,11 +1508,13 @@ body {
 
 .dashboard-tile > .tile-body-content {
   display: grid;
-  grid-template-rows: 1fr;
+  grid-template-rows: auto 1fr;
   transition: grid-template-rows 0.3s cubic-bezier(0.4, 0, 0.2, 1),
               opacity 0.25s ease;
   overflow: hidden;
   min-height: 0;
+  flex: 1;
+  min-width: 0;
 }
 
 .dashboard-tile.tile-body-collapsed > .tile-body-content {
@@ -1522,7 +1524,8 @@ body {
 }
 
 .dashboard-tile > .tile-body-content > * {
-  overflow: hidden;
+  min-height: 0;
+  min-width: 0;
 }
 
 .dashboard-tile.tile-body-collapsed > *:not(.tile-toolbar):not(.group-tile-bar):not(.tile-body-content) {
