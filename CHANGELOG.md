@@ -2,6 +2,19 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 2D-3 — Grid stability fix (ISSUE-013)
+
+### v1.95.5 (pending verification — committed, not pushed)
+- **Fixed erratic tile jumping during resize and drag.** Root causes: `grid-auto-flow: dense` re-packed the whole board on any span change; resize committed span classes + localStorage on every mousemove; the snap threshold was re-measured from the just-reflowed grid each event; SortableJS `forceFallback` floated a detached clone over the grid-locked real tile; every tile animated `transform` with `will-change`. See ISSUES.md ISSUE-013.
+- **Resize is now ghost-preview + commit-on-release.** Dragging a corner handle moves only a dashed accent outline (clamped inside the grid); the tile's span class and storage save apply exactly once on pointerup, only if the span changed. Unified mouse/touch via pointer events.
+- **Removed `grid-auto-flow: dense`.** Visual order now always equals saved order; no more board reshuffles. Trade-off: occasional gaps when mixing tile widths.
+- **SortableJS native drag** (`forceFallback: false`) — the dragged tile stays inside the grid flow and neighbors shift once with the 200ms animation. Sortable instance is created once, not destroyed/recreated on every mount.
+- **`mountDashboardTiles()` no longer tears down the DOM.** Tiles are reordered in place via `appendChild` (event listeners, scroll positions, and iframe contents survive); only tiles removed from the layout are swept.
+- **Removed dead `toolbar.draggable = true`** from the four tile-chrome creators (pre-Sortable leftover that stole native drags from the tile).
+- **Removed `will-change: transform` / transform transition** from all tiles (hover shadow/border transitions kept).
+- Cache-bust bumped to `app.js?v=1.95.5`, `styles.css?v=1.87.12`.
+- Known follow-up: `renderBoardGroups()` still rebuilds every group tile on data refresh (loses scroll/filter DOM state) — deferred, see ISSUE-013.
+
 ## Phase 2D-2 — Tile layout redesign
 
 ### v1.95.4 (latest)

@@ -1337,7 +1337,6 @@ function bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn, quarte
 function createTileChrome(tileId, label) {
   const toolbar = document.createElement("div");
   toolbar.className = "tile-toolbar";
-  toolbar.draggable = true;
   toolbar.dataset.tileId = tileId;
 
   const hint = document.createElement("span");
@@ -1445,66 +1444,106 @@ function addResizeHandles(tileEl, tileId) {
 }
 
 function bindTileResize(tileEl, tileId, handle, corner) {
-  let startX, startW, startH;
+  // ISSUE-013: the old implementation committed span classes + localStorage on
+  // every mousemove and re-measured the (just-reflowed) grid each event, so the
+  // whole board jumped during a drag. Now: measure ONCE at pointerdown, move a
+  // ghost preview during the drag, and commit span + storage exactly once on
+  // pointerup. The grid never changes mid-gesture, so cached metrics stay valid.
+  let startX, startSpanCols, colWidth, gapWidth, gridContentWidth;
+  let baseLeft, baseTop, baseWidth, baseHeight;
+  let ghost = null;
+  let pendingWidth = null;
+
+  const spanColsForWidth = (name) => (name === "quarter" ? 1 : name === "half" ? 2 : 4);
+  const widthForSpanCols = (span) => (span <= 1 ? "quarter" : span === 2 ? "half" : "full");
+
+  const positionGhost = (spanCols) => {
+    if (!ghost) return;
+    let widthPx = spanCols * colWidth + (spanCols - 1) * gapWidth;
+    // se grows rightward from the tile's left edge; sw grows leftward with the
+    // right edge anchored.
+    let left = corner === "se" ? baseLeft : baseLeft + baseWidth - widthPx;
+    // Keep the preview inside the grid's content box — an overflowing ghost
+    // could force a horizontal page scrollbar mid-drag.
+    left = Math.max(0, Math.min(left, gridContentWidth));
+    widthPx = Math.min(widthPx, gridContentWidth - left);
+    ghost.style.top = `${baseTop}px`;
+    ghost.style.left = `${left}px`;
+    ghost.style.width = `${widthPx}px`;
+    ghost.style.height = `${baseHeight}px`;
+  };
 
   const onPointerDown = (e) => {
     if (e.button && e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
-    startX = e.clientX || e.touches?.[0]?.clientX || 0;
-    startW = tileEl.offsetWidth;
-    startH = tileEl.offsetHeight;
 
-    document.addEventListener("mousemove", onPointerMove, { passive: false });
-    document.addEventListener("mouseup", onPointerUp);
-    document.addEventListener("touchmove", onPointerMove, { passive: false });
-    document.addEventListener("touchend", onPointerUp);
+    const grid = tileEl.parentElement;
+    if (!grid) return;
+
+    // Measure once. offset* is relative to the grid (position: relative) and is
+    // unaffected by page scroll during the gesture.
+    const gridStyle = getComputedStyle(grid);
+    const tracks = (gridStyle.gridTemplateColumns || "").split(" ").filter(Boolean);
+    colWidth = parseFloat(tracks[0]) || tileEl.offsetWidth;
+    gapWidth = parseFloat(gridStyle.columnGap || gridStyle.gap) || 0;
+    gridContentWidth = tracks.length * colWidth + Math.max(0, tracks.length - 1) * gapWidth;
+    baseLeft = tileEl.offsetLeft;
+    baseTop = tileEl.offsetTop;
+    baseWidth = tileEl.offsetWidth;
+    baseHeight = tileEl.offsetHeight;
+
+    startX = e.clientX;
+    startSpanCols = spanColsForWidth(tileWidth(tileId));
+    pendingWidth = tileWidth(tileId);
+
+    ghost = document.createElement("div");
+    ghost.className = "tile-resize-ghost";
+    grid.appendChild(ghost);
+    positionGhost(startSpanCols);
+
     handle.setPointerCapture?.(e.pointerId);
+    document.addEventListener("pointermove", onPointerMove, { passive: false });
+    document.addEventListener("pointerup", onPointerUp);
+    document.addEventListener("pointercancel", onPointerUp);
     tileEl.classList.add("tile-resizing");
   };
 
   const onPointerMove = (e) => {
     e.preventDefault();
-    const cx = e.clientX || e.touches?.[0]?.clientX || 0;
-    const dx = cx - startX;
+    const step = colWidth + gapWidth;
+    if (!step) return;
+    const dx = (e.clientX || 0) - startX;
+    // Span N width = N*step - gap  →  N = (width + gap) / step
+    const currentSpanWidth = startSpanCols * step - gapWidth;
+    const stretched = corner === "se" ? currentSpanWidth + dx : currentSpanWidth - dx;
+    let newSpan = Math.round((stretched + gapWidth) / step);
+    newSpan = Math.max(1, Math.min(4, newSpan));
+    if (newSpan === 3) newSpan = newSpan > startSpanCols ? 4 : 2;
 
-    const grid = tileEl.parentElement;
-    if (!grid) return;
-    const gridStyle = getComputedStyle(grid);
-    const cols = gridStyle.gridTemplateColumns.split(" ");
-    const colWidth = parseFloat(cols[0]) + parseFloat(gridStyle.gap || 20);
-
-    let newColSpan;
-    if (corner === "se") {
-      newColSpan = Math.round((startW + dx) / colWidth);
-    } else {
-      newColSpan = Math.round((startW - dx) / colWidth);
-    }
-    newColSpan = Math.max(1, Math.min(4, newColSpan));
-    if (newColSpan === 3) newColSpan = newColSpan > (startW / colWidth) ? 4 : 2;
-
-    let newWidth;
-    if (newColSpan <= 1) newWidth = "quarter";
-    else if (newColSpan <= 2) newWidth = "half";
-    else newWidth = "full";
-
-    setTileWidth(tileId, newWidth);
-    applyTileLayoutClasses(tileEl, tileId);
+    pendingWidth = widthForSpanCols(newSpan);
+    positionGhost(newSpan);
   };
 
   const onPointerUp = () => {
-    document.removeEventListener("mousemove", onPointerMove);
-    document.removeEventListener("mouseup", onPointerUp);
-    document.removeEventListener("touchmove", onPointerMove);
-    document.removeEventListener("touchend", onPointerUp);
+    document.removeEventListener("pointermove", onPointerMove);
+    document.removeEventListener("pointerup", onPointerUp);
+    document.removeEventListener("pointercancel", onPointerUp);
     tileEl.classList.remove("tile-resizing");
+    if (ghost) {
+      ghost.remove();
+      ghost = null;
+    }
+    // Commit exactly once, on release (one localStorage write + one debounced
+    // profile save) — and only if the span actually changed.
+    if (pendingWidth && pendingWidth !== tileWidth(tileId)) {
+      setTileWidth(tileId, pendingWidth);
+      applyTileLayoutClasses(tileEl, tileId);
+    }
+    pendingWidth = null;
   };
 
   handle.addEventListener("pointerdown", onPointerDown);
-  handle.addEventListener("touchstart", (e) => {
-    e.preventDefault();
-    onPointerDown({ clientX: e.touches[0].clientX, clientY: e.touches[0].clientY, button: 0, preventDefault: () => {}, stopPropagation: () => {}, touches: e.touches });
-  }, { passive: false });
 }
 
 function loadGroupTemplates() {
@@ -1600,7 +1639,6 @@ function bindGroupTileChrome(section, group, tileId) {
 
   const toolbar = document.createElement("div");
   toolbar.className = "tile-toolbar group-tile-bar";
-  toolbar.draggable = true;
   toolbar.dataset.tileId = tileId;
 
   const hint = document.createElement("span");
@@ -1838,15 +1876,12 @@ function mountDashboardTiles() {
     renderPresenceTile();
   }
 
-  // Destroy old Sortable instance before clearing DOM
-  if (root._sortableInstance) {
-    root._sortableInstance.destroy();
-    root._sortableInstance = null;
-  }
-
   const nodes = collectDashboardTileNodes();
-  root.innerHTML = "";
+  const known = new Set(state.tileLayout.order);
 
+  // Reorder in place — appendChild MOVES an already-attached node, preserving
+  // event listeners, scroll positions, and iframe contents. No innerHTML=""
+  // teardown (ISSUE-013).
   for (const tileId of state.tileLayout.order) {
     const node = nodes.get(tileId);
     if (!node) continue;
@@ -1855,16 +1890,29 @@ function mountDashboardTiles() {
     applyTileBodyCollapsed(node, tileId);
   }
 
-  // Create fresh Sortable instance
-  if (typeof Sortable !== "undefined") {
+  // Sweep stray tiles whose id is no longer in the layout (e.g. deleted groups),
+  // plus any orphaned resize ghosts.
+  for (const child of [...root.children]) {
+    if (child.classList?.contains("tile-resize-ghost")) {
+      child.remove();
+    } else if (child.dataset?.tileId && !known.has(child.dataset.tileId)) {
+      child.remove();
+    }
+  }
+
+  // Create the Sortable instance ONCE. It binds to the container, not the
+  // children, so external reorders via appendChild are fine.
+  // forceFallback: false → native drag keeps the tile inside the grid flow, so
+  // neighbours shift predictably instead of a detached clone floating over a
+  // grid that holds the real tile in place (ISSUE-013).
+  if (typeof Sortable !== "undefined" && !root._sortableInstance) {
     root._sortableInstance = Sortable.create(root, {
       animation: 200,
       handle: ".tile-drag-hint",
       ghostClass: "sortable-ghost",
       chosenClass: "sortable-chosen",
       dragClass: "sortable-drag",
-      forceFallback: true,
-      fallbackTolerance: 3,
+      forceFallback: false,
       onEnd: (evt) => {
         const order = [];
         root.querySelectorAll(":scope > .dashboard-tile[data-tile-id]").forEach((el) => {
@@ -4238,7 +4286,6 @@ function bindCalendarTileChrome(section, cal, tileId) {
 
   const toolbar = document.createElement("div");
   toolbar.className = "tile-toolbar group-tile-bar calendar-tile-bar";
-  toolbar.draggable = true;
   toolbar.dataset.tileId = tileId;
 
   const hint = document.createElement("span");
@@ -5464,7 +5511,6 @@ function bindNotesTileChrome(section, notes, tileId) {
 
   const toolbar = document.createElement("div");
   toolbar.className = "tile-toolbar group-tile-bar notes-tile-bar";
-  toolbar.draggable = true;
   toolbar.dataset.tileId = tileId;
 
   const hint = document.createElement("span");

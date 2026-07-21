@@ -1341,6 +1341,9 @@ body {
 }
 
 /* Dashboard tile grid — 4 columns; double height spans 2 rows */
+/* NOTE: no grid-auto-flow:dense — dense re-packs ALL tiles on any span change,
+   causing cascading reflow + visual reorder vs saved order (ISSUE-013). Row-major
+   flow keeps visual order == DOM order == saved order. */
 .dashboard-tiles {
   --tile-row-height: 400px;
   max-width: 1820px;
@@ -1349,9 +1352,9 @@ body {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   grid-auto-rows: auto;
-  grid-auto-flow: dense;
   gap: 1.25rem;
   align-items: start;
+  position: relative; /* anchor for .tile-resize-ghost */
 }
 
 .dashboard-tile {
@@ -1364,8 +1367,9 @@ body {
   overflow: visible;
   display: flex;
   flex-direction: column;
-  transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
-  will-change: transform;
+  /* No transform transition / will-change here — animating transform on every
+     tile makes grid reflows look like jumping and wastes GPU (ISSUE-013). */
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
 }
 
 .dashboard-tile:hover {
@@ -9199,6 +9203,7 @@ body {
   z-index: 10;
   opacity: 0;
   transition: opacity 0.15s ease;
+  touch-action: none; /* let pointer events drive the resize on touch */
 }
 
 .dashboard-tile:hover .tile-resize-handle {
@@ -9210,9 +9215,7 @@ body {
 }
 
 .dashboard-tile.tile-resizing {
-  opacity: 0.8;
-  outline: 2px dashed var(--accent, #6d4aff);
-  outline-offset: -2px;
+  opacity: 0.65;
 }
 
 .tile-resize-se {
@@ -9227,6 +9230,18 @@ body {
   left: 0;
   cursor: nesw-resize;
   background: linear-gradient(225deg, transparent 55%, var(--muted) 55%, var(--muted) 62%, transparent 62%, transparent 75%, var(--muted) 75%, var(--muted) 82%, transparent 82%);
+}
+
+/* Ghost preview shown during resize drag — the ONLY thing that moves.
+   The real tile keeps its grid span until pointerup commit (ISSUE-013). */
+.tile-resize-ghost {
+  position: absolute;
+  z-index: 20;
+  pointer-events: none;
+  box-sizing: border-box;
+  border: 2px dashed var(--accent, #6d4aff);
+  border-radius: var(--radius);
+  background: rgba(109, 75, 255, 0.08);
 }
 
 @media (max-width: 600px) {

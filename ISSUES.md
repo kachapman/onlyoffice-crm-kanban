@@ -1,5 +1,50 @@
 # Known issues
 
+## ISSUE-013 — Dashboard tiles jump erratically during resize/drag ("invisible grid")
+
+**Status:** ✅ Fixed 2026-07-21 — Phase 2D-3 (pending user browser verification; committed, NOT pushed)  
+**Priority:** High  
+**Area:** Dashboard tile grid (`public/app.js`, `public/styles.css`)
+
+### Summary
+
+After the Phase 2D/2D-2 layout overhaul, tiles jumped around erratically during resize and drag. The dashboard felt like "an invisible grid holding the tiles in place."
+
+### Root causes (five compounding defects)
+
+1. **`grid-auto-flow: dense`** (styles.css `.dashboard-tiles`) — any span change re-packed ALL tiles into the first available gaps, so resizing/dragging one tile reshuffled the whole board. It also made visual order diverge from saved `tileLayout.order`.
+2. **Resize committed live on every mousemove** (`bindTileResize` → `setTileWidth` → `saveLayoutToStorage` + `applyTileLayoutClasses`) — localStorage write + profile-save scheduling + actual `grid-column: span N` class flip ~60×/second during a drag.
+3. **Snap threshold measured from a moving target** — `getComputedStyle(grid).gridTemplateColumns` re-read every mousemove, right after the previous mousemove changed the spans; the column width being measured against shifted mid-drag → oscillation.
+4. **SortableJS `forceFallback: true`** — the element following the mouse was an absolutely-positioned clone outside grid flow while the real tile stayed locked in its grid slot (ghost class) — the exact "invisible grid" sensation. Additionally, dead `toolbar.draggable = true` attributes (pre-Sortable native DnD leftover) would have stolen native drags from the tile.
+5. **`transition: transform` + `will-change: transform` on every `.dashboard-tile`** — all reflow movement was animated and GPU-promoted, making reflows look like jumping.
+
+Secondary: `mountDashboardTiles()` did `root.innerHTML = ""` + destroy/recreate Sortable on every call.
+
+### Fix (Phase 2D-3)
+
+1. **Removed `grid-auto-flow: dense`** → row-major flow; visual order == DOM order == saved order. Trade-off: occasional gaps with mixed tile widths (accepted by user).
+2. **Ghost-preview resize** — `bindTileResize` rewritten: measure column/gap/offsets ONCE at `pointerdown`; during `pointermove` only a `.tile-resize-ghost` dashed overlay moves (clamped inside the grid content box so it can't force a horizontal scrollbar); span class + `saveLayoutToStorage()` commit exactly ONCE on `pointerup`, only if the span changed. Unified to pointer events (`touch-action: none` on handles).
+3. **SortableJS `forceFallback: false`** — the dragged tile participates in grid flow; neighbors shift once with the existing 200ms animation. Instance is now created once and kept (`root._sortableInstance`), not destroyed/recreated per mount.
+4. **Removed** `transform` transition + `will-change: transform` from `.dashboard-tile` (hover shadow/border kept).
+5. **`mountDashboardTiles()`** — no more `innerHTML = ""` teardown; reorders in place via `appendChild` (preserves listeners/scroll/iframes) + sweeps only stray tiles whose id left the layout.
+6. **Removed dead `toolbar.draggable = true`** from all four tile-chrome creators (`createTileChrome`, `bindGroupTileChrome`, `bindCalendarTileChrome`, `bindNotesTileChrome`) — conflicted with native-mode Sortable drag.
+
+### Files changed
+
+| File | Role |
+|------|------|
+| `public/styles.css` | no dense flow, `position: relative` grid, ghost styles, handle `touch-action`, tile transition slimmed |
+| `public/app.js` | `bindTileResize` rewrite, `mountDashboardTiles` in-place reorder, Sortable options, 4× draggable removal |
+| `public/index.html` | cache-bust `app.js?v=1.95.5`, `styles.css?v=1.87.12` |
+
+### Known follow-up (out of scope, not fixed)
+
+- `renderBoardGroups()` still removes/recreates every group tile `<section>` on each data refresh (app.js:8198), losing scroll/filter DOM state. Should become idempotent (update in place). Deliberately deferred — drag/resize stability was the reported symptom.
+- Pin-feature dead code remains (`PINNED_TILE_IDS`, `isTilePinnedToTop`, `setTilePinnedToTop`, `normalizeOrderForPinned`, `bindTilePinButton`, `applyTilePinState`, `isTilePinned`/`setTilePinned`).
+- Odysseus-style freeform windows (fixed position + snap zones) evaluated and rejected — incompatible with CSS Grid architecture, high risk. User chose grid fix.
+
+---
+
 ## ISSUE-011 — Documents modal sidebar: per-project list loaded at open + infrastructure monitoring
 
 **Status:** ✅ Fixed 2026-07-20  
