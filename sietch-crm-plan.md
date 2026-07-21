@@ -98,7 +98,7 @@ Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local 
 | 2A: Search modal expansion | ✅ | Filters (stage, owner), batch ops (add/remove tag, set stage, export selected), rich results, select-all, row-click preview. |
 | 2B: Project card click behavior | ✅ | Cards click → preview (side/full) or edit; Phase 1 follow-up completed. |
 | 2C: Unified Admin Modal | ✅ | Vertical sidebar tabs (overview/sync/users/stages/custom-fields/contacts/tags/branding/bot/logs); custom fields read-only, tags add, contacts/stages add+search, sync stubs; icons per non-neg. Projects managed via search modal (filters + batch ops). |
-| 2D: Tile layout refactoring | 🟡 | CSS grid (spans, double-height, responsive), native drag-drop + hints + layout buttons; SortableJS/FLIP/terminal theme per big plan not yet. |
+| 2D: Tile layout refactoring | ✅ | CSS grid (spans, double-height, responsive), SortableJS drag-drop + ghost/chosen/drag classes + layout buttons; smooth collapse animation; terminal theme on data panes + admin modal; hover glow. |
 | 2E: Photo gallery | 🔲 | Backend + DB + quota/EXIF/folders ready; no frontend UI (no Photos tab in preview, no gallery/lightbox). |
 | 2F: Notification drawer | 🔲 | Feed tile + keyword filter exists; no slide-out drawer with inline replies. |
 | 2G: User profile/account modal | 🔲 | /api/user-profile exists for sync; no dedicated modal for edit (name/email/pw/prefs/pic). |

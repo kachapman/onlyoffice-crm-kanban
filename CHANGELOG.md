@@ -2,6 +2,18 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 2D — Dashboard layout overhaul (Odysseus-style)
+
+- **SortableJS integration:** Replaced native HTML5 drag-and-drop with SortableJS for smooth 200ms reorder animations. Tiles use ghost/chosen/drag CSS classes during reorder. No more full re-render on drop — tiles animate to new positions. Drag handle is the `⋮⋮` hint in each tile toolbar.
+- **Responsive grid breakpoints:** Added mid-tier tablet breakpoint (601–1024px → 2 columns). Mobile breakpoint moved from 900px to 600px (single column). Desktop remains 4-column grid.
+- **`.tile-three` CSS class:** Added `grid-column: span 3` for three-quarter-width tiles.
+- **Smooth collapse animation:** Tile collapse/expand now uses `grid-template-rows` transition (0.3s cubic-bezier) instead of instant `display: none`. Content wraps in `.tile-body-content` div for smooth height animation.
+- **Hover glow:** Tiles now show a subtle purple box-shadow (`0 4px 16px rgba(109, 75, 255, 0.12)`) and accent border on hover. Added `will-change: transform` for GPU acceleration.
+- **Terminal theme (scrolling data panes):** History notes, feed, event log, and task lists now use DM Mono monospace font, dark `#0d0d0d` background, `#333` border-left entry markers, and `#7c8aff` link color. Hover shows subtle purple highlight.
+- **Admin modal terminal theme:** Admin modal gets dark background (`#0a0a0a`), gradient sidebar (`#1a1a1a` → `#0a0a0a`), green accent (`#00ff88`) for active tabs, monospace font on tab buttons, and `text-shadow` glow on active state.
+- **DM Mono font loaded** from Google Fonts for terminal theme.
+- Cache-bust bumped to `v=1.95.3`.
+
 ## Phase 2I — Preview modal + tile revamp
 
 - **Preview modal restructured:** Description moved to top with inline edit (pencil button → textarea with confirm/cancel). Stage split into its own section with dropdown. Tags section moved between Stage and Project Fields.

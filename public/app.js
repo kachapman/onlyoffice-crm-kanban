@@ -1478,6 +1478,7 @@ function bindTileChrome(tileEl, tileId) {
       bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn, null);
     }
     tileEl.prepend(toolbar);
+    wrapTileBodyContent(tileEl);
     bindTileDragDrop(tileEl, tileId, toolbar);
   } else {
     ensurePanelToolbarCount(tileEl, tileId);
@@ -1489,44 +1490,23 @@ function bindTileChrome(tileEl, tileId) {
   if (tileId === "tile-tasks") ensureTasksNewTaskButton(tileEl);
 }
 
+function wrapTileBodyContent(tileEl) {
+  if (tileEl.querySelector(":scope > .tile-body-content")) return;
+  const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
+  if (!toolbar) return;
+  const children = [...tileEl.children].filter(c => c !== toolbar && !c.classList.contains('tile-body-content'));
+  if (!children.length) return;
+  const wrapper = document.createElement('div');
+  wrapper.className = 'tile-body-content';
+  children.forEach(c => wrapper.appendChild(c));
+  tileEl.appendChild(wrapper);
+}
+
 function bindTileDragDrop(tileEl, tileId, toolbar) {
-  // Allow drag for feed/tasks tiles even when pinned: this enables left/right reordering within the top panel row (like other tiles support reordering).
-  // The pinned ones still render visually at top (in their top containers), and other tiles cannot appear above them.
   if (tileEl.dataset.dragBound === "1") return;
   tileEl.dataset.dragBound = "1";
-
-  toolbar.addEventListener("dragstart", (e) => {
-    e.dataTransfer.setData("text/plain", tileId);
-    e.dataTransfer.effectAllowed = "move";
-    tileEl.classList.add("dragging");
-  });
-  toolbar.addEventListener("dragend", () => {
-    tileEl.classList.remove("dragging");
-    document.querySelectorAll(".dashboard-tile.drag-over").forEach((n) => n.classList.remove("drag-over"));
-  });
-
-  tileEl.addEventListener("dragover", (e) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    tileEl.classList.add("drag-over");
-  });
-  tileEl.addEventListener("dragleave", () => tileEl.classList.remove("drag-over"));
-  tileEl.addEventListener("drop", (e) => {
-    e.preventDefault();
-    tileEl.classList.remove("drag-over");
-    const fromId = e.dataTransfer.getData("text/plain");
-    if (!fromId || fromId === tileId) return;
-    const order = [...state.tileLayout.order];
-    const fromIdx = order.indexOf(fromId);
-    const toIdx = order.indexOf(tileId);
-    if (fromIdx < 0 || toIdx < 0) return;
-    order.splice(fromIdx, 1);
-    order.splice(toIdx, 0, fromId);
-    state.tileLayout.order = order;
-    normalizeOrderForPinned();
-    saveLayoutToStorage();
-    mountDashboardTiles();
-  });
+  const h = toolbar.querySelector(".tile-drag-hint");
+  if (h) h.classList.remove("hidden");
 }
 
 function loadGroupTemplates() {
@@ -1690,6 +1670,7 @@ function bindGroupTileChrome(section, group, tileId) {
   toolbar.appendChild(wrap);
 
   section.prepend(toolbar);
+  wrapTileBodyContent(section);
   bindTileLayoutButtons(section, tileId, halfBtn, fullBtn, tallBtn);
   bindTileDragDrop(section, tileId, toolbar);
   attachTileCollapseButton(section, tileId);
@@ -1843,6 +1824,76 @@ function mountDashboardTiles() {
     node.classList.remove("panel-slot-left", "panel-slot-right");
     applyTileLayoutClasses(node, tileId);
     applyTileBodyCollapsed(node, tileId);
+  }
+
+  initSortableDashboard();
+}
+
+function initSortableDashboard() {
+  if (typeof Sortable === "undefined") return;
+
+  const mainRoot = $("#dashboard-tiles");
+  const panelRow = $("#dashboard-panel-row");
+
+  if (mainRoot && !mainRoot._sortableInstance) {
+    mainRoot._sortableInstance = Sortable.create(mainRoot, {
+      animation: 200,
+      handle: ".tile-drag-hint",
+      ghostClass: "sortable-ghost",
+      chosenClass: "sortable-chosen",
+      dragClass: "sortable-drag",
+      forceFallback: true,
+      fallbackTolerance: 3,
+      onEnd: function (evt) {
+        const order = [];
+        mainRoot.querySelectorAll(":scope > .dashboard-tile[data-tile-id]").forEach((el) => {
+          order.push(el.dataset.tileId);
+        });
+        const pinnedOrder = [];
+        panelRow?.querySelectorAll(":scope > .dashboard-tile[data-tile-id]").forEach((el) => {
+          pinnedOrder.push(el.dataset.tileId);
+        });
+        const pinnedCollapsed = [];
+        const pinnedRoot = $("#dashboard-tiles-pinned");
+        pinnedRoot?.querySelectorAll(":scope > .dashboard-tile[data-tile-id]").forEach((el) => {
+          pinnedCollapsed.push(el.dataset.tileId);
+        });
+        state.tileLayout.order = [...pinnedOrder, ...pinnedCollapsed, ...order];
+        normalizeOrderForPinned();
+        saveLayoutToStorage();
+      }
+    });
+  }
+
+  if (panelRow && !panelRow._sortableInstance) {
+    panelRow._sortableInstance = Sortable.create(panelRow, {
+      animation: 200,
+      handle: ".tile-drag-hint",
+      ghostClass: "sortable-ghost",
+      chosenClass: "sortable-chosen",
+      dragClass: "sortable-drag",
+      group: "pinned-tiles",
+      forceFallback: true,
+      fallbackTolerance: 3,
+      onEnd: function (evt) {
+        const pinnedOrder = [];
+        panelRow.querySelectorAll(":scope > .dashboard-tile[data-tile-id]").forEach((el) => {
+          pinnedOrder.push(el.dataset.tileId);
+        });
+        const pinnedCollapsed = [];
+        const pinnedRoot = $("#dashboard-tiles-pinned");
+        pinnedRoot?.querySelectorAll(":scope > .dashboard-tile[data-tile-id]").forEach((el) => {
+          pinnedCollapsed.push(el.dataset.tileId);
+        });
+        const mainOrder = [];
+        mainRoot?.querySelectorAll(":scope > .dashboard-tile[data-tile-id]").forEach((el) => {
+          mainOrder.push(el.dataset.tileId);
+        });
+        state.tileLayout.order = [...pinnedOrder, ...pinnedCollapsed, ...mainOrder];
+        normalizeOrderForPinned();
+        saveLayoutToStorage();
+      }
+    });
   }
 }
 
@@ -4270,6 +4321,7 @@ function bindCalendarTileChrome(section, cal, tileId) {
   toolbar.appendChild(wrap);
 
   section.prepend(toolbar);
+  wrapTileBodyContent(section);
   bindTileLayoutButtons(section, tileId, halfBtn, fullBtn, tallBtn);
   bindTileDragDrop(section, tileId, toolbar);
   attachTileCollapseButton(section, tileId);
@@ -5589,6 +5641,7 @@ function bindNotesTileChrome(section, notes, tileId) {
   toolbar.appendChild(wrap);
 
   section.prepend(toolbar);
+  wrapTileBodyContent(section);
   bindTileLayoutButtons(section, tileId, halfBtn, fullBtn, tallBtn, quarterBtn);
   bindTileDragDrop(section, tileId, toolbar);
   attachTileCollapseButton(section, tileId);

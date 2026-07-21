@@ -1447,11 +1447,21 @@ body {
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  transition: box-shadow 0.15s, border-color 0.15s;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+  will-change: transform;
+}
+
+.dashboard-tile:hover {
+  border-color: var(--accent-soft, rgba(109, 75, 255, 0.3));
+  box-shadow: 0 4px 16px rgba(109, 75, 255, 0.12);
 }
 
 .dashboard-tile.tile-half {
   grid-column: span 2;
+}
+
+.dashboard-tile.tile-three {
+  grid-column: span 3;
 }
 
 .dashboard-tile.tile-quarter {
@@ -1496,7 +1506,26 @@ body {
   grid-row: auto;
 }
 
-.dashboard-tile.tile-body-collapsed > *:not(.tile-toolbar):not(.group-tile-bar) {
+.dashboard-tile > .tile-body-content {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 0.25s ease;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.dashboard-tile.tile-body-collapsed > .tile-body-content {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.dashboard-tile > .tile-body-content > * {
+  overflow: hidden;
+}
+
+.dashboard-tile.tile-body-collapsed > *:not(.tile-toolbar):not(.group-tile-bar):not(.tile-body-content) {
   display: none !important;
 }
 
@@ -2558,13 +2587,46 @@ body {
   border-radius: 8px;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1024px) {
+  .dashboard-tiles {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .dashboard-tile {
+    grid-column: span 2;
+  }
+  .dashboard-tile.tile-half {
+    grid-column: span 2;
+  }
+  .dashboard-tile.tile-three {
+    grid-column: span 2;
+  }
+  .dashboard-tile.tile-quarter {
+    grid-column: span 1;
+  }
+
+  .dashboard-panel-row .dashboard-tile.panel-width-quarter,
+  .dashboard-panel-row .dashboard-tile.panel-width-half,
+  .dashboard-panel-row .dashboard-tile.panel-width-full,
+  .dashboard-panel-row .dashboard-tile,
+  .dashboard-tiles-pinned .dashboard-tile.panel-width-quarter,
+  .dashboard-tiles-pinned .dashboard-tile.panel-width-half,
+  .dashboard-tiles-pinned .dashboard-tile.panel-width-full,
+  .dashboard-tiles-pinned .dashboard-tile {
+    flex: 1 1 100%;
+    max-width: 100%;
+    width: 100%;
+  }
+}
+
+@media (max-width: 600px) {
   .dashboard-tiles {
     grid-template-columns: 1fr;
   }
 
   .dashboard-tile,
   .dashboard-tile.tile-half,
+  .dashboard-tile.tile-three,
   .dashboard-tile.tile-quarter {
     grid-column: 1 / -1;
   }
@@ -9199,6 +9261,116 @@ body {
     width: 98vw;
     height: 90vh;
   }
+}
+
+/* ── Phase 2D: Terminal Theme (Scrolling Data Panes) ───────────────────────── */
+/* Applied to: history notes, feed, event log — monospace font, dark bg, border-left entry markers */
+.history-scroll-pane,
+.event-log-list,
+.feed-list,
+.tasks-scroll-pane {
+  font-family: 'DM Mono', ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+  background: #0d0d0d;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  padding: 0.65rem;
+  line-height: 1.55;
+  color: #d0d0d0;
+  font-size: 0.82rem;
+}
+
+.history-scroll-pane .entry,
+.event-log-list .event-log-entry,
+.feed-list li,
+.tasks-scroll-pane .task-row {
+  border-left: 2px solid #333;
+  padding-left: 0.7rem;
+  margin-bottom: 0.4rem;
+}
+
+.history-scroll-pane .entry.reply,
+.event-log-list .event-log-entry.reply,
+.feed-list li.reply,
+.tasks-scroll-pane .task-row.reply {
+  border-left-color: #666;
+  margin-left: 1rem;
+}
+
+.history-scroll-pane .entry:hover,
+.event-log-list .event-log-entry:hover,
+.feed-list li:hover,
+.tasks-scroll-pane .task-row:hover {
+  background: rgba(109, 75, 255, 0.06);
+}
+
+.history-scroll-pane a,
+.event-log-list a,
+.feed-list a,
+.tasks-scroll-pane a {
+  color: #7c8aff;
+}
+
+/* ── Phase 2D: Admin Modal Terminal Theme ──────────────────────────────────── */
+#admin-console-modal .modal-card,
+.admin-modal-card {
+  background: #0a0a0a;
+  border: 1px solid #333;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
+}
+
+#admin-console-modal .admin-body {
+  background: #0f0f0f;
+}
+
+#admin-console-modal .admin-tabs {
+  background: linear-gradient(180deg, #1a1a1a 0%, #0a0a0a 100%);
+  border-right: 1px solid #333;
+}
+
+#admin-console-modal .admin-tab-btn {
+  color: #e0e0e0;
+  border-left: 3px solid transparent;
+  border: none;
+  border-left: 3px solid transparent;
+  background: transparent;
+  font-family: 'DM Mono', ui-monospace, 'Consolas', monospace;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+#admin-console-modal .admin-tab-btn:hover {
+  background: #1a1a1a;
+  color: #00ff88;
+}
+
+#admin-console-modal .admin-tab-btn.active {
+  background: #1a1a1a;
+  border-left-color: #00ff88;
+  color: #00ff88;
+  text-shadow: 0 0 8px rgba(0, 255, 136, 0.4);
+}
+
+#admin-console-modal .admin-main {
+  background: #0f0f0f;
+  color: #d0d0d0;
+}
+
+/* ── Phase 2D: SortableJS Drag Classes ─────────────────────────────────────── */
+.dashboard-tile.sortable-ghost {
+  opacity: 0.35;
+  border: 2px dashed var(--accent, #6d4aff);
+  box-shadow: 0 0 0 3px rgba(109, 75, 255, 0.15);
+}
+
+.dashboard-tile.sortable-chosen {
+  border-color: var(--accent, #6d4aff);
+  box-shadow: 0 4px 20px rgba(109, 75, 255, 0.2);
+  transform: scale(1.01);
+}
+
+.dashboard-tile.sortable-drag {
+  opacity: 0.9;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  z-index: 9999;
 }
 
 /* Narrow mobile: prevent modal cutoff and keep content inside */
