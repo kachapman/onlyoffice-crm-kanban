@@ -15,6 +15,16 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - Cache-bust bumped to `app.js?v=1.95.5`, `styles.css?v=1.87.13`.
 - Known follow-up: `renderBoardGroups()` still rebuilds every group tile on data refresh (loses scroll/filter DOM state) — deferred, see ISSUE-013.
 
+### v1.95.6 (pending verification — committed, not pushed)
+- **Height resize added to corner handles.** Drag vertically to toggle normal/double height (grid-row span). Ghost preview shows target height; commits on pointerup only (single save).
+- **Click-to-edit titles, no more pencils.** All tiles (groups, notes, calendars, local kanban) now enter edit mode by clicking the title text directly. Enter or blur saves; Escape reverts. The edit input only exists while editing and sizes itself dynamically to the text (ch units) so it never pushes buttons to another row.
+- **Uniform toolbar layout across all tiles.** New containers: `.tile-toolbar-tools` (tile-specific buttons: filter, template, format, new-task, eye, calendar nav, etc.) and `.tile-toolbar-actions` (Refresh, Minimize, Close). Actions are always last with `margin-left:auto`.
+- **Narrow + mobile row behavior.** On `.tile-quarter`, `.tile-half`, and viewport `≤600px`, actions stay on row 1 (top-right); tools drop to row 2. Full-width tiles remain single-row.
+- **Consistent button ordering.** When present: Refresh first in actions, then Minimize, then Close. All insertion points (`attachTileCollapseButton`, `ensureTileAutoRefreshButton`, feed eye, tasks buttons, archive/remove) now target the containers.
+- **Calendar titles fixed.** Replaced the always-visible static-width input with the same click-to-edit pattern used by groups/notes.
+- **Cleanup.** Removed `ensureNotesToolbarRows` and its call sites + related dead CSS (notes-layout-top-row, notes-tile-name hacks, `.btn-edit-group-name` creation).
+- Cache-bust bumped to `app.js?v=1.95.6`, `styles.css?v=1.87.14`. See also ISSUE-014.
+
 ## Phase 2D-2 — Tile layout redesign
 
 ### v1.95.4 (latest)

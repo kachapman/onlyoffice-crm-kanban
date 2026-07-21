@@ -1089,6 +1089,15 @@ function attachTileCollapseButton(tileEl, tileId) {
   if (!toolbar) return;
   if (toolbar.querySelector(".btn-collapse-tile")) return;
   const collapseBtn = createCollapseTileButton(tileEl, tileId);
+  // Uniform right cluster: Refresh, Minimize, Close. Minimize goes inside
+  // .tile-toolbar-actions, before the Close/remove button when present.
+  const actions = toolbar.querySelector(":scope > .tile-toolbar-actions");
+  if (actions) {
+    const closeBtn = actions.querySelector(".btn-tile-remove");
+    if (closeBtn) actions.insertBefore(collapseBtn, closeBtn);
+    else actions.appendChild(collapseBtn);
+    return;
+  }
   const removeBtn = toolbar.querySelector(".btn-remove-group, .btn-remove-calendar, .btn-remove-notes, .tile-remove-icon");
   if (removeBtn && removeBtn.parentNode === toolbar) {
     toolbar.insertBefore(collapseBtn, removeBtn);
@@ -1199,6 +1208,49 @@ function createTileIconActionButton(iconHtml, title, extraClass = "") {
 
 function createTileRemoveButton(title, extraClass = "") {
   return createTileIconActionButton(TILE_ICON_REMOVE, title, `btn-tile-remove ${extraClass}`.trim());
+}
+
+/** Standard toolbar shell: tile-specific buttons go in .tile-toolbar-tools
+ *  (middle, wraps to row 2 on narrow tiles/mobile), while Refresh/Minimize/Close
+ *  live in .tile-toolbar-actions (always pinned top-right). */
+function buildTileToolbarShell() {
+  const tools = document.createElement("div");
+  tools.className = "tile-toolbar-tools";
+  const actions = document.createElement("div");
+  actions.className = "tile-toolbar-actions";
+  return { tools, actions };
+}
+
+/** Click-to-edit tile title. The display span is content-sized; the input only
+ *  appears while editing and sizes itself to the text (ch units), so neither
+ *  ever pushes toolbar buttons onto another row (ISSUE-014).
+ *  Enter/blur saves, Escape reverts (via blur with the restored value). */
+function makeTileTitleEditable({ displayEl, inputEl, getName, setName, placeholder = "Tile label" }) {
+  const syncInputWidth = () => {
+    inputEl.style.width = `${Math.max(6, (inputEl.value || "").length + 2)}ch`;
+  };
+  const start = () => {
+    inputEl.value = getName() || "";
+    displayEl.style.display = "none";
+    inputEl.style.display = "";
+    syncInputWidth();
+    inputEl.focus();
+    inputEl.select();
+  };
+  const finish = (save) => {
+    if (save) setName(inputEl.value.trim());
+    displayEl.textContent = getName() || placeholder;
+    displayEl.style.display = "";
+    inputEl.style.display = "none";
+  };
+  displayEl.title = "Click to rename";
+  displayEl.addEventListener("click", (e) => { e.stopPropagation(); start(); });
+  inputEl.addEventListener("input", syncInputWidth);
+  inputEl.addEventListener("blur", () => finish(true));
+  inputEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); inputEl.blur(); }
+    else if (e.key === "Escape") { inputEl.value = getName() || ""; inputEl.blur(); }
+  });
 }
 
 function closeAllTileMenus() {
@@ -1354,13 +1406,13 @@ function createTileChrome(tileId, label) {
   countBadge.dataset.tileCountFor = tileId;
   countBadge.textContent = "(0)";
 
-  const spacer = document.createElement("span");
-  spacer.className = "tile-toolbar-spacer";
+  const { tools, actions } = buildTileToolbarShell();
 
   toolbar.appendChild(hint);
   toolbar.appendChild(name);
   toolbar.appendChild(countBadge);
-  toolbar.appendChild(spacer);
+  toolbar.appendChild(tools);
+  toolbar.appendChild(actions);
 
   return { toolbar };
 }
@@ -1449,15 +1501,16 @@ function bindTileResize(tileEl, tileId, handle, corner) {
   // whole board jumped during a drag. Now: measure ONCE at pointerdown, move a
   // ghost preview during the drag, and commit span + storage exactly once on
   // pointerup. The grid never changes mid-gesture, so cached metrics stay valid.
-  let startX, startSpanCols, colWidth, gapWidth, gridContentWidth;
+  let startX, startY, startSpanCols, colWidth, gapWidth, gridContentWidth, rowUnit;
   let baseLeft, baseTop, baseWidth, baseHeight;
+  let startHeightName, pendingHeight;
   let ghost = null;
   let pendingWidth = null;
 
   const spanColsForWidth = (name) => (name === "quarter" ? 1 : name === "half" ? 2 : 4);
   const widthForSpanCols = (span) => (span <= 1 ? "quarter" : span === 2 ? "half" : "full");
 
-  const positionGhost = (spanCols) => {
+  const positionGhost = (spanCols, heightName) => {
     if (!ghost) return;
     let widthPx = spanCols * colWidth + (spanCols - 1) * gapWidth;
     // se grows rightward from the tile's left edge; sw grows leftward with the
@@ -1467,10 +1520,15 @@ function bindTileResize(tileEl, tileId, handle, corner) {
     // could force a horizontal page scrollbar mid-drag.
     left = Math.max(0, Math.min(left, gridContentWidth));
     widthPx = Math.min(widthPx, gridContentWidth - left);
+    // Height preview: double = two rows + the row gap; normal = current height
+    // (or the nominal single-row height when shrinking back from double).
+    const heightPx = heightName === "double"
+      ? rowUnit * 2 + gapWidth
+      : (startHeightName === "double" ? rowUnit : baseHeight);
     ghost.style.top = `${baseTop}px`;
     ghost.style.left = `${left}px`;
     ghost.style.width = `${widthPx}px`;
-    ghost.style.height = `${baseHeight}px`;
+    ghost.style.height = `${heightPx}px`;
   };
 
   const onPointerDown = (e) => {
@@ -1494,13 +1552,17 @@ function bindTileResize(tileEl, tileId, handle, corner) {
     baseHeight = tileEl.offsetHeight;
 
     startX = e.clientX;
+    startY = e.clientY;
     startSpanCols = spanColsForWidth(tileWidth(tileId));
     pendingWidth = tileWidth(tileId);
+    startHeightName = tileHeight(tileId);
+    pendingHeight = startHeightName;
+    rowUnit = parseFloat(gridStyle.getPropertyValue("--tile-row-height")) || 400;
 
     ghost = document.createElement("div");
     ghost.className = "tile-resize-ghost";
     grid.appendChild(ghost);
-    positionGhost(startSpanCols);
+    positionGhost(startSpanCols, startHeightName);
 
     handle.setPointerCapture?.(e.pointerId);
     document.addEventListener("pointermove", onPointerMove, { passive: false });
@@ -1522,7 +1584,16 @@ function bindTileResize(tileEl, tileId, handle, corner) {
     if (newSpan === 3) newSpan = newSpan > startSpanCols ? 4 : 2;
 
     pendingWidth = widthForSpanCols(newSpan);
-    positionGhost(newSpan);
+
+    // Vertical drag toggles normal ↔ double height once the pointer crosses
+    // 40% of a row. Skipped while collapsed (collapsed tiles are flat bars).
+    if (!tileBodyCollapsed(tileId)) {
+      const dy = (e.clientY || 0) - startY;
+      if (dy > rowUnit * 0.4) pendingHeight = "double";
+      else if (dy < -rowUnit * 0.4) pendingHeight = "normal";
+      else pendingHeight = startHeightName;
+    }
+    positionGhost(newSpan, pendingHeight);
   };
 
   const onPointerUp = () => {
@@ -1534,13 +1605,15 @@ function bindTileResize(tileEl, tileId, handle, corner) {
       ghost.remove();
       ghost = null;
     }
-    // Commit exactly once, on release (one localStorage write + one debounced
-    // profile save) — and only if the span actually changed.
-    if (pendingWidth && pendingWidth !== tileWidth(tileId)) {
-      setTileWidth(tileId, pendingWidth);
-      applyTileLayoutClasses(tileEl, tileId);
-    }
+    // Commit exactly once, on release (one localStorage write per changed
+    // dimension + one debounced profile save) — and only if something changed.
+    const wChanged = pendingWidth && pendingWidth !== tileWidth(tileId);
+    const hChanged = pendingHeight && pendingHeight !== tileHeight(tileId);
+    if (wChanged) setTileWidth(tileId, pendingWidth);
+    if (hChanged) setTileHeight(tileId, pendingHeight);
+    if (wChanged || hChanged) applyTileLayoutClasses(tileEl, tileId);
     pendingWidth = null;
+    pendingHeight = null;
   };
 
   handle.addEventListener("pointerdown", onPointerDown);
@@ -1647,11 +1720,10 @@ function bindGroupTileChrome(section, group, tileId) {
   hint.setAttribute("aria-hidden", "true");
   hint.title = "Drag to reorder (left/right or up/down)";
 
-  // --- Click-to-edit title ---
+  // --- Click-to-edit title (no pencil button — click the title itself) ---
   const nameDisplay = document.createElement("span");
   nameDisplay.className = "group-tile-name-display";
   nameDisplay.textContent = group.name || "Opportunity group";
-  nameDisplay.title = "Click edit to rename";
 
   const nameInput = document.createElement("input");
   nameInput.type = "text";
@@ -1661,33 +1733,16 @@ function bindGroupTileChrome(section, group, tileId) {
   nameInput.setAttribute("aria-label", "Group label");
   nameInput.style.display = "none";
 
-  const editNameBtn = document.createElement("button");
-  editNameBtn.type = "button";
-  editNameBtn.className = "btn btn-ghost tile-btn tile-btn-icon btn-edit-group-name";
-  setTileLayoutIconButton(editNameBtn, TILE_ICON_EDIT, "Edit group name");
-
-  const startEditName = () => {
-    nameDisplay.style.display = "none";
-    nameInput.style.display = "";
-    nameInput.value = group.name || "";
-    nameInput.focus();
-    nameInput.select();
-  };
-  const finishEditName = (save) => {
-    if (save) {
-      group.name = nameInput.value.trim() || "New group";
-    }
-    nameDisplay.textContent = group.name || "Opportunity group";
-    nameDisplay.style.display = "";
-    nameInput.style.display = "none";
-    section.dataset.tileLabel = group.name || "Opportunity group";
-    saveGroupsToStorage();
-  };
-  editNameBtn.addEventListener("click", (e) => { e.stopPropagation(); startEditName(); });
-  nameInput.addEventListener("blur", () => finishEditName(true));
-  nameInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); nameInput.blur(); }
-    else if (e.key === "Escape") { nameInput.value = group.name || ""; nameInput.blur(); }
+  makeTileTitleEditable({
+    displayEl: nameDisplay,
+    inputEl: nameInput,
+    getName: () => group.name,
+    setName: (v) => {
+      group.name = v || "New group";
+      section.dataset.tileLabel = group.name;
+      saveGroupsToStorage();
+    },
+    placeholder: "Opportunity group",
   });
 
   const countEl = document.createElement("span");
@@ -1803,20 +1858,19 @@ function bindGroupTileChrome(section, group, tileId) {
 
   const removeBtn = createTileRemoveButton("Remove this grouping from the board", "btn-remove-group");
 
-  const spacer = document.createElement("span");
-  spacer.className = "tile-toolbar-spacer";
+  const { tools, actions } = buildTileToolbarShell();
+  tools.appendChild(toggleFiltersBtn);
+  tools.appendChild(templateBtn);
+  tools.appendChild(templateDropdown);
+  actions.appendChild(removeBtn);
 
   toolbar.appendChild(hint);
   toolbar.appendChild(nameDisplay);
   toolbar.appendChild(nameInput);
-  toolbar.appendChild(editNameBtn);
   toolbar.appendChild(countEl);
   toolbar.appendChild(summaryCompactBar);
-  toolbar.appendChild(spacer);
-  toolbar.appendChild(toggleFiltersBtn);
-  toolbar.appendChild(templateBtn);
-  toolbar.appendChild(templateDropdown);
-  toolbar.appendChild(removeBtn);
+  toolbar.appendChild(tools);
+  toolbar.appendChild(actions);
 
   section.prepend(toolbar);
   wrapTileBodyContent(section);
@@ -4258,6 +4312,8 @@ async function loadCalendarForTile(cal, { quiet = false } = {}) {
       saveCalendarsToStorage();
       const nameInput = section?.querySelector(".calendar-tile-name");
       if (nameInput) nameInput.value = cal.name;
+      const nameDisplay = section?.querySelector(".group-tile-name-display");
+      if (nameDisplay) nameDisplay.textContent = cal.name;
       if (section) section.dataset.tileLabel = cal.name;
     }
     if (!cal.timezone && data.timezone) {
@@ -4294,12 +4350,30 @@ function bindCalendarTileChrome(section, cal, tileId) {
   hint.setAttribute("aria-hidden", "true");
   hint.title = "Drag to reorder (left/right or up/down)";
 
+  // --- Click-to-edit title (was an always-visible static-width input) ---
+  const nameDisplay = document.createElement("span");
+  nameDisplay.className = "group-tile-name-display";
+  nameDisplay.textContent = cal.name || "Calendar";
+
   const nameInput = document.createElement("input");
   nameInput.type = "text";
-  nameInput.className = "group-tile-name calendar-tile-name";
+  nameInput.className = "group-tile-name-input calendar-tile-name";
   nameInput.placeholder = "Calendar label";
   nameInput.value = cal.name || "";
   nameInput.setAttribute("aria-label", "Calendar label");
+  nameInput.style.display = "none";
+
+  makeTileTitleEditable({
+    displayEl: nameDisplay,
+    inputEl: nameInput,
+    getName: () => cal.name,
+    setName: (v) => {
+      cal.name = v || "Calendar";
+      section.dataset.tileLabel = cal.name;
+      saveCalendarsToStorage();
+    },
+    placeholder: "Calendar",
+  });
 
   const countEl = document.createElement("span");
   countEl.className = "group-tile-count calendar-tile-count";
@@ -4335,15 +4409,17 @@ function bindCalendarTileChrome(section, cal, tileId) {
 
   const removeBtn = createTileRemoveButton("Remove this calendar tile from the dashboard", "btn-remove-calendar");
 
-  const pinBtn = document.createElement("button");
-  pinBtn.type = "button";
-  pinBtn.className = "btn btn-ghost tile-btn tile-btn-icon btn-pin-tile";
+  const { tools, actions } = buildTileToolbarShell();
+  tools.appendChild(nav);
+  tools.appendChild(tzWrap);
+  actions.appendChild(removeBtn);
+
   toolbar.appendChild(hint);
+  toolbar.appendChild(nameDisplay);
   toolbar.appendChild(nameInput);
   toolbar.appendChild(countEl);
-  toolbar.appendChild(nav);
-  toolbar.appendChild(tzWrap);
-  toolbar.appendChild(removeBtn);
+  toolbar.appendChild(tools);
+  toolbar.appendChild(actions);
 
   section.prepend(toolbar);
   wrapTileBodyContent(section);
@@ -4374,18 +4450,6 @@ function bindCalendarTileChrome(section, cal, tileId) {
     cal.timezone = tzSelect.value;
     saveCalendarsToStorage();
     renderCalendarMonthBody(section, cal);
-  });
-
-  nameInput.addEventListener("input", () => {
-    cal.name = nameInput.value;
-    section.dataset.tileLabel = cal.name || "Calendar";
-    saveCalendarsToStorage();
-  });
-  nameInput.addEventListener("change", () => {
-    cal.name = nameInput.value.trim() || "Calendar";
-    nameInput.value = cal.name;
-    section.dataset.tileLabel = cal.name;
-    saveCalendarsToStorage();
   });
 
   removeBtn.addEventListener("click", async () => {
@@ -5519,11 +5583,10 @@ function bindNotesTileChrome(section, notes, tileId) {
   hint.setAttribute("aria-hidden", "true");
   hint.title = "Drag to reorder (left/right or up/down)";
 
-  // --- Click-to-edit title ---
+  // --- Click-to-edit title (no pencil button — click the title itself) ---
   const nameDisplay = document.createElement("span");
   nameDisplay.className = "group-tile-name-display";
   nameDisplay.textContent = notes.name || "Notes";
-  nameDisplay.title = "Click edit to rename";
 
   const nameInput = document.createElement("input");
   nameInput.type = "text";
@@ -5533,33 +5596,16 @@ function bindNotesTileChrome(section, notes, tileId) {
   nameInput.setAttribute("aria-label", "Notes label");
   nameInput.style.display = "none";
 
-  const editNameBtn = document.createElement("button");
-  editNameBtn.type = "button";
-  editNameBtn.className = "btn btn-ghost tile-btn tile-btn-icon btn-edit-group-name";
-  setTileLayoutIconButton(editNameBtn, TILE_ICON_EDIT, "Edit notes name");
-
-  const startEditName = () => {
-    nameDisplay.style.display = "none";
-    nameInput.style.display = "";
-    nameInput.value = notes.name || "";
-    nameInput.focus();
-    nameInput.select();
-  };
-  const finishEditName = (save) => {
-    if (save) {
-      notes.name = nameInput.value.trim() || "Notes";
-    }
-    nameDisplay.textContent = notes.name || "Notes";
-    nameDisplay.style.display = "";
-    nameInput.style.display = "none";
-    section.dataset.tileLabel = notes.name || "Notes";
-    saveNotesTilesToStorage();
-  };
-  editNameBtn.addEventListener("click", (e) => { e.stopPropagation(); startEditName(); });
-  nameInput.addEventListener("blur", () => finishEditName(true));
-  nameInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); nameInput.blur(); }
-    else if (e.key === "Escape") { nameInput.value = notes.name || ""; nameInput.blur(); }
+  makeTileTitleEditable({
+    displayEl: nameDisplay,
+    inputEl: nameInput,
+    getName: () => notes.name,
+    setName: (v) => {
+      notes.name = v || "Notes";
+      section.dataset.tileLabel = notes.name;
+      saveNotesTilesToStorage();
+    },
+    placeholder: "Notes",
   });
 
   const mkTextBtn = (label, className, title) => {
@@ -5725,21 +5771,18 @@ function bindNotesTileChrome(section, notes, tileId) {
   utils.className = "notes-tile-utils";
   utils.append(fileMenu, editMenu, formatGroup, accentBtn, accentDropdown, modeToggleBtn);
 
-  const spacer = document.createElement("span");
-  spacer.className = "tile-toolbar-spacer";
-
   const removeBtn = createTileRemoveButton("Remove this notes tile from the dashboard", "btn-remove-notes");
 
-  const pinBtn = document.createElement("button");
-  pinBtn.type = "button";
+  const { tools, actions } = buildTileToolbarShell();
+  tools.appendChild(utils);
+  actions.appendChild(removeBtn);
+
   // Row 1: title bar
   toolbar.appendChild(hint);
   toolbar.appendChild(nameDisplay);
   toolbar.appendChild(nameInput);
-  toolbar.appendChild(editNameBtn);
-  toolbar.appendChild(spacer);
-  toolbar.appendChild(utils);
-  toolbar.appendChild(removeBtn);
+  toolbar.appendChild(tools);
+  toolbar.appendChild(actions);
 
   section.prepend(toolbar);
   wrapTileBodyContent(section);
@@ -5977,9 +6020,6 @@ function bindNotesTileChrome(section, notes, tileId) {
 
   applyNotesTileAccent(section, notes);
   syncModeButtons();
-
-  // Initial restructure for narrow notes (resizing on top row)
-  ensureNotesToolbarRows(section);
 }
 
 function renderNotesTiles(dash) {
@@ -6003,7 +6043,6 @@ function renderNotesTiles(dash) {
     `;
     dash.appendChild(section);
     bindNotesTileChrome(section, notes, tileId);
-    ensureNotesToolbarRows(section);
     notes._el = section;
     const editor = $(".notes-editor", section);
     if (editor) editor.value = notes.content || "";
@@ -6060,66 +6099,54 @@ function bindLocalKanbanTileChrome(section, kanban, tileId) {
     tb.querySelectorAll('.btn-archive-kanban, .btn-remove-kanban').forEach(b => b.remove());
   }
 
-  // Archive button (file cabinet icon)
+  // Archive button (file cabinet icon) — tile-specific, goes in tools
   const archiveBtn = createTileIconActionButton(
     TILE_ICON_ARCHIVE,
     "Archive this local kanban board",
     "btn-archive-kanban"
   );
-  if (tb) tb.appendChild(archiveBtn);
+  const tools = tb?.querySelector(':scope > .tile-toolbar-tools');
+  const actions = tb?.querySelector(':scope > .tile-toolbar-actions');
+  if (tools) tools.appendChild(archiveBtn);
+  else if (tb) tb.appendChild(archiveBtn);
   archiveBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     openLocalKanbanArchiveModal(kanban);
   });
 
-  // Remove button (only 1)
+  // Remove button (only 1) — this is the tile's Close button, goes in actions
   const removeBtn = createTileRemoveButton("Remove this local kanban board from the dashboard", "btn-remove-kanban");
-  if (tb) tb.appendChild(removeBtn);
+  if (actions) actions.appendChild(removeBtn);
+  else if (tb) tb.appendChild(removeBtn);
   removeBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     removeLocalKanbanTile(kanban, section);
   });
 
-  // The name now lives in the standard tile toolbar title bar (created by bindTileChrome from dataset.tileLabel).
-  // Make that title editable via dblclick (contentEditable pattern), and keep it in sync with kanban.name.
+  // The name lives in the standard tile toolbar title (created by bindTileChrome
+  // from dataset.tileLabel). Make it click-to-edit like all other tiles.
   const toolbarTitle = section.querySelector(':scope > .tile-toolbar .tile-toolbar-title');
   if (toolbarTitle && !toolbarTitle.dataset.kanbanTitleBound) {
     toolbarTitle.dataset.kanbanTitleBound = '1';
-    toolbarTitle.title = 'Double-click to rename board';
-    toolbarTitle.addEventListener('dblclick', (e) => {
-      e.stopPropagation();
-      const orig = toolbarTitle.textContent;
-      toolbarTitle.contentEditable = 'true';
-      toolbarTitle.focus();
-      const sel = window.getSelection();
-      const r = document.createRange();
-      r.selectNodeContents(toolbarTitle);
-      sel.removeAllRanges();
-      sel.addRange(r);
-      const finish = () => {
-        toolbarTitle.contentEditable = 'false';
-        let newName = (toolbarTitle.textContent || '').trim() || 'Kanban';
-        if (newName !== orig) {
-          kanban.name = newName;
-          kanban.updatedAt = new Date().toISOString();
-          toolbarTitle.textContent = newName;
-          section.dataset.tileLabel = newName;
-          saveLocalKanbanTilesToStorage();
-          saveLayoutToStorage();
-        } else {
-          toolbarTitle.textContent = orig;
-        }
-      };
-      toolbarTitle.addEventListener('blur', finish, {once: true});
-      toolbarTitle.addEventListener('keydown', (ke) => {
-        if (ke.key === 'Enter') {
-          ke.preventDefault();
-          finish();
-        } else if (ke.key === 'Escape') {
-          toolbarTitle.textContent = orig;
-          finish();
-        }
-      }, {once: true});
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.className = 'group-tile-name-input';
+    nameInput.placeholder = 'Kanban label';
+    nameInput.value = kanban.name || '';
+    nameInput.setAttribute('aria-label', 'Kanban label');
+    nameInput.style.display = 'none';
+    toolbarTitle.after(nameInput);
+    makeTileTitleEditable({
+      displayEl: toolbarTitle,
+      inputEl: nameInput,
+      getName: () => kanban.name,
+      setName: (v) => {
+        kanban.name = v || 'Kanban';
+        kanban.updatedAt = new Date().toISOString();
+        section.dataset.tileLabel = kanban.name;
+        saveLocalKanbanTilesToStorage();
+      },
+      placeholder: 'Kanban',
     });
   }
 
@@ -9552,12 +9579,17 @@ function ensureFeedHiddenToolbarButton(tileEl) {
     openFeedHiddenModal();
   });
 
-  const refreshBtn = toolbar.querySelector(".btn-tile-refresh");
-  if (refreshBtn) toolbar.insertBefore(btn, refreshBtn);
-  else {
-    const layoutBtns = toolbar.querySelector(".tile-layout-btns");
-    if (layoutBtns) toolbar.insertBefore(btn, layoutBtns);
-    else toolbar.appendChild(btn);
+  const tools = toolbar.querySelector(":scope > .tile-toolbar-tools");
+  if (tools) {
+    tools.appendChild(btn);
+  } else {
+    const refreshBtn = toolbar.querySelector(".btn-tile-refresh");
+    if (refreshBtn) toolbar.insertBefore(btn, refreshBtn);
+    else {
+      const layoutBtns = toolbar.querySelector(".tile-layout-btns");
+      if (layoutBtns) toolbar.insertBefore(btn, layoutBtns);
+      else toolbar.appendChild(btn);
+    }
   }
   updateFeedHiddenToolbarButton();
 }
@@ -9790,6 +9822,13 @@ function ensureTileAutoRefreshButton(tileEl, tileId) {
     }
   });
 
+  // Uniform right cluster: Refresh goes inside .tile-toolbar-actions as the
+  // FIRST button (Refresh, Minimize, Close).
+  const actions = toolbar.querySelector(":scope > .tile-toolbar-actions");
+  if (actions) {
+    actions.insertBefore(btn, actions.firstChild);
+    return;
+  }
   const spacer = toolbar.querySelector(".tile-toolbar-spacer");
   if (spacer) {
     toolbar.insertBefore(btn, spacer.nextSibling);
@@ -9803,9 +9842,9 @@ function ensureTasksNewTaskButton(tileEl) {
   const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
   if (!toolbar) return;
 
-  // Insert buttons next to count badge
-  const countBadge = toolbar.querySelector(".tile-toolbar-count");
-  const insertAfter = countBadge || toolbar.querySelector(".tile-toolbar-title");
+  // Buttons live in the tools container (right after the title/count).
+  const tools = toolbar.querySelector(":scope > .tile-toolbar-tools");
+  const host = tools || toolbar;
 
   let archiveBtn = toolbar.querySelector("#tasks-list-btn");
   if (!archiveBtn) {
@@ -9815,8 +9854,7 @@ function ensureTasksNewTaskButton(tileEl) {
     archiveBtn.className = "btn btn-ghost btn-tasks-list";
     archiveBtn.title = "View all tasks (open + completed)";
     archiveBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="1"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><rect x="6" y="5" width="3" height="2" rx="0.5"/><rect x="15" y="5" width="3" height="2" rx="0.5"/><rect x="6" y="11" width="3" height="2" rx="0.5"/><rect x="15" y="11" width="3" height="2" rx="0.5"/></svg>`;
-    if (insertAfter && insertAfter.nextSibling) toolbar.insertBefore(archiveBtn, insertAfter.nextSibling);
-    else toolbar.appendChild(archiveBtn);
+    host.appendChild(archiveBtn);
     archiveBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       openTasksListModal().catch((err) => showToast(err.message, true));
@@ -9832,9 +9870,7 @@ function ensureTasksNewTaskButton(tileEl) {
     e.stopPropagation();
     openNewTaskModal().catch((err) => showToast(err.message, true));
   });
-  if (archiveBtn && archiveBtn.nextSibling) toolbar.insertBefore(btn, archiveBtn.nextSibling);
-  else if (insertAfter && insertAfter.nextSibling) toolbar.insertBefore(btn, insertAfter.nextSibling);
-  else toolbar.appendChild(btn);
+  host.appendChild(btn);
 }
 
 function setDealEditError(message) {

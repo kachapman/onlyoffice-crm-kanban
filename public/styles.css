@@ -1480,6 +1480,7 @@ body {
 .tile-toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.35rem;
   padding: 0.45rem 0.65rem;
   border-bottom: 1px solid var(--border);
@@ -1516,6 +1517,10 @@ body {
   color: var(--text);
   letter-spacing: 0;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .tile-toolbar-count {
@@ -1532,9 +1537,6 @@ body {
 }
 
 .group-tile-name-display {
-  flex: 1 1 140px;
-  min-width: 120px;
-  max-width: 280px;
   font-size: 0.9rem;
   font-weight: 600;
   color: var(--text);
@@ -1543,7 +1545,10 @@ body {
   text-overflow: ellipsis;
   padding: 0.3rem 0.25rem;
   border-radius: 4px;
-  cursor: default;
+  cursor: text;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 22rem;
 }
 
 .group-tile-name-display:hover {
@@ -1551,9 +1556,6 @@ body {
 }
 
 .group-tile-name-input {
-  flex: 1 1 140px;
-  min-width: 120px;
-  max-width: 280px;
   font: inherit;
   font-size: 0.9rem;
   font-weight: 600;
@@ -1563,16 +1565,13 @@ body {
   background: var(--surface);
   color: var(--text);
   outline: none;
+  flex: 0 0 auto;
+  min-width: 4ch;
+  max-width: 100%;
 }
 
 .group-tile-name-input:focus {
   box-shadow: 0 0 0 2px rgba(109, 75, 255, 0.2);
-}
-
-.btn-edit-group-name {
-  flex-shrink: 0;
-  padding: 0.15rem 0.25rem;
-  margin-left: -0.15rem;
 }
 
 .group-tile-count {
@@ -1581,6 +1580,68 @@ body {
   white-space: nowrap;
 }
 
+.tile-toolbar-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 0 1 auto;
+  min-width: 0;
+  position: relative; /* anchor for dropdowns like template/accent inside tools */
+}
+
+.tile-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}
+
+/* Narrow tiles: keep title+count on top row, pin actions (refresh/min/close) top-right,
+   push tools (filter/template/format/etc) to second row. */
+.dashboard-tile.tile-quarter .tile-toolbar-title,
+.dashboard-tile.tile-half .tile-toolbar-title,
+.dashboard-tile.tile-quarter .group-tile-name-display,
+.dashboard-tile.tile-half .group-tile-name-display,
+.dashboard-tile.tile-quarter .group-tile-name-input,
+.dashboard-tile.tile-half .group-tile-name-input,
+.dashboard-tile.tile-quarter .tile-toolbar-count,
+.dashboard-tile.tile-half .tile-toolbar-count,
+.dashboard-tile.tile-quarter .group-tile-count,
+.dashboard-tile.tile-half .group-tile-count,
+.dashboard-tile.tile-quarter .group-filter-summary-compact,
+.dashboard-tile.tile-half .group-filter-summary-compact {
+  order: 1;
+}
+.dashboard-tile.tile-quarter .tile-toolbar-actions,
+.dashboard-tile.tile-half .tile-toolbar-actions {
+  order: 2;
+}
+.dashboard-tile.tile-quarter .tile-toolbar-tools,
+.dashboard-tile.tile-half .tile-toolbar-tools {
+  order: 3;
+  flex-basis: 100%;
+}
+
+/* Mobile: same two-row behavior for all tiles (buttons to second row, min/close top-right of title bar) */
+@media (max-width: 600px) {
+  .tile-toolbar-title,
+  .group-tile-name-display,
+  .group-tile-name-input,
+  .tile-toolbar-count,
+  .group-tile-count,
+  .group-filter-summary-compact {
+    order: 1;
+  }
+  .tile-toolbar-actions {
+    order: 2;
+  }
+  .tile-toolbar-tools {
+    order: 3;
+    flex-basis: 100%;
+  }
+}
 
 .tile-toolbar-spacer {
   flex: 1 1 auto;
@@ -4355,16 +4416,7 @@ body {
   margin-bottom: 0.15rem;
   border-bottom: 1px solid var(--border);
 }
-/* When the note name lives in the narrow top row (with layout buttons), keep it on the left */
-.dashboard-tile.notes-tile .notes-layout-top-row .notes-tile-name {
-  margin-right: auto;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.dashboard-tile.notes-tile.tile-quarter .notes-tile-bar .tile-layout-btns,
-.dashboard-tile.notes-tile.tile-half .notes-tile-bar .tile-layout-btns {
-  /* the group is moved into the top-row by JS */
-}
+/* Dead: ensureNotesToolbarRows and notes-layout-top-row removed (unified toolbar handles narrow rows) */
 
 .deal-edit-modal-head {
   display: flex;

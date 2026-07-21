@@ -1,5 +1,34 @@
 # Known issues
 
+## ISSUE-014 — Tile toolbar uniformity, click-to-edit titles, height resize
+
+**Status:** ✅ Implemented 2026-07-21 (Phase 2D-3 follow-up; committed, NOT pushed)  
+**Priority:** High  
+**Area:** Dashboard tiles (`public/app.js`, `public/styles.css`)
+
+### Summary
+
+Toolbar buttons wrapped unpredictably on narrow tiles and mobile. Pencil edit buttons and statically-sized title inputs pushed other buttons onto extra rows. Height could not be resized. Minimize/Close were not reliably top-right, and Refresh was not consistently before them.
+
+### Changes
+
+- **Height resize:** Corner handles now resize both width (quarter/half/full) and height (normal/double). Ghost preview shows target size during drag; changes commit once on pointerup.
+- **Title editing:** Removed all pencil/edit buttons. Clicking the title text itself enters inline edit. The input is only present while editing and sizes itself to the text (`Nch` units) so it never pushes buttons.
+- **Uniform toolbar structure:** All tiles now use `.tile-toolbar-tools` (tile-specific buttons: filter, template, format, new-task, eye, calendar nav, etc.) and `.tile-toolbar-actions` (Refresh, Minimize, Close). Actions are last with `margin-left:auto`.
+- **Narrow/mobile rows:** On `.tile-quarter`, `.tile-half`, and `≤600px` viewport, actions stay on row 1 (top-right); tools drop to row 2. Full-width tiles stay single-row.
+- **Ordering guarantees:** When a refresh button exists it is first in actions, followed by Minimize then Close. All chrome creators and button inserters were updated to use the containers.
+- **Cleanup:** Removed dead `ensureNotesToolbarRows`, related top-row hacks, and all `.btn-edit-group-name` creation. Calendar tiles no longer use a permanently visible static-width input.
+
+### Files changed
+
+| File | Role |
+|------|------|
+| `public/app.js` | `buildTileToolbarShell`, `makeTileTitleEditable`, height support in `bindTileResize`, restructured chrome binders, rerouted button insertion, removed stale notes toolbar code |
+| `public/styles.css` | `.tile-toolbar-tools` / `.tile-toolbar-actions`, content-sized titles, narrow + mobile order rules, removed dead notes top-row / edit-button CSS |
+| `public/index.html` | Cache-bust `v=1.95.6` / `v=1.87.14` |
+
+---
+
 ## ISSUE-013 — Dashboard tiles jump erratically during resize/drag ("invisible grid")
 
 **Status:** ✅ Fixed 2026-07-21 — Phase 2D-3 (pending user browser verification; committed, NOT pushed)  
