@@ -1,40 +1,11 @@
-# Secrets and local config
+__pycache__/
+*.pyc
 .env
 data/
-*.local.env
-
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
+*.log
 .venv/
-venv/
-
-# Editor / OS
-.idea/
-.vscode/
-*.swp
+node_modules/
+*.egg-info/
+dist/
+build/
 .DS_Store
-.opencode/
-
-# Screenshots / debug images dropped in repo root
-/*.png
-/*.jpg
-/*.jpeg
-/*.gif
-/*.webp
-
-# Lighthouse / audit reports
-dashboard.vanguardadj.com-*.json
-
-# Build artifacts (OnlyOffice module)
-onlyoffice-module/**/bin/
-onlyoffice-module/**/obj/
-*.user
-*.suo
-
-# Test artifacts
-*.lighthouse.json
-127.0.0.1_*
-curl *.txt
-scripts/romanian_roadtrip.md

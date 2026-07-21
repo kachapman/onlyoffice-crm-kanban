@@ -102,7 +102,46 @@ Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local 
 | 2E: Photo gallery | 🔲 | Backend + DB + quota/EXIF/folders ready; no frontend UI (no Photos tab in preview, no gallery/lightbox). |
 | 2F: Notification drawer | 🔲 | Feed tile + keyword filter exists; no slide-out drawer with inline replies. |
 | 2G: User profile/account modal | 🔲 | /api/user-profile exists for sync; no dedicated modal for edit (name/email/pw/prefs/pic). |
-| 2H: Documents modal | 🔲 | Full file manager: three scopes (project/personal/company), list+upload+delete+rename+move+copy+batch ops+search, header button with files icon, overhauled per-project docs tab with same UI. Document Server used only as editor (no built-in file manager API). |
+| 2H: Documents modal | ✅ | Full file manager: three scopes (project/personal/company), nested folders in personal/company, breadcrumb navigation, New button (Word/Excel/Folder), folder context menu (rename/delete with recursive CTE), inline rename, move/copy popup, batch ops, search, icon-only toolbar, sidebar toggle, drag-drop upload. Document Server used as editor with title-bar rename sync. |
+| 2I: Preview modal + tile revamp | 🔵 | Code complete: Description→top, "Project Fields" merged, Stage dropdown, "Follow-up Due Date", interactive Tags (add/remove), Checklist 3-col checkboxes, kanban created date + native tooltip. Needs LAN server testing. |
+| 2J: Re-import CRM data | 🔲 | Re-run `migrate_from_onlyoffice.py` export script (with tasks and user/custom fields fixed) then import into new CRM to verify all data displays correctly in preview modals, deal tiles, kanban stages, tags, and custom fields. |
+
+### Phase 2I Details: Preview Modal + Kanban Tile Revamp
+
+#### Goal
+Since we are no longer bound by OnlyOffice CRM field structures, redesign the opportunity preview modal and kanban deal tiles to be more usable and informative. All changes are UI-only; backend and data model remain unchanged.
+
+#### Preview Modal Changes
+
+**Layout restructuring:**
+- Move **Description** to the top of the modal, above "Deal Fields" section
+- Rename **"Deal Fields"** → **"Project Fields"**
+- Remove the separate **"User Fields"** section; merge all user-defined fields into the Project Fields section
+- Make all user fields display in **2-column grid** (instead of current 1-column) to better use available modal width
+- Make the **Stage** field visually distinct — styled as a dropdown/pulldown menu that allows changing the stage directly from the preview modal
+- Rename **"Expected Close"** → **"Follow-up Due Date"**
+
+**Tags in preview modal:**
+- Add ability to **add** new tags from inside the preview modal (inline tag input + add button)
+- Add ability to **delete/remove** existing tags from inside the preview modal (× button per tag chip)
+
+**Specialty checkboxes (3-column layout):**
+- Make the three specialty field checkboxes — **Measurement Report**, **Insurance Documents**, **Inspection Photos** — display as **3 columns side by side** (inline, not stacked)
+
+#### Kanban Deal Tile Changes
+
+**Due date area (right of "Due [date]"):**
+- Show the **created date** of the deal to the right of the "Due [date]" line in the deal tile
+- Format: small, subtle text (e.g., "Created: Jul 15")
+
+**Discrete tooltip:**
+- Add a **discrete tooltip** trigger on each deal tile (distinct from the red "due date" styling)
+- The discrete tooltip shows additional info without alarming color coding (neutral gray styling, not red)
+
+#### Implementation Notes
+- All field labels and section headers are UI strings only — no database column renaming
+- Stage change from preview modal should call `PATCH /api/v2/projects/{id}` (or equivalent) to update the stage
+- Tag add/remove from preview modal should call the appropriate history event API to record the tag change
 
 ### Phase 2H Details: Documents Modal
 
@@ -111,19 +150,34 @@ A unified Documents experience across three scopes — **per-project**, **person
 
 #### Data Model
 
-**Table: `project_documents`** — add two columns via migration (reusing existing `uploaded_by` column for personal docs):
+**Table: `project_documents`** — add columns via migrations:
 
 ```sql
+-- Migration 1 (2026-07-20): scope + notes
 ALTER TABLE project_documents
   ADD COLUMN company_scope BOOLEAN NOT NULL DEFAULT FALSE,
   ADD COLUMN notes TEXT;
 CREATE INDEX idx_documents_company ON project_documents(company_scope) WHERE company_scope = TRUE;
+
+-- Migration 2 (2026-07-20): folder support
+CREATE TABLE document_folders (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    parent_id INTEGER REFERENCES document_folders(id) ON DELETE CASCADE,
+    scope TEXT NOT NULL CHECK (scope IN ('personal', 'company')),
+    uploaded_by INTEGER REFERENCES users(id),
+    created_at TIMESTAMP DEFAULT NOW(),
+    is_deleted BOOLEAN NOT NULL DEFAULT FALSE
+);
+ALTER TABLE project_documents ADD COLUMN folder_id INTEGER REFERENCES document_folders(id);
 ```
 
 **Scope derived from columns:**
 - `opportunity_id IS NOT NULL` → **project document** (belongs to that project)
 - `uploaded_by IS NOT NULL AND opportunity_id IS NULL AND company_scope = FALSE` → **personal document**
 - `company_scope = TRUE` → **company document**
+
+**Folders:** Only personal and company scopes support nested folders. Folders use self-referencing `parent_id`. Deleting a folder recursively soft-deletes all subfolders and their documents via CTE.
 
 **File storage paths:**
 - Project: `DOCUMENT_STORAGE_PATH / shared / project / {opp_id} / {filename}`
@@ -136,9 +190,14 @@ CREATE INDEX idx_documents_company ON project_documents(company_scope) WHERE com
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/api/v2/documents/personal` | List current user's personal docs |
-| `GET` | `/api/v2/documents/company` | List all company-shared docs |
+| `GET` | `/api/v2/documents/personal?folder_id=` | List current user's personal docs + folders in current level |
+| `GET` | `/api/v2/documents/company?folder_id=` | List all company-shared docs + folders in current level |
 | `GET` | `/api/v2/documents/search?q=&project_id=` | Search all project docs; `project_id` optional; results grouped by project |
+| `GET` | `/api/v2/documents/folders?scope=&folder_id=` | List folders at a given level |
+| `POST` | `/api/v2/documents/folders` | Create folder: `{name, scope, parent_id?}` |
+| `PATCH` | `/api/v2/documents/folders/{id}` | Rename folder: `{name}` |
+| `DELETE` | `/api/v2/documents/folders/{id}` | Delete folder recursively (subfolders + documents) |
+| `POST` | `/api/v2/documents/create` | Create blank doc: `{type: "word"|"excel", title, scope, folder_id?, opportunity_id?}` |
 | `PATCH` | `/api/v2/documents/{id}` | Rename (`{title, notes}`) or move to project (`{opportunity_id}`) |
 | `POST` | `/api/v2/documents/{id}/copy` | Copy doc; body: `{opportunity_id?, company_scope?}` (scope determined by which param is set) |
 | `POST` | `/api/v2/documents/batch-delete` | Batch soft-delete; body: `{ids: []}` |
@@ -146,7 +205,7 @@ CREATE INDEX idx_documents_company ON project_documents(company_scope) WHERE com
 | `POST` | `/api/v2/documents/batch-copy` | Batch copy; body: `{ids: [], opportunity_id?, company_scope?}` |
 | `GET` | `/api/v2/projects/simple` | Lightweight project list for picker (id, title, stage) — recent 20 |
 
-**Keep existing:** download, editor-config, per-project list/upload, single delete.
+**Keep existing:** download, editor-config (with `permissions.rename` + `onMetaChange` for title sync), per-project list/upload, single delete.
 
 **Permissions:**
 - Delete: own doc OR admin → can delete; company doc by non-owner → 403
@@ -177,11 +236,18 @@ CREATE INDEX idx_documents_company ON project_documents(company_scope) WHERE com
 
 **Scope sidebar (200px, left):**
 - **Projects** (expandable): shows 5 most-recent projects; clicking a project shows its docs in main area; "Search all projects" at bottom → activates search mode
-- **My Docs**: flat list of current user's personal docs
-- **Company**: flat list of company-shared docs
+- **My Docs**: flat list of current user's personal docs with nested folder navigation
+- **Company**: flat list of company-shared docs with nested folder navigation
 
-**Main area toolbar** (appears when ≥1 item checked):
-`"3 selected"  [Delete]  [Move to Project]  [Copy to...]  [× Clear selection]`
+**Main area toolbar:**
+`[Upload]  [New ▾]  [Actions ▾]  [Sort]  [Rename]  "N selected"  [Clear]`
+
+**New button dropdown:** Word Document · Excel Spreadsheet · New Folder. Creates in current folder; documents open in OnlyOffice editor immediately.
+
+**Folder navigation:**
+- Folder rows render with folder icon + name; click to navigate into
+- Breadcrumb trail above file list: `My Documents / Invoices / Q3` — click any segment to navigate
+- Context menu on folders: Rename folder, Delete folder (recursive with confirmation)
 
 **List view columns:** `☐` checkbox, icon, title, size, modified date (hover for uploader)
 
@@ -272,10 +338,10 @@ The Documents tab inside the opportunity preview modal gets the same file manage
 
 | File | Changes |
 |------|---------|
-| `public/app.js` | Phase 1 follow-up: kanban fields, `localeCompare`, card title click, active-user filter. |
-| `server.py` | Phase 1 follow-up: move `POST /api/branding` to `_handle_api_post_put`. Phase 2C: admin handlers. Phase 4: sync endpoints. |
-| `public/index.html` | Phase 2C: Unified Admin Modal. Phase 2E: photo tab. Phase 2G: profile modal. |
-| `public/styles.css` | Phase 2C: admin theme. Phase 2D: grid layout. |
+| `public/app.js` | Phase 1 follow-up: kanban fields, `localeCompare`, card title click, active-user filter. Phase 2I: preview modal restructuring (description first, stage dropdown, tag add/remove, specialty checkbox 3-col). |
+| `server.py` | Phase 1 follow-up: move `POST /api/branding` to `_handle_api_post_put`. Phase 2C: admin handlers. Phase 2I: stage update endpoint for preview modal. Phase 4: sync endpoints. |
+| `public/index.html` | Phase 2C: Unified Admin Modal. Phase 2E: photo tab. Phase 2G: profile modal. Phase 2I: preview modal layout changes. |
+| `public/styles.css` | Phase 2C: admin theme. Phase 2D: grid layout. Phase 2I: preview modal field grid, specialty checkbox 3-col, discrete tooltip styling. |
 | `migrate_from_onlyoffice.py` | Phase 2: add `--export-only` mode. |
 | `migrate_dashboard_data.py` | Phase 2: fix user ID mapping. |
 | `AGENTS.md` | Updated after every session. |
@@ -285,6 +351,7 @@ The Documents tab inside the opportunity preview modal gets the same file manage
 
 ## Progress log
 
+- 2026-07-20: Added Phase 2I: Preview modal + tile revamp (description→top, Project Fields, 2-col user fields, stage dropdown, Follow-up Due Date, tag add/remove, specialty 3-col, deal tile created date, discrete tooltip).
 - 2026-07-19: Created `sietch-crm-plan.md` with confirmed decisions from chat history.
 - 2026-07-18: `9bb823c` — CSV import and project-list fix.
 - 2026-07-18: `7f28153` — Fix projects list stage/contact field indices and add CSV import script.

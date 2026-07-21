@@ -1,5 +1,45 @@
 # Known issues
 
+## ISSUE-011 — Documents modal sidebar: per-project list loaded at open + infrastructure monitoring
+
+**Status:** ✅ Fixed 2026-07-20  
+**Priority:** Medium  
+**Area:** Documents search modal, admin console, server health (`public/app.js`, `public/index.html`, `public/styles.css`, `server.py`, `docker-compose.yml`)
+
+### Summary
+
+The Phase 2H Documents modal loaded a per-project list in the sidebar as soon as it opened (`loadDocsProjects()` → `/api/v2/projects/simple` → render up to 5 recent projects). This showed per-project documents before the user had performed any search. Additionally, there was no server-reachability indicator — when the backend went down, users had no way to know until they triggered a failed API call.
+
+### Fixes applied
+
+**Documents modal:**
+- Removed the project list (`#documents-project-list`) from the Documents modal sidebar.
+- Removed `loadDocsProjects()` / `renderDocsProjectList()` and the call from `openDocumentsModal()`.
+- Removed `projects: []` from `docsState` and unused CSS rules.
+- Documents toolbar: Delete/Move/Copy buttons consolidated into a single "Actions" `<select>` dropdown.
+
+**Server health indicator:**
+- Added `<span id="server-health-indicator">` in header (after admin-console-btn, before sign-out).
+- CSS: hidden by default; `.unreachable` class shows amber icon + dot; positioned between admin gear and sign-out.
+- Mobile layout reordered: sign-out (rightmost) → admin gear → health indicator → logo (top-left).
+- Desktop layout: sign-out (1.5rem) → admin gear (3.5rem) → health indicator (5.5rem).
+- `api()` function hooks: network error or 502/503/504 → show indicator; successful response → clear indicator.
+- 60s health poller: calls `GET /api/health`; skips when `document.hidden` (no throttle false positives); 3 consecutive successes → hide indicator.
+
+**Admin Infrastructure tab:**
+- New tab in admin console (after Logs) with: server status (DB reachability), Docker health (container status, restart count), infrastructure event log (rolling 200 events), restart controls (restart server process or Docker container).
+- Server endpoints: `GET /api/v2/admin/infra-log`, `GET /api/v2/admin/docker-health`, `POST /api/v2/admin/restart-server`, `POST /api/v2/admin/restart-container`.
+
+**Docker:**
+- `healthcheck` added to `docker-compose.yml` (calls `/api/health` every 30s).
+- `restart: on-failure:5` (max 5 automatic restarts, then stop).
+
+**Server:**
+- In-memory rolling 200-event `collections.deque` ring buffer tracks errors, restarts, and server events.
+- `log_infra_event()` called on Document Server unreachable, restart requests.
+
+---
+
 ## ISSUE-006 — WebKit / Apple cache-busting attempt (July 4) — expensive disaster, ignored user feedback
 
 **Status:** ❌ Fully scrapped and removed 2026-07-05
@@ -446,3 +486,31 @@ When building employee-mode deal detail for the Telegram bot, we need the full t
 |------|------|
 | `server.py` | `_extract_mail_message_id()`, `_fetch_full_mail_body()`, `_extract_event_author()` |
 | `telegram_bot.py` | `_html_to_text()`, `_extract_forward_info()`, `_clean_reply_attribution()`, `_truncate_html()`, `_strip_html_tags()`, `_format_mail_event()` |
+
+---
+
+## ISSUE-012 — Server process dies when backgrounded from opencode shell
+
+**Status:** ⚠️ Known issue — workaround in place  
+**Priority:** Low (developer experience only — does not affect production)  
+**Area:** `start.sh`, `server.py`, opencode bash tool
+
+### Summary
+
+When the server is started via `nohup python3 server.py &` inside the opencode bash tool, the process is killed when the bash tool's shell session ends (timeout or next command). This is because the opencode shell sends SIGHUP to all process groups when the session closes, and `nohup` alone does not prevent this.
+
+### Workaround
+
+Use `setsid` to fully detach the process from the shell's process group:
+
+```bash
+cd /home/chapman-server/Projects/new-crm && setsid .venv/bin/python3 server.py > /tmp/server.log 2>&1 &
+```
+
+This works because `setsid` creates a new session for the process, so it is not affected by SIGHUP from the parent shell.
+
+### Impact
+
+- **Development only**: Production uses `docker compose up -d` which handles process lifecycle properly.
+- Server appears to start (PID exists, port opens) but dies within seconds, causing "connection refused" from LAN clients.
+- No crash log — the process simply vanishes.

@@ -1966,13 +1966,13 @@ function parseApiError(body, status) {
     const e = typeof body.error === "string" ? body.error : JSON.stringify(body.error);
     const st2 = Number(body.status || status) || 0;
     if (/unreachable|CRM unreachable/i.test(e) || st2 === 502 || st2 === 503 || st2 === 504) {
-      return `Failed to reach CRM${st2 ? ` (HTTP ${st2})` : ""}. Check your connection or try again.`;
+      return `Failed to reach server${st2 ? ` (HTTP ${st2})` : ""}. Check your connection or try again.`;
     }
     return e;
   }
   if (body?.detail) return typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
   const st = Number(status) || 0;
-  if (st === 502 || st === 503 || st === 504) return `Failed to reach CRM (HTTP ${st}). Check your connection or try again.`;
+  if (st === 502 || st === 503 || st === 504) return `Failed to reach server (HTTP ${st}). Check your connection or try again.`;
   return `HTTP ${status}`;
 }
 
@@ -1987,7 +1987,8 @@ async function api(path, options = {}) {
       credentials: "same-origin",
     });
   } catch (e) {
-    const err = new Error("Failed to reach CRM. Check your connection or try again.");
+    _onServerFailure();
+    const err = new Error("Failed to reach server. Check your connection or try again.");
     err.status = 0;
     throw err;
   }
@@ -2011,22 +2012,82 @@ async function api(path, options = {}) {
     }
   }
   if (!res.ok) {
+    if (res.status === 502 || res.status === 503 || res.status === 504) _onServerFailure();
     const msg = parseApiError(body, res.status);
     const err = new Error(msg);
     err.status = res.status;
     throw err;
   }
+  _onServerHealthy();
   return body;
 }
 
-// --- Mutation Queue / Connection State / Crash Banner removed ---
-// Stubs kept for call-sites outside this zone (refreshAll, deal-edit, note-submit, etc.)
+// ── Server Health Indicator ─────────────────────────────────────────────────
+// Shows a small amber server icon in the header when the backend is unreachable.
+// Hidden when healthy. Anti-false-positive: poller skips when tab is hidden;
+// api() hook only fires on actual user-triggered calls.
 
-function isTransientError() { return false; }
+const _serverHealth = { unreachable: false, consecutiveSuccesses: 0 };
+
+function _showServerUnreachable() {
+  if (_serverHealth.unreachable) return;
+  _serverHealth.unreachable = true;
+  _serverHealth.consecutiveSuccesses = 0;
+  const el = $("#server-health-indicator");
+  if (el) {
+    el.classList.remove("hidden");
+    el.classList.add("unreachable");
+    el.title = "Server unreachable";
+  }
+}
+
+function _hideServerUnreachable() {
+  if (!_serverHealth.unreachable) return;
+  _serverHealth.unreachable = false;
+  _serverHealth.consecutiveSuccesses = 0;
+  const el = $("#server-health-indicator");
+  if (el) {
+    el.classList.add("hidden");
+    el.classList.remove("unreachable");
+  }
+}
+
+function _onServerHealthy() {
+  if (!_serverHealth.unreachable) return;
+  _serverHealth.consecutiveSuccesses++;
+  if (_serverHealth.consecutiveSuccesses >= 3) {
+    _hideServerUnreachable();
+    showToast("Server back online");
+  }
+}
+
+function _onServerFailure() {
+  _serverHealth.consecutiveSuccesses = 0;
+  _showServerUnreachable();
+}
+
+// 60s health poller — skips when tab is hidden to avoid throttle false positives
+let _healthPollTimer = null;
+function _startHealthPoller() {
+  if (_healthPollTimer) return;
+  _healthPollTimer = setInterval(async () => {
+    if (document.hidden) return;
+    try {
+      const res = await fetch("/api/health", { credentials: "same-origin" });
+      if (res.ok) _onServerHealthy();
+      else _onServerFailure();
+    } catch {
+      _onServerFailure();
+    }
+  }, 60000);
+}
+
+// Legacy stubs (called from various places, kept for compatibility)
+function isTransientError() { return _serverHealth.unreachable; }
 function addCompletedNoteQueueEntry() {}
-function onCRMSuccess() {}
-function showCrmCrashBanner() {}
-function hideCrmCrashBanner() {}
+function onCRMSuccess() { _onServerHealthy(); }
+function showCrmCrashBanner() { _showServerUnreachable(); }
+function hideCrmCrashBanner() { _hideServerUnreachable(); }
 function showCRMSyncStatus() {}
 function hideCRMSyncStatus() {}
 function showRefreshingStatus() {}
@@ -2711,24 +2772,34 @@ const docsState = {
   scope: "projects",   // "projects" | "mydocs" | "company"
   currentProjectId: null,
   currentProjectTitle: null,
+  currentFolderId: null,
+  currentFolderPath: [], // [{id, name}, ...] for breadcrumbs
+  folders: [],
   searchQuery: "",
   selected: new Set(),
   documents: [],
-  projects: [],
   loading: false,
+  renamingId: null,
+  renamingFolderId: null,
+  sort: "recent",
+  folderTree: [],        // flat list of {id, name, parentId} from /documents/folders/tree
+  expandedFolders: new Set(), // expanded folder IDs in sidebar tree
 };
 
 function docsIconForMime(mimeType) {
-  if (!mimeType) return `<svg class="doc-doc-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
-  if (mimeType.includes("word") || mimeType.includes("document"))
-    return `<svg class="doc-doc-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>`;
+  const sw = "2";
+  if (!mimeType) return `<svg class="doc-doc-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M12 18h-2a2 2 0 0 1 -2 -2v-2a2 2 0 0 1 2 -2h2v6"/><path d="M15 13v6"/><path d="M18 15v3"/><path d="M15 18h6"/></svg>`;
   if (mimeType.includes("sheet") || mimeType.includes("excel") || mimeType.includes("csv"))
-    return `<svg class="doc-doc-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>`;
+    return `<svg class="doc-doc-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4da377" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M4 15l4 6"/><path d="M4 21l4 -6"/><path d="M17 20.25c0 .414 .336 .75 .75 .75h1.25a1 1 0 0 0 1 -1v-1a1 1 0 0 0 -1 -1h-1a1 1 0 0 1 -1 -1v-1a1 1 0 0 1 1 -1h1.25a.75 .75 0 0 1 .75 .75"/><path d="M11 15v6h3"/></svg>`;
+  if (mimeType.includes("word") || mimeType.includes("document"))
+    return `<svg class="doc-doc-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6b9fd6" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M2 15v6h1a2 2 0 0 0 2 -2v-2a2 2 0 0 0 -2 -2h-1"/><path d="M17 16.5a1.5 1.5 0 0 0 -3 0v3a1.5 1.5 0 0 0 3 0"/><path d="M9.5 15a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1 -3 0v-3a1.5 1.5 0 0 1 1.5 -1.5"/><path d="M19.5 15l3 6"/><path d="M19.5 21l3 -6"/></svg>`;
   if (mimeType.includes("pdf"))
-    return `<svg class="doc-doc-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>`;
+    return `<svg class="doc-doc-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#cf7070" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M5 18h1.5a1.5 1.5 0 0 0 0 -3h-1.5v6"/><path d="M17 18h2"/><path d="M20 15h-3v6"/><path d="M11 15v6h1a2 2 0 0 0 2 -2v-2a2 2 0 0 0 -2 -2h-1"/></svg>`;
   if (mimeType.startsWith("image/"))
-    return `<svg class="doc-doc-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`;
-  return `<svg class="doc-doc-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
+    return `<svg class="doc-doc-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9b84c8" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M11 18h1.5a1.5 1.5 0 0 0 0 -3h-1.5v6"/><path d="M20 15h-1a2 2 0 0 0 -2 2v2a2 2 0 0 0 2 2h1v-3"/><path d="M5 15h3v4.5a1.5 1.5 0 0 1 -3 0"/></svg>`;
+  if (mimeType.includes("text"))
+    return `<svg class="doc-doc-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8a9ab5" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M16.5 15h3"/><path d="M4.5 15h3"/><path d="M6 15v6"/><path d="M18 15v6"/><path d="M10 15l4 6"/><path d="M10 21l4 -6"/></svg>`;
+  return `<svg class="doc-doc-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M12 18h-2a2 2 0 0 1 -2 -2v-2a2 2 0 0 1 2 -2h2v6"/><path d="M15 13v6"/><path d="M18 15v3"/><path d="M15 18h6"/></svg>`;
 }
 
 function formatDocSize(bytes) {
@@ -2738,59 +2809,53 @@ function formatDocSize(bytes) {
   return (bytes / (1024 * 1024)).toFixed(1) + " MB";
 }
 
-async function loadDocsProjects() {
-  try {
-    const data = await api("/api/v2/projects/simple");
-    docsState.projects = (data.projects || []).slice(0, 20);
-    renderDocsProjectList();
-  } catch {}
-}
-
-function renderDocsProjectList() {
-  const list = $("#documents-project-list");
-  if (!list) return;
-  list.innerHTML = docsState.projects.slice(0, 5).map(p =>
-    `<button type="button" class="documents-project-item${docsState.currentProjectId === p.id ? " active" : ""}" data-project-id="${p.id}" data-project-title="${escapeHtml(p.title || "")}">${escapeHtml(p.title || "Project " + p.id)}</button>`
-  ).join("") +
-    `<button type="button" class="documents-project-item" data-search-all="1">Search all projects…</button>`;
-  list.querySelectorAll(".documents-project-item:not([data-search-all])").forEach(btn => {
-    btn.addEventListener("click", () => {
-      docsState.currentProjectId = Number(btn.dataset.projectId);
-      docsState.currentProjectTitle = btn.dataset.projectTitle;
-      docsState.selected.clear();
-      docsState.searchQuery = "";
-      const searchInput = $("#documents-search-input");
-      if (searchInput) searchInput.value = "";
-      loadDocumentsList();
-    });
-  });
-  const searchAllBtn = list.querySelector("[data-search-all]");
-  if (searchAllBtn) {
-    searchAllBtn.addEventListener("click", () => {
-      docsState.currentProjectId = null;
-      docsState.currentProjectTitle = null;
-      docsState.selected.clear();
-      loadDocumentsList();
-    });
-  }
-}
-
 function openDocumentsModal() {
   const modal = $("#documents-modal");
   if (!modal) return;
-  docsState.scope = "projects";
-  docsState.currentProjectId = null;
-  docsState.currentProjectTitle = null;
-  docsState.selected.clear();
-  docsState.searchQuery = "";
-  docsState.documents = [];
-  docsState.loading = false;
-  const searchInput = $("#documents-search-input");
-  if (searchInput) searchInput.value = "";
-  document.querySelectorAll(".documents-scope-btn").forEach(b => b.classList.toggle("active", b.dataset.scope === "projects"));
+  // If restoring from parked state, keep the restored values
+  if (!minimizedDocsState) {
+    docsState.scope = "projects";
+    docsState.currentProjectId = null;
+    docsState.currentProjectTitle = null;
+    docsState.currentFolderId = null;
+    docsState.currentFolderPath = [];
+    docsState.folders = [];
+    docsState.selected.clear();
+    docsState.searchQuery = "";
+    docsState.documents = [];
+    docsState.loading = false;
+    const searchInput = $("#documents-search-input");
+    if (searchInput) searchInput.value = "";
+    document.querySelectorAll(".documents-scope-btn").forEach(b => b.classList.toggle("active", b.dataset.scope === "projects"));
+  } else {
+    document.querySelectorAll(".documents-scope-btn").forEach(b => b.classList.toggle("active", b.dataset.scope === docsState.scope));
+  }
   modal.classList.remove("hidden");
-  loadDocsProjects();
+  // Collapse sidebar by default on narrow screens
+  const sidebar = $("#documents-sidebar");
+  const sidebarToggle = $("#documents-sidebar-toggle");
+  if (sidebar && sidebarToggle && window.innerWidth <= 640) {
+    sidebar.classList.add("documents-sidebar-collapsed");
+    sidebarToggle.textContent = "▶";
+    sidebarToggle.setAttribute("aria-label", "Show sidebar");
+    sidebarToggle.setAttribute("title", "Show sidebar");
+  }
+  updateDocsToolbarForScope();
   loadDocumentsList();
+  loadFolderTree();
+  // Auto-refresh when editor signals save-as complete
+  if (!openDocumentsModal._focusBound) {
+    openDocumentsModal._focusBound = true;
+    window.addEventListener("focus", () => {
+      try {
+        const ts = localStorage.getItem("crm-docs-refresh");
+        if (ts && !modal.classList.contains("hidden")) {
+          localStorage.removeItem("crm-docs-refresh");
+          loadDocumentsList();
+        }
+      } catch {}
+    });
+  }
 }
 
 function closeDocumentsModal() {
@@ -2800,6 +2865,11 @@ function closeDocumentsModal() {
   docsState.selected.clear();
   docsState.searchQuery = "";
   docsState.scope = "projects";
+  // Clear parked state
+  minimizedDocsState = null;
+  try { localStorage.removeItem(DOCS_MINIMIZED_STORAGE_KEY); } catch {}
+  const trigger = $("#documents-trigger");
+  if (trigger) trigger.classList.add("trigger-hidden");
 }
 
 async function loadDocumentsList() {
@@ -2812,12 +2882,21 @@ async function loadDocumentsList() {
   try {
     let data;
     if (docsState.scope === "mydocs") {
-      data = await api("/api/v2/documents/personal");
+      const qs = new URLSearchParams();
+      if (docsState.currentFolderId) qs.set("folder_id", String(docsState.currentFolderId));
+      const path = "/api/v2/documents/personal" + (qs.toString() ? "?" + qs.toString() : "");
+      data = await api(path);
       docsState.documents = data.documents || [];
+      docsState.folders = data.folders || [];
     } else if (docsState.scope === "company") {
-      data = await api("/api/v2/documents/company");
+      const qs = new URLSearchParams();
+      if (docsState.currentFolderId) qs.set("folder_id", String(docsState.currentFolderId));
+      const path = "/api/v2/documents/company" + (qs.toString() ? "?" + qs.toString() : "");
+      data = await api(path);
       docsState.documents = data.documents || [];
+      docsState.folders = data.folders || [];
     } else {
+      docsState.folders = [];
       const qs = new URLSearchParams();
       if (docsState.currentProjectId) {
         qs.set("project_id", String(docsState.currentProjectId));
@@ -2844,43 +2923,257 @@ async function loadDocumentsList() {
   }
 }
 
+function sortDocuments(docs) {
+  const sorted = [...docs];
+  switch (docsState.sort) {
+    case "recent":
+      sorted.sort((a, b) => new Date(b.uploadedAt || 0) - new Date(a.uploadedAt || 0));
+      break;
+    case "oldest":
+      sorted.sort((a, b) => new Date(a.uploadedAt || 0) - new Date(b.uploadedAt || 0));
+      break;
+    case "largest":
+      sorted.sort((a, b) => (b.fileSize || 0) - (a.fileSize || 0));
+      break;
+    case "smallest":
+      sorted.sort((a, b) => (a.fileSize || 0) - (b.fileSize || 0));
+      break;
+    case "name-asc":
+      sorted.sort((a, b) => String(a.title || "").localeCompare(String(b.title || ""), undefined, { sensitivity: "base" }));
+      break;
+    case "name-desc":
+      sorted.sort((a, b) => String(b.title || "").localeCompare(String(a.title || ""), undefined, { sensitivity: "base" }));
+      break;
+  }
+  return sorted;
+}
+
+function renderDocumentRow(d) {
+  const checked = docsState.selected.has(d.id) ? "checked" : "";
+  const selClass = docsState.selected.has(d.id) ? " selected" : "";
+  const isRenaming = docsState.renamingId === d.id;
+  const titleHtml = isRenaming
+    ? `<input type="text" class="doc-doc-title-input" value="${escapeHtml(d.title)}" data-rename-input data-doc-id="${d.id}" />
+       <span class="doc-rename-actions">
+         <button type="button" class="btn-icon-only doc-rename-confirm" data-doc-id="${d.id}" title="Save">
+           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 5a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14" /><path d="M9 12l2 2l4 -4" /></svg>
+         </button>
+         <button type="button" class="btn-icon-only doc-rename-cancel" title="Cancel">
+           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M18 6l-12 12" /><path d="M6 6l12 12" /></svg>
+         </button>
+       </span>`
+    : `<span class="doc-doc-title" data-doc-title data-doc-id="${d.id}" title="${escapeHtml(d.title)}">${escapeHtml(d.title)}</span>`;
+  const isDraggable = docsState.scope !== "projects";
+  return `<div class="documents-list-row${selClass}" data-doc-id="${d.id}" draggable="${isDraggable ? "true" : "false"}">
+    <input type="checkbox" class="doc-cb" data-id="${d.id}" ${checked} />
+    ${docsIconForMime(d.mimeType)}
+    ${titleHtml}
+    <span class="doc-doc-meta">
+      <span class="doc-doc-size">${formatDocSize(d.fileSize)}</span>
+      <span class="doc-doc-date">${d.uploadedAt ? escapeHtml(d.uploadedAt.split("T")[0]) : "—"}</span>
+    </span>
+  </div>`;
+}
+
 function renderDocumentsList() {
   const list = $("#documents-list");
   if (!list) return;
-  const docs = docsState.documents;
-  if (!docs.length) {
+  const docs = sortDocuments(docsState.documents);
+  const hasFolders = docsState.folders && docsState.folders.length > 0;
+  const isFolderScope = docsState.scope === "mydocs" || docsState.scope === "company";
+
+  let html = "";
+
+  // Breadcrumb for folder scopes (rendered even when empty)
+  if (isFolderScope) {
+    html += '<div class="documents-breadcrumb">';
+    const scopeLabel = docsState.scope === "mydocs" ? "My Documents" : "Company";
+    if (docsState.currentFolderPath.length === 0) {
+      html += `<span class="documents-breadcrumb-item documents-breadcrumb-current">${escapeHtml(scopeLabel)}</span>`;
+    } else {
+      html += `<span class="documents-breadcrumb-item documents-breadcrumb-link" data-breadcrumb-root>${escapeHtml(scopeLabel)}</span>`;
+      docsState.currentFolderPath.forEach((seg, idx) => {
+        html += '<span class="documents-breadcrumb-sep">/</span>';
+        const isLast = idx === docsState.currentFolderPath.length - 1;
+        if (isLast) {
+          html += `<span class="documents-breadcrumb-item documents-breadcrumb-current">${escapeHtml(seg.name)}</span>`;
+        } else {
+          html += `<span class="documents-breadcrumb-item documents-breadcrumb-link" data-breadcrumb-idx="${idx}">${escapeHtml(seg.name)}</span>`;
+        }
+      });
+    }
+    html += '</div>';
+  }
+
+  if (!docs.length && !hasFolders) {
     const scopeMessages = {
-      mydocs: "No personal documents yet. Upload files or copy from a project.",
+      mydocs: "No personal documents yet. Upload files or create new ones.",
       company: "No company documents yet. Upload shared resources here.",
       projects: docsState.currentProjectId ? "No documents in this project. Upload files or drag them here." : "No documents found.",
     };
-    list.innerHTML = `<div class="documents-empty"><div class="documents-empty-icon"><svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>${scopeMessages[docsState.scope] || "No documents."}</div>`;
+    html += `<div class="documents-empty"><div class="documents-empty-icon"><svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>${scopeMessages[docsState.scope] || "No documents."}</div>`;
+    list.innerHTML = html;
+    bindDocumentsListEvents(list);
     return;
   }
-  list.innerHTML = docs.map(d => {
-    const checked = docsState.selected.has(d.id) ? "checked" : "";
-    const selClass = docsState.selected.has(d.id) ? " selected" : "";
-    const projectLabel = d._projectTitle ? `<span class="doc-doc-project">${escapeHtml(d._projectTitle)}</span>` : "";
-    return `<div class="documents-list-row${selClass}" data-doc-id="${d.id}">
-      <input type="checkbox" class="doc-cb" data-id="${d.id}" ${checked} />
-      ${docsIconForMime(d.mimeType)}
-      <span class="doc-doc-title" title="${escapeHtml(d.title)}">${escapeHtml(d.title)}</span>
-      ${projectLabel}
-      <span class="doc-doc-meta">
-        <span class="doc-doc-size">${formatDocSize(d.fileSize)}</span>
-        <span class="doc-doc-date">${d.uploadedAt ? escapeHtml(d.uploadedAt.split("T")[0]) : "—"}</span>
-      </span>
-    </div>`;
-  }).join("");
+
+  // Folder rows
+  if (hasFolders) {
+    docsState.folders.forEach(f => {
+      const isRenaming = docsState.renamingFolderId === f.id;
+      const nameHtml = isRenaming
+        ? `<input type="text" class="doc-doc-title-input" value="${escapeHtml(f.name)}" data-rename-folder-input data-folder-id="${f.id}" />
+           <span class="doc-rename-actions">
+             <button type="button" class="btn-icon-only doc-rename-folder-confirm" data-folder-id="${f.id}" title="Save">
+               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 5a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14" /><path d="M9 12l2 2l4 -4" /></svg>
+             </button>
+             <button type="button" class="btn-icon-only doc-rename-folder-cancel" title="Cancel">
+               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M18 6l-12 12" /><path d="M6 6l12 12" /></svg>
+             </button>
+           </span>`
+        : `<span class="doc-doc-title documents-folder-name" data-folder-id="${f.id}" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>`;
+      html += `<div class="documents-list-row documents-folder-row" data-folder-id="${f.id}" data-folder-name="${escapeHtml(f.name)}">
+        <span class="documents-folder-icon">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        </span>
+        ${nameHtml}
+      </div>`;
+    });
+  }
+
+  // Projects scope: group by project with discrete header dividers
+  if (docsState.scope === "projects") {
+    const grouped = {};
+    docs.forEach(d => {
+      const key = d._projectTitle || "Unknown project";
+      if (!grouped[key]) grouped[key] = { projectId: d._projectId, documents: [] };
+      grouped[key].documents.push(d);
+    });
+    html += Object.entries(grouped).map(([projectTitle, group]) => {
+      return `<div class="documents-project-group">
+        <div class="documents-project-header">
+          <span class="documents-project-title">${escapeHtml(projectTitle)}</span>
+          <span class="documents-project-count">${group.documents.length} file${group.documents.length !== 1 ? "s" : ""}</span>
+        </div>
+        <div class="documents-project-files">
+          ${group.documents.map(d => renderDocumentRow(d)).join("")}
+        </div>
+      </div>`;
+    }).join("");
+  } else {
+    html += docs.map(d => renderDocumentRow(d)).join("");
+  }
+
+  list.innerHTML = html;
+  bindDocumentsListEvents(list);
+}
+
+function bindDocumentsListEvents(list) {
+  // Bind folder click to navigate (skip when renaming)
+  list.querySelectorAll(".documents-folder-row").forEach(row => {
+    row.addEventListener("click", e => {
+      if (e.target.tagName === "INPUT") return;
+      if (e.target.closest(".doc-rename-actions")) return;
+      const folderId = Number(row.dataset.folderId);
+      if (docsState.renamingFolderId === folderId) return;
+      e.stopPropagation();
+      const folderName = row.dataset.folderName;
+      navigateToFolder(folderId, folderName);
+    });
+  });
+
+  // Drag-and-drop: folder rows accept drops
+  list.querySelectorAll(".documents-folder-row").forEach(row => {
+    row.addEventListener("dragover", e => {
+      if (docsState.scope === "projects") return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      row.classList.add("drag-over");
+    });
+    row.addEventListener("dragleave", () => {
+      row.classList.remove("drag-over");
+    });
+    row.addEventListener("drop", async e => {
+      e.preventDefault();
+      row.classList.remove("drag-over");
+      const docId = Number(e.dataTransfer.getData("text/doc-id"));
+      const targetFolderId = Number(row.dataset.folderId);
+      if (!docId || !targetFolderId) return;
+      try {
+        await api(`/api/v2/documents/${docId}`, {
+          method: "PATCH",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({ folder_id: targetFolderId }),
+        });
+        showToast("Document moved");
+        loadDocumentsList();
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    });
+  });
+
+  // Drag-and-drop: document rows set drag data
+  list.querySelectorAll(".documents-list-row:not(.documents-folder-row)[draggable='true']").forEach(row => {
+    row.addEventListener("dragstart", e => {
+      e.dataTransfer.setData("text/doc-id", row.dataset.docId);
+      e.dataTransfer.effectAllowed = "move";
+      row.classList.add("dragging");
+    });
+    row.addEventListener("dragend", () => {
+      row.classList.remove("dragging");
+    });
+  });
+
+  // Bind folder rename confirm/cancel
+  list.querySelectorAll(".doc-rename-folder-confirm").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      const folderId = Number(btn.dataset.folderId);
+      const input = document.querySelector(`[data-rename-folder-input][data-folder-id="${folderId}"]`);
+      confirmRenameFolder(folderId, input ? input.value : "");
+    });
+  });
+  list.querySelectorAll(".doc-rename-folder-cancel").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      cancelRenameFolder();
+    });
+  });
+  list.querySelectorAll("[data-rename-folder-input]").forEach(input => {
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const folderId = Number(input.dataset.folderId);
+        confirmRenameFolder(folderId, input.value);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        cancelRenameFolder();
+      }
+    });
+  });
+
+  // Bind breadcrumb clicks
+  list.querySelectorAll("[data-breadcrumb-root]").forEach(el => {
+    el.addEventListener("click", e => { e.stopPropagation(); navigateToRoot(); });
+  });
+  list.querySelectorAll("[data-breadcrumb-idx]").forEach(el => {
+    el.addEventListener("click", e => {
+      e.stopPropagation();
+      navigateToBreadcrumb(Number(el.dataset.breadcrumbIdx));
+    });
+  });
+
   list.querySelectorAll(".doc-cb").forEach(cb => {
     cb.addEventListener("click", e => {
       e.stopPropagation();
       toggleDocSelect(Number(cb.dataset.id));
     });
   });
-  list.querySelectorAll(".documents-list-row").forEach(row => {
+  list.querySelectorAll(".documents-list-row:not(.documents-folder-row)").forEach(row => {
     row.addEventListener("click", e => {
       if (e.target.tagName === "INPUT") return;
+      if (e.target.closest(".doc-doc-title")) return;
       const id = Number(row.dataset.docId);
       if (docsState.selected.has(id)) {
         docsState.selected.delete(id);
@@ -2893,12 +3186,310 @@ function renderDocumentsList() {
       }
       updateDocsToolbar();
     });
-    row.addEventListener("dblclick", () => {
-      const id = Number(row.dataset.docId);
-      openDocEditor(id);
+  });
+  list.querySelectorAll(".doc-doc-title[data-doc-id]").forEach(titleEl => {
+    titleEl.addEventListener("click", e => {
+      e.stopPropagation();
+      const id = Number(titleEl.dataset.docId);
+      if (id) openDocEditor(id);
     });
   });
+  list.querySelectorAll(".doc-rename-confirm").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      const id = Number(btn.dataset.docId);
+      const input = document.querySelector(`.documents-list-row[data-doc-id="${id}"] .doc-doc-title-input`);
+      if (input) confirmRenameDoc(id, input.value);
+    });
+  });
+  list.querySelectorAll(".doc-rename-cancel").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      cancelRenameDoc();
+    });
+  });
+  list.querySelectorAll(".doc-doc-title-input").forEach(input => {
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        confirmRenameDoc(Number(input.dataset.docId), input.value);
+      } else if (e.key === "Escape") {
+        cancelRenameDoc();
+      }
+    });
+    input.addEventListener("click", e => e.stopPropagation());
+  });
   updateDocsToolbar();
+}
+
+function navigateToFolder(folderId, folderName) {
+  // Don't push if already at this folder
+  if (docsState.currentFolderId === folderId) return;
+  docsState.currentFolderId = folderId;
+  docsState.currentFolderPath.push({ id: folderId, name: folderName });
+  docsState.selected.clear();
+  loadDocumentsList();
+  renderFolderTree();
+}
+
+function navigateToRoot() {
+  docsState.currentFolderId = null;
+  docsState.currentFolderPath = [];
+  docsState.selected.clear();
+  loadDocumentsList();
+  renderFolderTree();
+}
+
+function navigateToBreadcrumb(idx) {
+  docsState.currentFolderPath = docsState.currentFolderPath.slice(0, idx);
+  docsState.currentFolderId = docsState.currentFolderPath.length > 0 ? docsState.currentFolderPath[docsState.currentFolderPath.length - 1].id : null;
+  docsState.selected.clear();
+  loadDocumentsList();
+  renderFolderTree();
+}
+
+async function loadFolderTree() {
+  const isFolderScope = docsState.scope === "mydocs" || docsState.scope === "company";
+  if (!isFolderScope) {
+    docsState.folderTree = [];
+    renderFolderTree();
+    return;
+  }
+  try {
+    const scope = docsState.scope === "company" ? "company" : "personal";
+    const data = await api(`/api/v2/documents/folders/tree?scope=${scope}`);
+    docsState.folderTree = data.folders || [];
+    renderFolderTree();
+  } catch {
+    docsState.folderTree = [];
+    renderFolderTree();
+  }
+}
+
+function buildFolderTreeNodes(flat, parentId) {
+  return flat
+    .filter(f => f.parentId === parentId)
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(f => ({
+      ...f,
+      children: buildFolderTreeNodes(flat, f.id),
+    }));
+}
+
+function renderFolderTree() {
+  const sidebar = $("#documents-sidebar");
+  if (!sidebar) return;
+  let treeContainer = sidebar.querySelector(".documents-folder-tree");
+  const isFolderScope = docsState.scope === "mydocs" || docsState.scope === "company";
+
+  if (!isFolderScope) {
+    if (treeContainer) treeContainer.remove();
+    return;
+  }
+
+  const tree = buildFolderTreeNodes(docsState.folderTree, null);
+
+  if (!treeContainer) {
+    treeContainer = document.createElement("div");
+    treeContainer.className = "documents-folder-tree";
+  }
+  // Always reposition after the active scope button
+  const activeBtn = sidebar.querySelector(".documents-scope-btn.active");
+  if (activeBtn) {
+    activeBtn.parentNode.insertBefore(treeContainer, activeBtn.nextSibling);
+  } else {
+    sidebar.appendChild(treeContainer);
+  }
+
+  if (tree.length === 0) {
+    treeContainer.innerHTML = `<div style="padding:0.2rem 0.6rem;font-size:0.78rem;color:var(--muted);font-style:italic;">No folders yet</div>`;
+    return;
+  }
+
+  const chevronSvg = `<svg class="documents-folder-tree-chevron" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>`;
+  const folderIcon = `<svg class="documents-folder-tree-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+
+  function renderNode(node, depth) {
+    const hasChildren = node.children.length > 0;
+    const isExpanded = docsState.expandedFolders.has(node.id);
+    const isActive = docsState.currentFolderId === node.id;
+    const chevronClass = hasChildren ? (isExpanded ? " expanded" : "") : " no-children";
+    let html = `<li class="documents-folder-tree-item">
+      <div class="documents-folder-tree-row${isActive ? " active" : ""}" data-tree-folder-id="${node.id}" data-tree-folder-name="${escapeHtml(node.name)}" style="--tree-depth:${depth}">
+        <span class="documents-folder-tree-chevron${chevronClass}" data-tree-chevron="${node.id}">${chevronSvg}</span>
+        ${folderIcon}
+        <span class="documents-folder-tree-name" title="${escapeHtml(node.name)}">${escapeHtml(node.name)}</span>
+      </div>`;
+    if (hasChildren && isExpanded) {
+      html += `<ul class="documents-folder-tree-children">${node.children.map(c => renderNode(c, depth + 1)).join("")}</ul>`;
+    }
+    html += `</li>`;
+    return html;
+  }
+
+  treeContainer.innerHTML = `<ul class="documents-folder-tree-list">${tree.map(n => renderNode(n, 0)).join("")}</ul>`;
+
+  // Bind click handlers
+  treeContainer.querySelectorAll(".documents-folder-tree-chevron").forEach(chevron => {
+    chevron.addEventListener("click", e => {
+      e.stopPropagation();
+      const folderId = Number(chevron.dataset.treeChevron);
+      if (docsState.expandedFolders.has(folderId)) {
+        docsState.expandedFolders.delete(folderId);
+      } else {
+        docsState.expandedFolders.add(folderId);
+      }
+      renderFolderTree();
+    });
+  });
+  treeContainer.querySelectorAll(".documents-folder-tree-row").forEach(row => {
+    row.addEventListener("click", e => {
+      e.stopPropagation();
+      const folderId = Number(row.dataset.treeFolderId);
+      const folderName = row.dataset.treeFolderName;
+      // Build full path from tree structure
+      const path = [];
+      let current = docsState.folderTree.find(f => f.id === folderId);
+      while (current) {
+        path.unshift({ id: current.id, name: current.name });
+        current = current.parentId ? docsState.folderTree.find(f => f.id === current.parentId) : null;
+      }
+      docsState.currentFolderPath = path;
+      docsState.currentFolderId = folderId;
+      docsState.selected.clear();
+      loadDocumentsList();
+    });
+  });
+}
+
+function updateFolderTreeHighlight() {
+  const sidebar = $("#documents-sidebar");
+  if (!sidebar) return;
+  sidebar.querySelectorAll(".documents-folder-tree-row").forEach(row => {
+    const id = Number(row.dataset.treeFolderId);
+    row.classList.toggle("active", id === docsState.currentFolderId);
+  });
+}
+
+let folderRenamingId = null;
+
+async function createFolder() {
+  try {
+    const data = await api("/api/v2/documents/folders", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        name: "New Folder",
+        scope: docsState.scope === "company" ? "company" : "personal",
+        parent_id: docsState.currentFolderId || null,
+      }),
+    });
+    showToast("Folder created");
+    await loadDocumentsList();
+    loadFolderTree();
+    if (data && data.id) {
+      startRenameFolder(data.id);
+    }
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+function renameFolder(folderId) {
+  const folder = docsState.folders.find(f => f.id === folderId);
+  if (!folder) return;
+  startRenameFolder(folderId);
+}
+
+function startRenameFolder(folderId) {
+  docsState.renamingFolderId = folderId;
+  renderDocumentsList();
+  const input = document.querySelector(`[data-rename-folder-input][data-folder-id="${folderId}"]`);
+  if (input) {
+    input.focus();
+    input.select();
+  }
+}
+
+function cancelRenameFolder() {
+  docsState.renamingFolderId = null;
+  renderDocumentsList();
+}
+
+async function confirmRenameFolder(folderId, newName) {
+  const name = (newName || "").trim();
+  if (!name) { showToast("Folder name is required", true); return; }
+  const oldFolder = docsState.folders.find(f => f.id === folderId);
+  if (oldFolder && oldFolder.name === name) {
+    docsState.renamingFolderId = null;
+    renderDocumentsList();
+    return;
+  }
+  try {
+    await api(`/api/v2/documents/folders/${folderId}`, {
+      method: "PATCH",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ name }),
+    });
+    docsState.renamingFolderId = null;
+    showToast("Folder renamed");
+    loadDocumentsList();
+    loadFolderTree();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function deleteFolder(folderId) {
+  const folder = docsState.folders.find(f => f.id === folderId);
+  if (!folder) return;
+  const ok = await confirmDialog({
+    title: "Delete folder",
+    message: `Delete folder "${folder.name}" and everything inside it? This cannot be undone.`,
+    confirmLabel: "Delete",
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    await api(`/api/v2/documents/folders/${folderId}`, { method: "DELETE" });
+    showToast("Folder deleted");
+    loadDocumentsList();
+    loadFolderTree();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function createBlankDocument(type) {
+  const defaultName = type === "word" ? "New Document" : "New Spreadsheet";
+  try {
+    const body = {
+      type,
+      title: defaultName,
+      scope: docsState.scope === "company" ? "company" : "personal",
+      folder_id: docsState.currentFolderId || null,
+    };
+    const data = await api("/api/v2/documents/create", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    showToast(`${type === "word" ? "Word" : "Excel"} document created`);
+    await loadDocumentsList();
+    if (data && data.id) {
+      startRenameDoc(data.id);
+    }
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+function updateDocsToolbarForScope() {
+  const isProjects = docsState.scope === "projects";
+  const uploadBtn = $("#documents-upload-btn");
+  const newWrap = document.querySelector(".documents-new-wrap");
+  if (uploadBtn) uploadBtn.classList.toggle("hidden", isProjects);
+  if (newWrap) newWrap.classList.toggle("hidden", isProjects);
 }
 
 function toggleDocSelect(id) {
@@ -2915,24 +3506,28 @@ function toggleDocSelect(id) {
 function updateDocsToolbar() {
   const n = docsState.selected.size;
   const countEl = $("#documents-selected-count");
-  const deleteBtn = $("#documents-delete-btn");
-  const moveBtn = $("#documents-move-btn");
-  const copyBtn = $("#documents-copy-btn");
+  const actionsSelect = $("#documents-actions-select");
   const clearBtn = $("#documents-clear-selection-btn");
+  const renameBtn = $("#documents-rename-btn");
   if (countEl) {
     countEl.textContent = n ? `${n} selected` : "0 selected";
     countEl.classList.toggle("hidden", !n);
   }
-  if (deleteBtn) deleteBtn.disabled = !n;
-  if (moveBtn) moveBtn.disabled = !n;
-  if (copyBtn) copyBtn.disabled = !n;
+  if (actionsSelect) actionsSelect.disabled = !n;
   if (clearBtn) clearBtn.classList.toggle("hidden", !n);
+  if (renameBtn) renameBtn.classList.toggle("hidden", n !== 1);
 }
 
 async function deleteSelectedDocs() {
   if (!docsState.selected.size) return;
   const n = docsState.selected.size;
-  if (!confirm(`Delete ${n} document${n > 1 ? "s" : ""}? This cannot be undone.`)) return;
+  const ok = await confirmDialog({
+    title: "Delete documents",
+    message: `Delete ${n} document${n > 1 ? "s" : ""}? This cannot be undone.`,
+    confirmLabel: "Delete",
+    danger: true,
+  });
+  if (!ok) return;
   try {
     await api("/api/v2/documents/batch-delete", {
       method: "POST",
@@ -2947,56 +3542,226 @@ async function deleteSelectedDocs() {
   }
 }
 
-async function moveSelectedDocs() {
-  if (!docsState.selected.size) return;
-  const projectId = prompt("Enter the project ID to move selected documents to:");
-  if (!projectId) return;
-  const pid = Number(projectId);
-  if (!pid || isNaN(pid)) { showToast("Invalid project ID", true); return; }
+function startRenameDoc(docId) {
+  docsState.renamingId = docId;
+  // Select only the renamed doc
+  docsState.selected.clear();
+  docsState.selected.add(docId);
+  renderDocumentsList();
+  const input = document.querySelector(`.documents-list-row[data-doc-id="${docId}"] .doc-doc-title-input`);
+  if (input) {
+    input.focus();
+    input.select();
+  }
+  updateDocsToolbar();
+}
+
+function cancelRenameDoc() {
+  docsState.renamingId = null;
+  renderDocumentsList();
+  updateDocsToolbar();
+}
+
+async function confirmRenameDoc(docId, newTitle) {
+  const title = (newTitle || "").trim();
+  if (!title) { showToast("File name is required", true); return; }
+  const oldDoc = docsState.documents.find(d => d.id === docId);
+  if (oldDoc && oldDoc.title === title) {
+    docsState.renamingId = null;
+    renderDocumentsList();
+    updateDocsToolbar();
+    return;
+  }
   try {
-    await api("/api/v2/documents/batch-move", {
-      method: "POST",
+    await api(`/api/v2/documents/${docId}`, {
+      method: "PATCH",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ ids: Array.from(docsState.selected), opportunity_id: pid }),
+      body: JSON.stringify({ title }),
     });
-    docsState.selected.clear();
-    showToast("Documents moved");
+    docsState.renamingId = null;
+    showToast("Document renamed");
     loadDocumentsList();
   } catch (err) {
     showToast(err.message, true);
   }
 }
 
-async function copySelectedDocs() {
-  if (!docsState.selected.size) return;
-  const dest = prompt("Copy to: (1) Personal docs, (2) Company docs, or enter a project ID");
-  if (!dest) return;
-  let body;
-  if (dest === "1") {
-    body = { ids: Array.from(docsState.selected) };
-  } else if (dest === "2") {
-    body = { ids: Array.from(docsState.selected), company_scope: true };
-  } else {
-    const pid = Number(dest);
-    if (!pid || isNaN(pid)) { showToast("Invalid project ID", true); return; }
-    body = { ids: Array.from(docsState.selected), opportunity_id: pid };
-  }
+let moveCopyPanelMode = null; // 'move' | 'copy'
+let moveCopyPanelTargetProjectId = null;
+let moveCopyPanelJustOpened = false;
+
+function hideMoveCopyPanel() {
+  const panel = $("#documents-move-copy-panel");
+  if (panel) panel.classList.add("hidden");
+  moveCopyPanelMode = null;
+  moveCopyPanelTargetProjectId = null;
+  const input = $("#documents-move-copy-project-input");
+  if (input) input.value = "";
+  const results = $("#documents-move-copy-project-results");
+  if (results) results.classList.add("hidden");
+  updateMoveCopyConfirmState();
+}
+
+function updateMoveCopyConfirmState() {
+  const dest = $("#documents-move-copy-dest")?.value || "project";
+  const confirmBtn = $("#documents-move-copy-confirm");
+  if (!confirmBtn) return;
+  const disabled = dest === "project" && !moveCopyPanelTargetProjectId;
+  confirmBtn.disabled = disabled;
+}
+
+async function searchProjectsForMoveCopy(q) {
+  if (!q || q.length < 2) return [];
   try {
-    await api("/api/v2/documents/batch-copy", {
+    const data = await api(`/api/v2/projects/simple?q=${encodeURIComponent(q)}`);
+    return data.projects || [];
+  } catch {
+    return [];
+  }
+}
+
+function showMoveCopyPanel(mode) {
+  if (!docsState.selected.size) return;
+  moveCopyPanelMode = mode;
+  moveCopyPanelTargetProjectId = null;
+  moveCopyPanelJustOpened = true;
+  const panel = $("#documents-move-copy-panel");
+  const title = $("#documents-move-copy-title");
+  const dest = $("#documents-move-copy-dest");
+  const projectWrap = $("#documents-move-copy-project-wrap");
+  const input = $("#documents-move-copy-project-input");
+  const results = $("#documents-move-copy-project-results");
+  if (!panel) return;
+  if (title) title.textContent = mode === "move" ? "Move to" : "Copy to";
+  if (dest) dest.value = "project";
+  if (input) input.value = "";
+  if (results) results.classList.add("hidden");
+  if (projectWrap) projectWrap.classList.remove("hidden");
+  panel.classList.remove("hidden");
+  updateMoveCopyConfirmState();
+  if (input) input.focus();
+  setTimeout(() => { moveCopyPanelJustOpened = false; }, 100);
+}
+
+async function executeMoveCopyPanel() {
+  const dest = $("#documents-move-copy-dest")?.value || "project";
+  const ids = Array.from(docsState.selected);
+  let body;
+  if (dest === "project") {
+    if (!moveCopyPanelTargetProjectId) return;
+    body = { ids, opportunity_id: moveCopyPanelTargetProjectId };
+  } else if (dest === "company") {
+    body = { ids, company_scope: true };
+  } else {
+    body = { ids };
+  }
+  const endpoint = moveCopyPanelMode === "move" ? "/api/v2/documents/batch-move" : "/api/v2/documents/batch-copy";
+  const successMsg = moveCopyPanelMode === "move" ? "Documents moved" : "Documents copied";
+  try {
+    await api(endpoint, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify(body),
     });
     docsState.selected.clear();
-    showToast("Documents copied");
+    docsState.renamingId = null;
+    hideMoveCopyPanel();
+    showToast(successMsg);
     loadDocumentsList();
   } catch (err) {
     showToast(err.message, true);
   }
 }
 
+function bindMoveCopyPanel() {
+  const panel = $("#documents-move-copy-panel");
+  const dest = $("#documents-move-copy-dest");
+  const input = $("#documents-move-copy-project-input");
+  const results = $("#documents-move-copy-project-results");
+  const confirmBtn = $("#documents-move-copy-confirm");
+  const cancelBtn = $("#documents-move-copy-cancel");
+  const closeBtn = $("#documents-move-copy-close");
+  if (!panel || panel.dataset.bound) return;
+  panel.dataset.bound = "1";
+
+  if (dest) {
+    dest.addEventListener("change", () => {
+      const isProject = dest.value === "project";
+      $("#documents-move-copy-project-wrap")?.classList.toggle("hidden", !isProject);
+      if (isProject) {
+        moveCopyPanelTargetProjectId = null;
+        if (input) input.value = "";
+        if (results) results.classList.add("hidden");
+      }
+      updateMoveCopyConfirmState();
+    });
+  }
+
+  if (input) {
+    let debounce;
+    input.addEventListener("input", () => {
+      clearTimeout(debounce);
+      const q = input.value.trim();
+      if (!q || q.length < 2) {
+        if (results) results.classList.add("hidden");
+        moveCopyPanelTargetProjectId = null;
+        updateMoveCopyConfirmState();
+        return;
+      }
+      debounce = setTimeout(async () => {
+        const projects = await searchProjectsForMoveCopy(q);
+        if (!results) return;
+        results.innerHTML = "";
+        if (!projects.length) {
+          results.innerHTML = '<button type="button" disabled>No matches</button>';
+          results.classList.remove("hidden");
+          return;
+        }
+        projects.forEach(p => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = p.title || `Project ${p.id}`;
+          btn.addEventListener("click", () => {
+            moveCopyPanelTargetProjectId = p.id;
+            input.value = p.title || `Project ${p.id}`;
+            results.classList.add("hidden");
+            updateMoveCopyConfirmState();
+          });
+          results.appendChild(btn);
+        });
+        results.classList.remove("hidden");
+      }, 250);
+    });
+
+    input.addEventListener("keydown", e => {
+      if (e.key === "Escape") {
+        if (results) results.classList.add("hidden");
+      }
+    });
+  }
+
+  document.addEventListener("click", e => {
+    if (moveCopyPanelJustOpened) return;
+    if (!panel.classList.contains("hidden") && !panel.contains(e.target)) {
+      hideMoveCopyPanel();
+    }
+  });
+
+  confirmBtn?.addEventListener("click", () => executeMoveCopyPanel());
+  cancelBtn?.addEventListener("click", hideMoveCopyPanel);
+  closeBtn?.addEventListener("click", hideMoveCopyPanel);
+}
+
+async function moveSelectedDocs() {
+  showMoveCopyPanel("move");
+}
+
+async function copySelectedDocs() {
+  showMoveCopyPanel("copy");
+}
+
 function openDocEditor(docId) {
-  window.open(`/api/v2/documents/${docId}/editor-config`, "_blank");
+  window.open(`/doc-editor.html?id=${docId}`, "_blank");
 }
 
 function downloadDoc(docId, title) {
@@ -3016,6 +3781,9 @@ async function uploadDocsToCurrentScope(files) {
   for (const file of files) {
     const formData = new FormData();
     formData.append("file", file);
+    if ((isCompany || isPersonal) && docsState.currentFolderId) {
+      formData.append("folder_id", String(docsState.currentFolderId));
+    }
     try {
       await fetch(uploadEndpoint, { method: "POST", credentials: "same-origin", body: formData });
       ok++;
@@ -3037,6 +3805,7 @@ function bindDocumentsModal() {
     el.addEventListener("click", closeDocumentsModal);
   });
   $("#documents-modal-close")?.addEventListener("click", closeDocumentsModal);
+  $("#documents-modal-minimize")?.addEventListener("click", minimizeDocsModal);
   document.addEventListener("keydown", e => {
     if (e.key === "Escape" && !modal.classList.contains("hidden")) closeDocumentsModal();
   });
@@ -3047,14 +3816,31 @@ function bindDocumentsModal() {
       docsState.scope = btn.dataset.scope;
       docsState.currentProjectId = null;
       docsState.currentProjectTitle = null;
+      docsState.currentFolderId = null;
+      docsState.currentFolderPath = [];
+      docsState.folders = [];
       docsState.selected.clear();
       docsState.searchQuery = "";
       const searchInput = $("#documents-search-input");
       if (searchInput) searchInput.value = "";
       document.querySelectorAll(".documents-scope-btn").forEach(b => b.classList.toggle("active", b === btn));
+      updateDocsToolbarForScope();
       loadDocumentsList();
+      loadFolderTree();
     });
   });
+
+  // Sidebar toggle (like mail modal)
+  const sidebarToggle = $("#documents-sidebar-toggle");
+  const sidebar = $("#documents-sidebar");
+  if (sidebarToggle && sidebar) {
+    sidebarToggle.addEventListener("click", () => {
+      const collapsed = sidebar.classList.toggle("documents-sidebar-collapsed");
+      sidebarToggle.textContent = collapsed ? "▶" : "◀";
+      sidebarToggle.setAttribute("aria-label", collapsed ? "Show sidebar" : "Hide sidebar");
+      sidebarToggle.setAttribute("title", collapsed ? "Show sidebar" : "Hide sidebar");
+    });
+  }
 
   // Search
   const searchInput = $("#documents-search-input");
@@ -3069,15 +3855,70 @@ function bindDocumentsModal() {
     });
   }
 
-  // Toolbar actions
-  $("#documents-delete-btn")?.addEventListener("click", deleteSelectedDocs);
-  $("#documents-move-btn")?.addEventListener("click", moveSelectedDocs);
-  $("#documents-copy-btn")?.addEventListener("click", copySelectedDocs);
+  // Toolbar actions — dropdown
+  const actionsSelect = $("#documents-actions-select");
+  if (actionsSelect) {
+    actionsSelect.addEventListener("change", () => {
+      const val = actionsSelect.value;
+      if (val === "delete") deleteSelectedDocs();
+      else if (val === "move") moveSelectedDocs();
+      else if (val === "copy") copySelectedDocs();
+      actionsSelect.value = "";
+    });
+  }
+
+  // Sort button + custom menu
+  const sortBtn = $("#documents-sort-btn");
+  const sortMenu = $("#documents-sort-menu");
+  function updateSortMenu() {
+    if (!sortMenu) return;
+    sortMenu.querySelectorAll(".documents-sort-option").forEach(btn => {
+      const selected = btn.dataset.sort === docsState.sort;
+      btn.classList.toggle("selected", selected);
+      btn.setAttribute("aria-checked", String(selected));
+    });
+  }
+  function toggleSortMenu(show) {
+    if (!sortMenu) return;
+    if (typeof show === "boolean") {
+      sortMenu.classList.toggle("hidden", !show);
+    } else {
+      sortMenu.classList.toggle("hidden");
+    }
+    updateSortMenu();
+  }
+  if (sortBtn && sortMenu) {
+    updateSortMenu();
+    sortBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleSortMenu();
+    });
+    sortMenu.querySelectorAll(".documents-sort-option").forEach(btn => {
+      btn.addEventListener("click", () => {
+        docsState.sort = btn.dataset.sort;
+        renderDocumentsList();
+        updateSortMenu();
+        toggleSortMenu(false);
+      });
+    });
+    document.addEventListener("click", e => {
+      if (!sortMenu.classList.contains("hidden") && !sortBtn.contains(e.target) && !sortMenu.contains(e.target)) {
+        toggleSortMenu(false);
+      }
+    });
+  }
   $("#documents-clear-selection-btn")?.addEventListener("click", () => {
     docsState.selected.clear();
+    docsState.renamingId = null;
     document.querySelectorAll(".doc-cb").forEach(cb => { cb.checked = false; });
     document.querySelectorAll(".documents-list-row").forEach(row => row.classList.remove("selected"));
+    renderDocumentsList();
     updateDocsToolbar();
+  });
+  $("#documents-rename-btn")?.addEventListener("click", () => {
+    if (docsState.selected.size !== 1) return;
+    const id = Array.from(docsState.selected)[0];
+    startRenameDoc(id);
   });
 
   // Upload
@@ -3111,18 +3952,48 @@ function bindDocumentsModal() {
     });
   }
 
+  // Move/Copy popup panel
+  bindMoveCopyPanel();
+
   // Right-click context menu
   const ctxMenu = $("#documents-ctx");
   let ctxDocId = null;
   let ctxDocTitle = null;
+  let ctxFolderId = null;
 
   function showDocCtxMenu(e, docId, title) {
     e.preventDefault();
     ctxDocId = docId;
     ctxDocTitle = title;
-    ctxMenu.querySelectorAll(".ctx-menu-item").forEach(item => {
-      item.dataset.docId = String(docId);
+    ctxFolderId = null;
+    // Hide folder items, show doc items
+    ctxMenu.querySelectorAll(".ctx-folder-item").forEach(i => i.classList.add("hidden"));
+    ctxMenu.querySelectorAll("[data-folder-divider]").forEach(d => d.classList.add("hidden"));
+    ctxMenu.querySelectorAll(".ctx-menu-item[data-doc-ctx]").forEach(item => {
+      if (!item.classList.contains("ctx-folder-item")) {
+        item.classList.remove("hidden");
+        item.dataset.docId = String(docId);
+      }
     });
+    positionCtxMenu(e);
+  }
+
+  function showFolderCtxMenu(e, folderId, folderName) {
+    e.preventDefault();
+    ctxFolderId = folderId;
+    ctxDocId = null;
+    ctxDocTitle = null;
+    // Hide doc items, show folder items
+    ctxMenu.querySelectorAll(".ctx-menu-item[data-doc-ctx]:not(.ctx-folder-item)").forEach(i => i.classList.add("hidden"));
+    ctxMenu.querySelectorAll("[data-folder-divider]").forEach(d => d.classList.remove("hidden"));
+    ctxMenu.querySelectorAll(".ctx-folder-item").forEach(item => {
+      item.classList.remove("hidden");
+      item.dataset.folderId = String(folderId);
+    });
+    positionCtxMenu(e);
+  }
+
+  function positionCtxMenu(e) {
     const rect = modal.getBoundingClientRect();
     let x = e.clientX - rect.left + modal.scrollLeft;
     let y = e.clientY - rect.top + modal.scrollTop;
@@ -3138,9 +4009,18 @@ function bindDocumentsModal() {
     ctxMenu.classList.add("hidden");
     ctxDocId = null;
     ctxDocTitle = null;
+    ctxFolderId = null;
   }
 
   document.getElementById("documents-list")?.addEventListener("contextmenu", e => {
+    const folderRow = e.target.closest(".documents-folder-row");
+    if (folderRow) {
+      e.preventDefault();
+      const id = Number(folderRow.dataset.folderId);
+      const name = folderRow.dataset.folderName || "";
+      showFolderCtxMenu(e, id, name);
+      return;
+    }
     const row = e.target.closest(".documents-list-row");
     if (!row) return;
     e.preventDefault();
@@ -3153,6 +4033,20 @@ function bindDocumentsModal() {
     const btn = e.target.closest(".ctx-menu-item");
     if (!btn) return;
     const action = btn.dataset.docCtx;
+    // Folder actions
+    if (action === "rename-folder") {
+      const fid = Number(btn.dataset.folderId);
+      hideDocCtxMenu();
+      renameFolder(fid);
+      return;
+    }
+    if (action === "delete-folder") {
+      const fid = Number(btn.dataset.folderId);
+      hideDocCtxMenu();
+      deleteFolder(fid);
+      return;
+    }
+    // Document actions
     const docId = ctxDocId;
     hideDocCtxMenu();
     if (!docId) return;
@@ -3161,61 +4055,27 @@ function bindDocumentsModal() {
     } else if (action === "download") {
       downloadDoc(docId, ctxDocTitle);
     } else if (action === "rename") {
-      const newTitle = prompt("New name:", ctxDocTitle || "");
-      if (!newTitle || newTitle === ctxDocTitle) return;
-      try {
-        await api(`/api/v2/documents/${docId}`, {
-          method: "PATCH",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({ title: newTitle }),
-        });
-        showToast("Document renamed");
-        loadDocumentsList();
-      } catch (err) {
-        showToast(err.message, true);
-      }
+      startRenameDoc(docId);
     } else if (action === "move") {
-      const projectId = prompt("Move to project ID:");
-      if (!projectId) return;
-      const pid = Number(projectId);
-      if (!pid || isNaN(pid)) { showToast("Invalid project ID", true); return; }
-      try {
-        await api(`/api/v2/documents/${docId}`, {
-          method: "PATCH",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({ opportunity_id: pid }),
-        });
-        showToast("Document moved");
-        loadDocumentsList();
-      } catch (err) {
-        showToast(err.message, true);
-      }
+      docsState.selected.clear();
+      docsState.selected.add(docId);
+      renderDocumentsList();
+      updateDocsToolbar();
+      showMoveCopyPanel("move");
     } else if (action === "copy") {
-      const dest = prompt("Copy to: (1) Personal docs, (2) Company docs, or enter a project ID");
-      if (!dest) return;
-      let body;
-      if (dest === "1") {
-        body = {};
-      } else if (dest === "2") {
-        body = { company_scope: true };
-      } else {
-        const pid = Number(dest);
-        if (!pid || isNaN(pid)) { showToast("Invalid project ID", true); return; }
-        body = { opportunity_id: pid };
-      }
-      try {
-        await api(`/api/v2/documents/${docId}/copy`, {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify(body),
-        });
-        showToast("Document copied");
-        loadDocumentsList();
-      } catch (err) {
-        showToast(err.message, true);
-      }
+      docsState.selected.clear();
+      docsState.selected.add(docId);
+      renderDocumentsList();
+      updateDocsToolbar();
+      showMoveCopyPanel("copy");
     } else if (action === "delete") {
-      if (!confirm(`Delete "${ctxDocTitle || "this document"}"? This cannot be undone.`)) return;
+      const ok = await confirmDialog({
+        title: "Delete document",
+        message: `Delete "${ctxDocTitle || "this document"}"? This cannot be undone.`,
+        confirmLabel: "Delete",
+        danger: true,
+      });
+      if (!ok) return;
       try {
         await api(`/api/v2/documents/batch-delete`, {
           method: "POST",
@@ -3239,6 +4099,32 @@ function bindDocumentsModal() {
   document.addEventListener("keydown", e => {
     if (e.key === "Escape" && !ctxMenu.classList.contains("hidden")) hideDocCtxMenu();
   });
+
+  // New button + menu
+  const newBtn = $("#documents-new-btn");
+  const newMenu = $("#documents-new-menu");
+  if (newBtn && newMenu) {
+    newBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      newMenu.classList.toggle("hidden");
+    });
+    newMenu.querySelectorAll(".documents-new-option").forEach(opt => {
+      opt.addEventListener("click", () => {
+        newMenu.classList.add("hidden");
+        const action = opt.dataset.new;
+        if (action === "word" || action === "excel") {
+          createBlankDocument(action);
+        } else if (action === "folder") {
+          createFolder();
+        }
+      });
+    });
+    document.addEventListener("click", (e) => {
+      if (!newMenu.classList.contains("hidden") && !newBtn.contains(e.target) && !newMenu.contains(e.target)) {
+        newMenu.classList.add("hidden");
+      }
+    });
+  }
 }
 
 function bindCalendarEventModal() {
@@ -6790,12 +7676,38 @@ function renderCard(opp, group, showStagePill) {
   }
 
   const dueLabel = formatOppDueLabel(opp);
-  if (dueLabel) {
+  const createdRaw = opp.createOn ?? opp.created ?? opp.Created;
+  let createdDate = null;
+  if (createdRaw) {
+    createdDate = parseCrmDateOnly(createdRaw) || new Date(createdRaw);
+    if (createdDate && Number.isNaN(createdDate.getTime())) createdDate = null;
+  }
+  if (dueLabel || createdDate) {
     const due = document.createElement("p");
     due.className = "card-due" + (isRedOpportunity(opp) ? " card-due--overdue" : "");
-    due.textContent = `Due ${dueLabel}`;
+    if (dueLabel) {
+      const dueSpan = document.createElement("span");
+      dueSpan.textContent = `Due ${dueLabel}`;
+      due.appendChild(dueSpan);
+    }
+    if (createdDate) {
+      const createdSpan = document.createElement("span");
+      createdSpan.className = "card-created";
+      createdSpan.textContent = `Created: ${createdDate.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+      due.appendChild(createdSpan);
+    }
     card.appendChild(due);
   }
+
+  // Discrete tooltip — neutral summary on hover (not red alarm styling)
+  const tooltipParts = [];
+  if (opp.title || opp.Title) tooltipParts.push(opp.title || opp.Title);
+  const tooltipContact = getOpportunityContactLabel(opp);
+  if (tooltipContact) tooltipParts.push(tooltipContact);
+  const tooltipMoney = formatMoney(opp);
+  if (tooltipMoney) tooltipParts.push(tooltipMoney);
+  if (dueLabel) tooltipParts.push(`Due: ${dueLabel}`);
+  if (tooltipParts.length) card.title = tooltipParts.join(" \u2014 ");
 
   // Bookmark ribbon button (bottom-right)
   const oppId = opp.id ?? opp.ID;
@@ -8439,7 +9351,7 @@ async function loadNotificationFeed({ force = false } = {}) {
         let msg = (err && err.message) || "";
         const st = err && err.status ? Number(err.status) : 0;
         if (!msg || /failed to fetch|typeerror|networkerror|load failed/i.test(msg)) {
-          msg = `Failed to reach CRM${st ? ` (HTTP ${st})` : ""}. Check your connection or try again.`;
+          msg = `Failed to reach server${st ? ` (HTTP ${st})` : ""}. Check your connection or try again.`;
         } else if (st && !/HTTP \d/.test(msg)) {
           msg += ` (HTTP ${st})`;
         }
@@ -13846,8 +14758,18 @@ function attachMailModalListeners() {
 
   // close
   modal.querySelectorAll("[data-mail-inbox-dismiss]").forEach(el => {
-    el.addEventListener("click", () => modal.classList.add("hidden"));
+    el.addEventListener("click", () => {
+      modal.classList.add("hidden");
+      // Clear parked state
+      minimizedEmailState = null;
+      try { localStorage.removeItem(EMAIL_MINIMIZED_STORAGE_KEY); } catch {}
+      const trigger = $("#email-trigger");
+      if (trigger) trigger.classList.add("trigger-hidden");
+    });
   });
+
+  // minimize
+  $("#mail-inbox-minimize")?.addEventListener("click", minimizeEmailModal);
 
   // search
   const searchIn = $("#mail-search-input");
@@ -14444,6 +15366,8 @@ let oppPreviewContext = { oppId: null, opp: null, group: null };
 const MAX_SEARCH_PREVIEW_TABS = 10;
 let searchPopupPreviewTabs = new Map(); // oppId -> { title, data, container, button }
 let minimizedSearchTabs = []; // [{ oppId: number, title: string }] — parked tabs, persisted like bookmarks
+let searchMinimized = false; // true when the search popup itself is minimized (even with no parked tabs)
+const SEARCH_MINIMIZED_FLAG_KEY = "oo_search_minimized_flag_v1";
 const SEARCH_MINIMIZED_STORAGE_KEY = "oo_board_search_minimized_v1";
 let searchPopupCurrentOpps = []; // latest unfiltered results (used for stage/owner filters)
 let searchPopupCurrentTagLabel = null; // current tag header label
@@ -15062,7 +15986,7 @@ function extractHistoryAttachments(ev) {
       raw.Link;
     // v2 attachments from server have filename + filePath; build local editor URL
     if (!url && id && raw.filename) {
-      url = `/api/v2/documents/${id}/editor-config`;
+      url = `/doc-editor.html?id=${id}`;
     }
     if (!url && id) url = portalFileDownloadUrl(id);
     if (!url && !title) return;
@@ -15528,7 +16452,7 @@ function renderHistoryAttachmentsAside(parent, attachments) {
     const filename = file.filename || file.title || file.name || "Attachment";
     const a = document.createElement("a");
     a.className = "opp-preview-attachment-link";
-    a.href = docId ? `/api/v2/documents/${docId}/editor-config` : (file.url || "#");
+    a.href = docId ? `/doc-editor.html?id=${docId}` : (file.url || "#");
     a.target = "_blank";
     a.rel = "noopener noreferrer";
     a.title = filename;
@@ -15773,7 +16697,7 @@ function resolveStageTitle(opp) {
   return (opp.stage?.title || opp.stage?.Title || stage?.title || stage?.Title || sid || "").trim();
 }
 
-function buildOpportunityPreviewStandardFields(opp, tags) {
+function buildOpportunityPreviewStandardFields(opp) {
   const rows = [];
   const push = (label, value) => {
     const v = value == null ? "" : String(value).trim();
@@ -15781,15 +16705,14 @@ function buildOpportunityPreviewStandardFields(opp, tags) {
     rows.push({ label, value: v });
   };
 
-  push("Stage", resolveStageTitle(opp));
+  const stageTitle = resolveStageTitle(opp);
+  if (stageTitle) rows.push({ label: "Stage", value: stageTitle, _isStage: true, _stageId: resolveOppStageId(opp) });
   push("Contact", getOpportunityContactLabel(opp));
   push("Responsible", formatResponsibleLabel(opp));
 
   push("Value", formatMoney(opp));
-  push("Expected close", formatPreviewDueDate(opportunityDueDateRaw(opp)));
+  push("Follow-up Due Date", formatPreviewDueDate(opportunityDueDateRaw(opp)));
   // Actual close hidden per user request (showActualClose field removed from preview)
-  push("Created", formatPreviewDateTime(opp.createOn ?? opp.created ?? opp.Created));
-  push("Tags", tags.length ? tags.join(", ") : "");
   if (opp.isPrivate ?? opp.IsPrivate) push("Private", "Yes");
   push("Bid type", opp.bidType ?? opp.BidType);
   return rows;
@@ -15809,7 +16732,8 @@ function buildOpportunityPreviewUserFields(opp, customFieldValues) {
   for (const def of defs) {
     const fieldId = customFieldDefinitionId(def);
     if (fieldId == null) continue;
-    if (customFieldTypeCode(def) === 4) continue;
+    const typeCode = customFieldTypeCode(def);
+    if (typeCode === 4) continue;
     const key = String(fieldId);
     seen.add(key);
     const item = valuesByFieldId.get(key);
@@ -15817,7 +16741,9 @@ function buildOpportunityPreviewUserFields(opp, customFieldValues) {
     const label = customFieldLabel(def) || `Field ${fieldId}`;
     const value = formatCustomFieldValueForDisplay(def, raw);
     if (!value || value === "—") continue;
-    rows.push({ label, value });
+    const row = { label, value };
+    if (typeCode === 3) row._isCheckbox = true;
+    rows.push(row);
   }
 
   for (const item of customFieldValues) {
@@ -15826,11 +16752,14 @@ function buildOpportunityPreviewUserFields(opp, customFieldValues) {
     const key = String(fieldId);
     if (seen.has(key)) continue;
     const def = state.customFieldById.get(key);
-    if (def && customFieldTypeCode(def) === 4) continue;
+    const typeCode = def ? customFieldTypeCode(def) : null;
+    if (typeCode === 4) continue;
     const label = customFieldLabel(item) || customFieldLabel(def) || `Field ${fieldId}`;
     const value = formatCustomFieldValueForDisplay(def, readSavedCustomFieldValue(item));
     if (!value || value === "—") continue;
-    rows.push({ label, value });
+    const row = { label, value };
+    if (typeCode === 3) row._isCheckbox = true;
+    rows.push(row);
   }
 
   return rows;
@@ -15931,16 +16860,6 @@ function renderPreviewFieldGrid(parent, rows) {
       tag.className = "field-value-tag";
       tag.textContent = value;
       dd.appendChild(tag);
-    } else if (label === "Tags") {
-      const tags = value.split(",").map((t) => t.trim()).filter(Boolean);
-      const AMBER_TAGS = new Set(["High Priority", "Needs Reconciliation", "Ready for carrier invoice", "Needs Rebuttal"]);
-      for (const tagText of tags) {
-        const tag = document.createElement("span");
-        tag.className = "field-value-tag" + (AMBER_TAGS.has(tagText) ? " tag-amber" : "");
-        tag.textContent = tagText;
-        dd.appendChild(tag);
-        dd.appendChild(document.createTextNode(" "));
-      }
     } else {
       dd.textContent = value;
     }
@@ -16459,6 +17378,11 @@ function bindSearchPopupBtn() {
 async function openSearchPopupModal() {
   const modal = $("#search-popup-modal");
   if (!modal) return;
+  // Clear minimized flag whenever the popup is opened
+  searchMinimized = false;
+  try { localStorage.removeItem(SEARCH_MINIMIZED_FLAG_KEY); } catch {}
+  const trigger = $("#search-trigger");
+  if (trigger) trigger.classList.add("trigger-hidden");
   // If modal is closed, no live tabs exist, and we have parked tabs — restore them
   if (modal.classList.contains("hidden") && searchPopupPreviewTabs.size === 0 && hasMinimizedSearchTabs()) {
     restoreMinimizedSearchTabs();
@@ -16533,6 +17457,8 @@ function hasMinimizedSearchTabs() {
 function clearMinimizedSearchTabs() {
   minimizedSearchTabs = [];
   saveMinimizedSearchTabsToStorage();
+  searchMinimized = false;
+  try { localStorage.removeItem(SEARCH_MINIMIZED_FLAG_KEY); } catch {}
   const trigger = $("#search-trigger");
   if (trigger) trigger.classList.add("trigger-hidden");
 }
@@ -16556,6 +17482,8 @@ function minimizeSearchPopup() {
 
   // Save and hide modal
   saveMinimizedSearchTabsToStorage();
+  searchMinimized = true;
+  try { localStorage.setItem(SEARCH_MINIMIZED_FLAG_KEY, "1"); } catch {}
   modal.classList.add("hidden");
 
   // Show search trigger unless sidebar is open
@@ -16571,10 +17499,12 @@ function minimizeSearchPopup() {
 }
 
 function restoreMinimizedSearchTabs() {
-  if (!hasMinimizedSearchTabs()) return;
+  if (!hasMinimizedSearchTabs() && !searchMinimized) return;
   const toRestore = [...minimizedSearchTabs];
   minimizedSearchTabs = [];
   saveMinimizedSearchTabsToStorage();
+  searchMinimized = false;
+  try { localStorage.removeItem(SEARCH_MINIMIZED_FLAG_KEY); } catch {}
 
   // Recreate each preview tab
   for (const t of toRestore) {
@@ -16584,6 +17514,120 @@ function restoreMinimizedSearchTabs() {
   }
   // Land on search tab
   activateSearchPopupTab("search");
+}
+
+// ── Email modal minimize/restore ──────────────────────────────────────────────
+let minimizedEmailState = null;
+const EMAIL_MINIMIZED_STORAGE_KEY = "oo_email_minimized_v1";
+
+function minimizeEmailModal() {
+  const modal = $("#mail-inbox-modal");
+  if (!modal) return;
+  const scrollEl = $("#mail-list-container");
+  const selectedEl = document.querySelector(".mail-list-row.selected, .mail-row.selected");
+  minimizedEmailState = {
+    scroll: scrollEl ? scrollEl.scrollTop : 0,
+    selectedId: selectedEl ? selectedEl.dataset.id || selectedEl.dataset.convId || null : null,
+  };
+  try { localStorage.setItem(EMAIL_MINIMIZED_STORAGE_KEY, JSON.stringify(minimizedEmailState)); } catch {}
+  modal.classList.add("hidden");
+  const trigger = $("#email-trigger");
+  if (trigger) {
+    const sidebar = $("#bookmark-sidebar");
+    if (sidebar && !sidebar.classList.contains("sidebar-hidden")) {
+      trigger.classList.add("trigger-hidden");
+    } else {
+      trigger.classList.remove("trigger-hidden");
+    }
+  }
+}
+
+function restoreEmailModal() {
+  const state = minimizedEmailState;
+  minimizedEmailState = null;
+  try { localStorage.removeItem(EMAIL_MINIMIZED_STORAGE_KEY); } catch {}
+  const trigger = $("#email-trigger");
+  if (trigger) trigger.classList.add("trigger-hidden");
+  openMailInboxModal().then(() => {
+    if (!state) return;
+    const scrollEl = $("#mail-list-container");
+    if (scrollEl && state.scroll) scrollEl.scrollTop = state.scroll;
+    if (state.selectedId) {
+      const row = document.querySelector(`.mail-list-row[data-id="${state.selectedId}"], .mail-row[data-id="${state.selectedId}"]`);
+      if (row) row.click();
+    }
+  }).catch(() => {});
+}
+
+// ── Documents modal minimize/restore ─────────────────────────────────────────
+let minimizedDocsState = null;
+const DOCS_MINIMIZED_STORAGE_KEY = "oo_docs_minimized_v1";
+
+function minimizeDocsModal() {
+  const modal = $("#documents-modal");
+  if (!modal) return;
+  minimizedDocsState = {
+    scope: docsState.scope,
+    searchQuery: docsState.searchQuery,
+    currentProjectId: docsState.currentProjectId,
+    currentProjectTitle: docsState.currentProjectTitle,
+  };
+  try { localStorage.setItem(DOCS_MINIMIZED_STORAGE_KEY, JSON.stringify(minimizedDocsState)); } catch {}
+  modal.classList.add("hidden");
+  const trigger = $("#documents-trigger");
+  if (trigger) {
+    const sidebar = $("#bookmark-sidebar");
+    if (sidebar && !sidebar.classList.contains("sidebar-hidden")) {
+      trigger.classList.add("trigger-hidden");
+    } else {
+      trigger.classList.remove("trigger-hidden");
+    }
+  }
+}
+
+function restoreDocsModal() {
+  const state = minimizedDocsState;
+  minimizedDocsState = null;
+  try { localStorage.removeItem(DOCS_MINIMIZED_STORAGE_KEY); } catch {}
+  const trigger = $("#documents-trigger");
+  if (trigger) trigger.classList.add("trigger-hidden");
+  // Restore state before opening
+  if (state) {
+    docsState.scope = state.scope || "projects";
+    docsState.searchQuery = state.searchQuery || "";
+    docsState.currentProjectId = state.currentProjectId || null;
+    docsState.currentProjectTitle = state.currentProjectTitle || null;
+    const searchInput = $("#documents-search-input");
+    if (searchInput) searchInput.value = state.searchQuery || "";
+    document.querySelectorAll(".documents-scope-btn").forEach(b => b.classList.toggle("active", b.dataset.scope === docsState.scope));
+  }
+  openDocumentsModal();
+}
+
+// ── Sidebar trigger coordination ─────────────────────────────────────────────
+function hideAllModalTriggers() {
+  ["search-trigger", "email-trigger", "documents-trigger"].forEach(id => {
+    const el = $(`#${id}`);
+    if (el) el.classList.add("trigger-hidden");
+  });
+}
+
+function showActiveModalTriggers() {
+  const sidebar = $("#bookmark-sidebar");
+  const sidebarOpen = sidebar && !sidebar.classList.contains("sidebar-hidden");
+  if (sidebarOpen) return;
+  if (searchMinimized || hasMinimizedSearchTabs()) {
+    const st = $("#search-trigger");
+    if (st) st.classList.remove("trigger-hidden");
+  }
+  if (minimizedEmailState) {
+    const et = $("#email-trigger");
+    if (et) et.classList.remove("trigger-hidden");
+  }
+  if (minimizedDocsState) {
+    const dt = $("#documents-trigger");
+    if (dt) dt.classList.remove("trigger-hidden");
+  }
 }
 
 function showSearchPopupError(msg) {
@@ -16713,14 +17757,61 @@ function initSearchTrigger() {
 
   trigger.addEventListener("click", () => {
     trigger.classList.add("trigger-hidden");
+    searchMinimized = false;
+    try { localStorage.removeItem(SEARCH_MINIMIZED_FLAG_KEY); } catch {}
     openSearchPopupModal();
   });
 
-  // Initial visibility: show if parked tabs exist and sidebar is hidden
+  // Initial visibility: show if search was minimized and sidebar is hidden
+  try {
+    searchMinimized = localStorage.getItem(SEARCH_MINIMIZED_FLAG_KEY) === "1";
+  } catch { searchMinimized = false; }
   const sidebar = $("#bookmark-sidebar");
-  if (hasMinimizedSearchTabs() && (!sidebar || sidebar.classList.contains("sidebar-hidden"))) {
+  if ((searchMinimized || hasMinimizedSearchTabs()) && (!sidebar || sidebar.classList.contains("sidebar-hidden"))) {
     trigger.classList.remove("trigger-hidden");
   }
+}
+
+function initEmailTrigger() {
+  const trigger = $("#email-trigger");
+  if (!trigger || trigger.dataset.bound) return;
+  trigger.dataset.bound = "1";
+
+  trigger.addEventListener("click", () => {
+    trigger.classList.add("trigger-hidden");
+    restoreEmailModal();
+  });
+
+  // Initial visibility: show if parked state exists and sidebar is hidden
+  const sidebar = $("#bookmark-sidebar");
+  const stored = tryParseJSON(localStorage.getItem(EMAIL_MINIMIZED_STORAGE_KEY));
+  if (stored && (!sidebar || sidebar.classList.contains("sidebar-hidden"))) {
+    minimizedEmailState = stored;
+    trigger.classList.remove("trigger-hidden");
+  }
+}
+
+function initDocumentsTrigger() {
+  const trigger = $("#documents-trigger");
+  if (!trigger || trigger.dataset.bound) return;
+  trigger.dataset.bound = "1";
+
+  trigger.addEventListener("click", () => {
+    trigger.classList.add("trigger-hidden");
+    restoreDocsModal();
+  });
+
+  // Initial visibility: show if parked state exists and sidebar is hidden
+  const sidebar = $("#bookmark-sidebar");
+  const stored = tryParseJSON(localStorage.getItem(DOCS_MINIMIZED_STORAGE_KEY));
+  if (stored && (!sidebar || sidebar.classList.contains("sidebar-hidden"))) {
+    minimizedDocsState = stored;
+    trigger.classList.remove("trigger-hidden");
+  }
+}
+
+function tryParseJSON(str) {
+  try { return JSON.parse(str); } catch { return null; }
 }
 
 async function performSearchPopupQuery() {
@@ -17357,9 +18448,8 @@ function initBookmarkSidebar() {
     trigger.addEventListener("click", () => {
       sidebar.classList.remove("sidebar-hidden");
       trigger.classList.add("trigger-hidden");
-      // Hide search trigger when sidebar opens
-      const searchTrigger = $("#search-trigger");
-      if (searchTrigger) searchTrigger.classList.add("trigger-hidden");
+      // Hide all modal triggers when sidebar opens
+      hideAllModalTriggers();
     });
   }
 
@@ -17456,15 +18546,8 @@ function hideBookmarkSidebar() {
     sidebar.classList.add("sidebar-hidden");
   }
   if (trigger) trigger.classList.remove("trigger-hidden");
-  // Show search trigger if parked tabs exist and sidebar is now hidden
-  const searchTrigger = $("#search-trigger");
-  if (searchTrigger) {
-    if (hasMinimizedSearchTabs()) {
-      searchTrigger.classList.remove("trigger-hidden");
-    } else {
-      searchTrigger.classList.add("trigger-hidden");
-    }
-  }
+  // Show active modal triggers when sidebar closes
+  showActiveModalTriggers();
   updateBookmarkBodyClass();
   updateMobileBookmarkPreview();
 }
@@ -17942,7 +19025,7 @@ async function openEventLogModal() {
 }
 
 function closeEventLogModal() {
-  $("#event-log-modal")?.classList.add("hidden");
+  $("#admin-console-modal")?.classList.add("hidden");
 }
 
 function bindEventLogModal() {
@@ -17991,10 +19074,13 @@ function bindEventLogModal() {
     }
   });
 
-  modal.querySelector("[data-event-log-dismiss]")?.addEventListener("click", closeEventLogModal);
-  modal.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeEventLogModal();
-  });
+  const modalEl = $("#admin-console-modal");
+  if (modalEl) {
+    modalEl.querySelector("[data-event-log-dismiss]")?.addEventListener("click", closeEventLogModal);
+    modalEl.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeEventLogModal();
+    });
+  }
 }
 
 // ── Customer Bot Modal ──
@@ -18098,6 +19184,9 @@ function switchAdminTab(tab) {
   if (tab === "branding") {
     populateBrandingForm();
   }
+  if (tab === "infra") {
+    populateAdminInfra();
+  }
 }
 
 async function populateAdminOverview() {
@@ -18105,6 +19194,94 @@ async function populateAdminOverview() {
   if (!el) return;
   const me = state.currentUser || {};
   el.innerHTML = `<strong>You:</strong> ${escapeHtml(me.displayName || me.display_name || state.currentUserName || "Admin")} (${escapeHtml(me.email || state.currentUserEmail || "")}) — isAdmin: ${state.currentUserIsAdmin ? "yes" : "no"}`;
+}
+
+async function populateAdminInfra() {
+  // Server status
+  const serverEl = $("#infra-server-status");
+  if (serverEl) {
+    try {
+      const health = await api("/api/health");
+      serverEl.innerHTML = `<span class="${health.dbReachable ? 'status-ok' : 'status-fail'}">${health.dbReachable ? '● Database reachable' : '● Database unreachable'}</span>`;
+    } catch (e) {
+      serverEl.innerHTML = `<span class="status-fail">● Server unreachable: ${escapeHtml(e.message)}</span>`;
+    }
+  }
+  // Docker status
+  const dockerEl = $("#infra-docker-status");
+  if (dockerEl) {
+    try {
+      const info = await api("/api/v2/admin/docker-health");
+      if (!info.inDocker) {
+        dockerEl.innerHTML = '<span class="status-ok">Not running in Docker (standalone)</span>';
+      } else {
+        const statusClass = info.status === 'running' ? 'status-ok' : 'status-fail';
+        dockerEl.innerHTML = `<span class="${statusClass}">● ${escapeHtml(info.containerName || 'container')} — ${escapeHtml(info.status)}</span>` +
+          (info.restartCount != null ? `<br>Restarts: ${info.restartCount} (max 5 on failure)` : '');
+      }
+    } catch (e) {
+      dockerEl.innerHTML = `<span class="status-fail">Could not check Docker: ${escapeHtml(e.message)}</span>`;
+    }
+  }
+  // Infra log
+  await refreshInfraLog();
+  // Bind buttons
+  const refreshBtn = $("#infra-log-refresh");
+  if (refreshBtn && !refreshBtn.dataset.bound) {
+    refreshBtn.dataset.bound = "1";
+    refreshBtn.addEventListener("click", refreshInfraLog);
+  }
+  const restartServerBtn = $("#infra-restart-server");
+  if (restartServerBtn && !restartServerBtn.dataset.bound) {
+    restartServerBtn.dataset.bound = "1";
+    restartServerBtn.addEventListener("click", async () => {
+      if (!confirm("Restart the server process? The page will reload automatically.")) return;
+      const statusEl = $("#infra-restart-status");
+      try {
+        await api("/api/v2/admin/restart-server", { method: "POST" });
+        if (statusEl) { statusEl.textContent = "Restarting…"; statusEl.className = "event-log-health-status ok"; }
+        setTimeout(() => location.reload(), 3000);
+      } catch (e) {
+        if (statusEl) { statusEl.textContent = e.message; statusEl.className = "event-log-health-status fail"; }
+      }
+    });
+  }
+  const restartContainerBtn = $("#infra-restart-container");
+  if (restartContainerBtn && !restartContainerBtn.dataset.bound) {
+    restartContainerBtn.dataset.bound = "1";
+    restartContainerBtn.addEventListener("click", async () => {
+      if (!confirm("Restart the Docker container? This will interrupt all active connections.")) return;
+      const statusEl = $("#infra-restart-status");
+      try {
+        await api("/api/v2/admin/restart-container", { method: "POST" });
+        if (statusEl) { statusEl.textContent = "Container restarting…"; statusEl.className = "event-log-health-status ok"; }
+        setTimeout(() => location.reload(), 5000);
+      } catch (e) {
+        if (statusEl) { statusEl.textContent = e.message; statusEl.className = "event-log-health-status fail"; }
+      }
+    });
+  }
+}
+
+async function refreshInfraLog() {
+  const listEl = $("#infra-log-list");
+  const countEl = $("#infra-log-count");
+  if (!listEl) return;
+  try {
+    const data = await api("/api/v2/admin/infra-log");
+    const events = data.events || [];
+    if (countEl) countEl.textContent = `${events.length} events · uptime ${Math.round(data.uptime || 0)}s`;
+    if (!events.length) {
+      listEl.innerHTML = '<p class="event-log-empty">No infrastructure events logged.</p>';
+      return;
+    }
+    listEl.innerHTML = events.slice().reverse().map(e => {
+      const cls = e.level === 'error' ? 'fail' : e.level === 'warn' ? '' : '';
+      return `<div class="event-log-entry ${cls}"><span class="event-log-entry-icon">${e.level === 'error' ? '⚠' : e.level === 'warn' ? '⚡' : '●'}</span><span class="event-log-entry-body"><span class="event-log-entry-msg">${escapeHtml(e.msg)}</span></span><span class="event-log-entry-time">${escapeHtml(e.ts ? new Date(e.ts).toLocaleTimeString() : '')}</span></div>`;
+    }).join("");
+  } catch (e) {
+    listEl.innerHTML = `<p class="event-log-empty">Failed to load infra log: ${escapeHtml(e.message)}</p>`;
+  }
 }
 
 async function populateAdminUsersList() {
@@ -18432,7 +19609,6 @@ async function handleSetNickname(uid, nickname) {
     return true;
   } catch (err) {
     showToast(err.message, true);
-    return false;
   }
 }
 
@@ -18890,9 +20066,12 @@ function renderOpportunityPreviewContent(container, data) {
   container.innerHTML = "";
 
   const { opp, customFieldValues, history, tags, documents } = data;
-  const standardRows = buildOpportunityPreviewStandardFields(opp, tags);
-  const userRows = buildOpportunityPreviewUserFields(opp, customFieldValues);
+  const standardRows = buildOpportunityPreviewStandardFields(opp);
+  const allUserRows = buildOpportunityPreviewUserFields(opp, customFieldValues);
+  const userRows = allUserRows.filter((r) => !r._isCheckbox);
+  const checklistRows = allUserRows.filter((r) => r._isCheckbox);
   const description = String(opp.description ?? opp.Description ?? "").trim();
+  const oppId = opp.id ?? opp.ID;
 
   // Tabs at top
   const tabs = document.createElement("div");
@@ -18916,10 +20095,7 @@ function renderOpportunityPreviewContent(container, data) {
   detailsContent.className = "opp-preview-tab-content";
   detailsContent.dataset.tabContent = "details";
 
-  appendPreviewSection(detailsContent, "Deal fields", (section) => {
-    renderPreviewFieldGrid(section, standardRows);
-  });
-
+  // 1. Description (at top per 2I spec)
   appendPreviewSection(detailsContent, "Description", (section) => {
     if (!description) {
       const p = document.createElement("p");
@@ -18934,8 +20110,163 @@ function renderOpportunityPreviewContent(container, data) {
     section.appendChild(p);
   });
 
-  appendPreviewSection(detailsContent, "User fields", (section) => {
-    renderPreviewFieldGrid(section, userRows);
+  // 2. Project Fields — merged standard + user fields, Stage as dropdown
+  appendPreviewSection(detailsContent, "Project fields", (section) => {
+    const allRows = [...standardRows, ...userRows];
+    if (!allRows.length) {
+      const p = document.createElement("p");
+      p.className = "opp-preview-empty";
+      p.textContent = "None";
+      section.appendChild(p);
+      return;
+    }
+    const dl = document.createElement("dl");
+    dl.className = "opp-preview-fields";
+    for (const row of allRows) {
+      const field = document.createElement("div");
+      field.className = "opp-preview-field";
+      const dt = document.createElement("dt");
+      dt.textContent = row.label;
+      const dd = document.createElement("dd");
+
+      if (row._isStage) {
+        // Stage dropdown
+        const select = document.createElement("select");
+        select.className = "opp-preview-stage-select";
+        const currentStageId = String(row._stageId || "");
+        for (const stage of state.stages) {
+          const sid = String(stage.id ?? stage.ID ?? "");
+          const opt = document.createElement("option");
+          opt.value = sid;
+          opt.textContent = stage.title || stage.Title || "";
+          if (sid === currentStageId) opt.selected = true;
+          select.appendChild(opt);
+        }
+        select.addEventListener("change", async () => {
+          const newStageId = select.value;
+          try {
+            await api(`/api/v2/projects/${oppId}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ stageId: newStageId }),
+            });
+            const stageName = state.stages.find((s) => String(s.id ?? s.ID) === newStageId)?.title || "";
+            showToast(`Stage changed to ${stageName}`);
+            addEventLogEntry("update", oppId, opp.title || opp.Title || "", `Stage changed to ${stageName}`, true);
+            openOpportunityPreviewModal(oppId, opp.title || opp.Title || "", oppPreviewContext?.group || null).catch(() => {});
+          } catch (err) {
+            showToast("Failed to change stage: " + (err.message || err), true);
+            const fallbackStage = state.stages.find((s) => String(s.id ?? s.ID) === currentStageId);
+            if (fallbackStage) select.value = currentStageId;
+          }
+        });
+        dd.appendChild(select);
+      } else if (row.value === "Yes" || row.value === "No") {
+        const tag = document.createElement("span");
+        tag.className = "field-value-tag";
+        tag.textContent = row.value;
+        dd.appendChild(tag);
+      } else {
+        dd.textContent = row.value;
+      }
+
+      field.appendChild(dt);
+      field.appendChild(dd);
+      dl.appendChild(field);
+    }
+    section.appendChild(dl);
+  });
+
+  // 3. Checklist — specialty checkboxes in 3-column grid
+  if (checklistRows.length) {
+    appendPreviewSection(detailsContent, "Checklist", (section) => {
+      const grid = document.createElement("div");
+      grid.className = "opp-preview-checklist-grid";
+      for (const row of checklistRows) {
+        const item = document.createElement("span");
+        item.className = "opp-preview-checklist-item";
+        const icon = document.createElement("span");
+        icon.className = row.value === "Yes" ? "opp-preview-checklist-check" : "opp-preview-checklist-uncheck";
+        icon.textContent = row.value === "Yes" ? "\u2611" : "\u2610";
+        const lbl = document.createElement("span");
+        lbl.textContent = row.label;
+        item.appendChild(icon);
+        item.appendChild(lbl);
+        grid.appendChild(item);
+      }
+      section.appendChild(grid);
+    });
+  }
+
+  // 4. Tags — interactive add/remove
+  appendPreviewSection(detailsContent, "Tags", (section) => {
+    const tagList = document.createElement("div");
+    tagList.className = "opp-preview-tags";
+    const currentTags = Array.isArray(tags) ? [...tags] : [];
+
+    function renderTagChips() {
+      tagList.innerHTML = "";
+      const catalog = buildTagCatalog();
+      for (const t of currentTags) {
+        const chip = document.createElement("span");
+        chip.className = "field-value-tag";
+        chip.textContent = t;
+        const rm = document.createElement("button");
+        rm.type = "button";
+        rm.className = "opp-preview-tag-remove";
+        rm.setAttribute("aria-label", `Remove tag ${t}`);
+        rm.textContent = "\u00d7";
+        rm.addEventListener("click", async () => {
+          rm.disabled = true;
+          try {
+            await removeOpportunityTag(oppId, t);
+            const idx = currentTags.findIndex((ct) => tagsEqual(ct, t, catalog));
+            if (idx !== -1) currentTags.splice(idx, 1);
+            renderTagChips();
+            addEventLogEntry("update", oppId, opp.title || opp.Title || "", `Tag removed: ${t}`, true);
+          } catch (err) {
+            showToast("Failed to remove tag: " + (err.message || err), true);
+            rm.disabled = false;
+          }
+        });
+        chip.appendChild(rm);
+        tagList.appendChild(chip);
+      }
+      // Add tag input
+      const addWrap = document.createElement("span");
+      addWrap.className = "opp-preview-tag-add-wrap";
+      const addSel = document.createElement("select");
+      addSel.className = "opp-preview-tag-add";
+      addSel.setAttribute("aria-label", "Add tag");
+      addSel.innerHTML = '<option value="">+ Add tag…</option>';
+      const usedLower = new Set(currentTags.map((t) => normalizeTagTitle(t).toLowerCase()));
+      for (const tag of (state.allTags || [])) {
+        const title = normalizeTagTitle(tag.title ?? tag);
+        if (!title || usedLower.has(title.toLowerCase())) continue;
+        const opt = document.createElement("option");
+        opt.value = title;
+        opt.textContent = title;
+        addSel.appendChild(opt);
+      }
+      addSel.addEventListener("change", async () => {
+        const title = addSel.value;
+        if (!title) return;
+        try {
+          await addOpportunityTag(oppId, title);
+          if (!currentTags.some((ct) => tagsEqual(ct, title))) currentTags.push(title);
+          renderTagChips();
+          addEventLogEntry("update", oppId, opp.title || opp.Title || "", `Tag added: ${title}`, true);
+        } catch (err) {
+          showToast("Failed to add tag: " + (err.message || err), true);
+        }
+        addSel.value = "";
+      });
+      addWrap.appendChild(addSel);
+      tagList.appendChild(addWrap);
+    }
+
+    renderTagChips();
+    section.appendChild(tagList);
   });
 
   appendPreviewSection(detailsContent, "History & notes", (section) => {
@@ -18987,7 +20318,6 @@ function renderOpportunityPreviewContent(container, data) {
   docsContent.dataset.tabContent = "documents";
   docsContent.style.display = "none";
 
-  const oppId = opp.id ?? opp.ID;
   const previewDocsState = { selected: new Set(), documents: documents || [] };
 
   // Toolbar: upload + select-all + delete
@@ -19075,7 +20405,7 @@ function renderOpportunityPreviewContent(container, data) {
   function renderPreviewDocsList() {
     const list = docsContent.querySelector(".opp-preview-docs-list");
     if (!list) return;
-    const { docs: ds, selected } = previewDocsState;
+    const { documents: ds, selected } = previewDocsState;
     const countEl = docsContent.querySelector(".opp-docs-count");
     if (countEl) countEl.textContent = `${ds.length} document${ds.length !== 1 ? "s" : ""}`;
     deleteBtn.disabled = !selected.size;
@@ -19107,7 +20437,7 @@ function renderOpportunityPreviewContent(container, data) {
       li.appendChild(icon);
 
       const a = document.createElement("a");
-      a.href = docId ? `/api/v2/documents/${docId}/editor-config` : "#";
+      a.href = docId ? `/doc-editor.html?id=${docId}` : "#";
       a.target = "_blank";
       a.rel = "noopener noreferrer";
       a.textContent = title;
@@ -19404,7 +20734,7 @@ async function loadTasks({ force = false } = {}) {
       let msg = (err && err.message) || "";
       const st = err && err.status ? Number(err.status) : 0;
       if (!msg || /failed to fetch|typeerror|networkerror|load failed/i.test(msg)) {
-        msg = `Failed to reach CRM${st ? ` (HTTP ${st})` : ""}. Check your connection or try again.`;
+        msg = `Failed to reach server${st ? ` (HTTP ${st})` : ""}. Check your connection or try again.`;
       } else if (st && !/HTTP \d/.test(msg)) {
         msg += ` (HTTP ${st})`;
       }
@@ -20191,7 +21521,7 @@ async function refreshGroup(group, opts = {}) {
       const st = err && err.status ? Number(err.status) : 0;
       if (!msg || /failed to fetch|typeerror|networkerror|load failed/i.test(msg)) {
         const code = st ? ` (HTTP ${st})` : "";
-        msg = `Failed to reach CRM${code}. Check your connection or try again.`;
+        msg = `Failed to reach server${code}. Check your connection or try again.`;
       } else if (st && !/HTTP \d/.test(msg)) {
         msg += ` (HTTP ${st})`;
       }
@@ -20704,6 +22034,8 @@ async function init() {
   bindBotCustomersModal();
   bindBrandingModal();
   initSearchTrigger();
+  initEmailTrigger();
+  initDocumentsTrigger();
   initNoteEditorPasteHandlers();
 
   $("#new-opportunity-btn")?.addEventListener("click", () => {
@@ -20726,6 +22058,7 @@ async function init() {
   // Show the correct screen immediately (paints login or app shell before heavy work).
   if (await checkSession()) {
     showApp();
+    _startHealthPoller();
     // Start presence so header icon gets indicators right away.
     try { ensurePresenceOnLogin(); } catch {}
     bindChangelogModal(config.version);

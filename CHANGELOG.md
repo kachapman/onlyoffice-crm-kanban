@@ -4,6 +4,73 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 ## Unreleased (Phase 1 follow-up)
 
+- **Documents: sidebar folder tree.** My Documents and Company scopes show a navigable folder tree in the sidebar directly under their scope button. Chevron arrows expand/collapse subfolders. Tree repositions on scope switch. Clicking a folder navigates and highlights the active folder. Tree refreshes on create/rename/delete. New `GET /documents/folders/tree` backend endpoint returns all folders flat for tree building.
+- **Documents: XLS icon fix.** Spreadsheet files now correctly show the green XLS icon instead of the blue docx icon (mime type `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` contained substring `"document"` which matched the word check first — reordered checks).
+- **Documents: file list folder icons.** Folder rows in the file list now show a larger (24px) muted folder icon for better visibility against the dark theme.
+- **Documents: nested folder system.** Added `document_folders` table and `folder_id` column to `project_documents`. Personal and Company scopes now support nested folders with breadcrumb navigation. Backend: `GET /documents/folders`, `POST /documents/folders`, `PATCH /documents/folders/{id}`, `DELETE /documents/folders/{id}` (recursive CTE soft-delete). Personal/Company list endpoints accept `?folder_id=` and return `{documents, folders}`. DB migration: `scripts/migrate_document_folders.py`.
+- **Documents: New button.** Toolbar "New" button opens a dropdown with Word Document, Excel Spreadsheet, and New Folder options. Creating a document generates a minimal valid OOXML file via `POST /documents/create` and immediately opens it in the OnlyOffice editor. Documents and folders are created in the current folder.
+- **Documents: folder context menu.** Right-clicking a folder shows Rename folder and Delete folder options (with recursive delete confirmation). Folder rows render with a folder icon and navigate into the folder on click.
+- **Documents: folder breadcrumb.** Personal and Company scopes show a breadcrumb trail above the file list. Clicking a breadcrumb segment navigates to that level.
+- **OnlyOffice editor: title-bar rename.** Added `permissions: { rename: true }` to editor config and an `onMetaChange` event handler in `doc-editor.html` so renaming in the OnlyOffice title bar syncs back to the CRM database via `PATCH /documents/{id}`.
+- **Documents: folder_id in upload.** Personal and Company upload endpoints now accept an optional `folder_id` field in the multipart form to place uploaded files into the current folder.
+- Bumped static asset cache-bust to `?v=1.88.0` in `index.html`.
+- Fixed documents batch-copy endpoint (`db.insert_returning()` was called on an INSERT without `RETURNING id`, causing 500 errors when copying to My/Company docs).
+- Created `public/doc-editor.html` to render the OnlyOffice editor from `/api/v2/documents/{id}/editor-config` instead of showing raw JSON. Added `docsApiUrl` to the editor-config response so the page loads the correct Document Server `api.js`.
+- Replaced mail header button and email sidebar trigger icons with the mailbox SVG.
+- Single-click on a document file name now opens the OnlyOffice editor (was double-click).
+- Dark-mode styled the documents right-click context menu.
+- Inline rename: when exactly one file is selected, a Rename button appears in the toolbar; clicking it makes the file name editable in the row with inline square-check confirm and × cancel buttons. Context-menu Rename now uses the same inline field.
+- Move/Copy popup panel: selecting Move or Copy from the Actions dropdown opens a small panel with destination dropdown (Project / Personal docs / Company docs). When Project is selected, a search field finds matching deals; a square-check button confirms once a project is selected.
+- Project documents are now grouped by project with discrete header dividers and file counts.
+- Added document sort dropdown in the toolbar: Most recent, Oldest, Largest, Smallest, Name A–Z, Name Z–A.
+- Locked opportunity preview modal height so switching to the Documents tab no longer shrinks the window.
+- Right-edge trigger stack anchored at `bottom: 67%` with `column-reverse` so the Bookmarks trigger stays fixed at the top 1/3 and minimized Search/Email/Documents triggers stack upward above it.
+- Added `searchMinimized` flag so the search sidebar trigger restores correctly when the bookmarks sidebar closes.
+- Bumped static asset cache-bust to `?v=1.87.10` in `index.html`.
+- Fixed editor-config URL confusion: `docsApiUrl` now uses `DOCS_PUBLIC_URL`; file `downloadUrl` and `callbackUrl` use `CRM_PUBLIC_URL`.
+- Added JWT token authorization to `/api/v2/documents/{id}` download so the OnlyOffice Document Server can fetch files without a session cookie.
+- Added `CRM_PUBLIC_URL` env variable and updated `.env` / `config.example.env`.
+- Started the local `onlyoffice-docserver` container and configured `.env` to use `https://192.168.1.68:9443` for the document API and `http://192.168.1.68:8766` for CRM callbacks/downloads.
+- Fixed OnlyOffice editor JWT signing: token now signs the config directly instead of wrapping it in `{"payload": config}`, resolving "The document security token is not correctly formed."
+- Added PDF support in editor config (`documentType: "pdf"`, `mode: "view"`).
+- Documents toolbar: Upload, Sort, and Rename buttons are now icon-only. Sort uses a custom dropdown menu with a checkmark on the active option.
+- Fixed Move/Copy popup closing immediately due to a document click listener; added a just-opened guard.
+- Documents modal sidebar is now collapsible via a toggle button (same behavior as the Mail modal sidebar) and auto-collapses on narrow mobile screens.
+- Improved mobile modal layout so content no longer gets cut off on very narrow screens.
+- **Documents: file-type icons.** Replaced emoji-based file icons with Tabler SVG file-type icons (docx, xls, pdf, image, text, generic) using muted per-type colors (blue for Word, green for Excel, red for PDF, purple for images, slate for text). Stroke width 2 for legibility at 16px. Toolbar "New" button switched to tabler-square-rounded-plus icon.
+- **Documents: move-to-personal/company.** "Move to Project…" dropdown renamed to "Move to…" with Personal/Company scope options. PATCH endpoint now accepts `folder_id`, `scope`, `title`, and `opportunity_id`. Batch move supports personal and company destinations.
+- **Documents: drag-and-drop.** File rows are draggable; folder rows accept drops to move files into folders (My Documents / Company scope only). Drag-over visual feedback with dashed blue border.
+- **Documents: auto-refresh after save-as.** Editor sets `localStorage.crm-docs-refresh` flag on save-as; CRM checks on `window.focus` and reloads list.
+- **Documents: OnlyOffice callback fix.** Callback handler now handles status codes 1, 2, 4 (not just 2/6). Added `_download_from_docserver()` helper with JWT auth + SSL bypass for self-signed cert.
+- **Documents: inline file rows.** Single-line file rows with size and date separated by `·` divider. Divider lines between rows.
+- **Documents: projects view-only.** Upload & New Folder buttons hidden in Projects scope. Move panel supports personal/company/project destinations.
+- **Documents: breadcrumb in empty folders.** Breadcrumb navigation renders even when current folder is empty.
+- **Sidebar toggle arrows fixed.** Collapsed → `▶`, expanded → `◀` (was reversed).
+- Bumped static asset cache-bust to `?v=1.87.11` in `index.html`.
+
+- Refactored header chrome into a single `.hero-header-actions` flex container (admin gear, server-health icon, Sign-out) with transparent hover-only styling (no borders). Eliminates absolute-position overlap and gives the same style on desktop and mobile. Mobile wraps gracefully with compact sizing.
+- Reordered `.hero-actions`: Quick Note + New Opportunity buttons now sit left of the global search field; Search modal button sits right of the field.
+- Refactored right-edge sidebar triggers into a single `.right-sidebar-triggers` flex column with `column-reverse`. Bookmarks trigger stays fixed at the bottom; minimized Search, Email, and Documents triggers stack upward above it and hide with `display: none` so the stack collapses cleanly when empty. All triggers share the same 2.6rem width and dark bordered styling.
+- Added dark bordered square `.modal-header-control` buttons for minimize/close in Email, Documents, and Search modal headers. Buttons sit in a single horizontal row with consistent sizing.
+- Fixed admin Infrastructure restart controls: "Restart server process" now spawns a replacement Python process via `subprocess.Popen(start_new_session=True)` before exiting, so the server actually comes back up. "Restart Docker container" now uses the configured `CONTAINER_NAME` (`sietch-crm` via `docker-compose.yml` environment) instead of `socket.gethostname()` (the container id), which was causing Docker 404 / "Nothing matches the given URI".
+- Fixed documents upload/search failures caused by missing `company_scope` and `notes` columns in the live DB. Ran `scripts/migrate_documents_scope.py` to add both columns (plus the company-scope index). Removed remaining `notes` column references from active documents queries so the feature works regardless of migration state.
+- Bumped static asset cache-bust to `?v=1.87.9` in `index.html`.
+
+- Phase 2I (Preview modal + tile revamp): Preview modal restructured — Description moved to top; "Deal Fields" renamed to "Project Fields" with standard + user fields merged; Stage rendered as dropdown (change stage directly from preview); "Expected Close" renamed to "Follow-up Due Date"; Tags section with inline add/remove (× per tag chip + select dropdown for available tags); Checklist section with specialty checkboxes in 3-column grid. Kanban deal tiles now show created date ("Created: Jul 15") next to due date; native tooltip on card hover shows title — contact — value — due date summary.
+- Fixed `bindEventLogModal` crash (undefined `modal` variable) that prevented init() from completing — header buttons (new deal, quick note, documents, etc.) now attach properly.
+- Fixed opportunity preview Documents tab crash (`Cannot read properties of undefined (reading 'length')`) caused by a destructuring mismatch (`docs` vs `documents` in `previewDocsState`).
+- Removed the per-project project list from the Documents modal sidebar: project documents now appear only in the Documents search result list (grouped by project). The Projects scope remains; it displays the grouped search results instead of a sidebar project picker.
+- Updated client-side unreachable-server error text from "Failed to reach CRM" to "Failed to reach server" to match the v3 standalone PostgreSQL architecture.
+- Mobile header layout fixed: centered hero logo moved to top-left at a smaller size so it no longer overlaps the title; admin-console (settings) gear and Sign-out button reordered to avoid overlap; hero inner padding increased to clear the top row.
+- **Server health indicator:** Small tabler-server icon in the header (next to settings gear) that appears amber when the backend is unreachable and disappears when healthy. 60s health poller skips when tab is hidden (no throttle false positives). `api()` function hooks track failures and successes. No banner, no toast — just the icon.
+- **Admin Infrastructure tab:** New tab in admin console showing server status (DB reachability), Docker container health (status, restart count), infrastructure event log (rolling 200 events), and restart controls (restart server process or restart Docker container, both admin-only with confirm dialog).
+- **Documents toolbar dropdown:** Delete / Move to Project / Copy to… consolidated into a single "Actions" `<select>` dropdown (reduces toolbar clutter).
+- **Docker healthcheck + restart limits:** `docker-compose.yml` now has a healthcheck (`/api/health` every 30s) and `restart: on-failure:5` (max 5 automatic restarts, then stop — admin can see and manually restart from Infrastructure tab).
+- **Infrastructure ring buffer:** In-memory rolling 200-event deque in `server.py` tracks errors, restarts, and server events. Logged to on DB connection failure, Document Server unreachable, and restart requests.
+- **PATCH method support:** Added `do_PATCH` handler to server — `PATCH /api/v2/projects/{id}` now works for stage updates from the preview modal. Also supports document rename/move via PATCH.
+- **Minimize-to-sidebar:** Email, Documents, and Search modals now have a minimize button (universal `—` icon in header). Minimized modals show as icon-only triggers on the right edge of the viewport. Email saves scroll position + selected email; Documents saves scope + search query; Search saves preview tabs (existing behavior). All coordinate with bookmark sidebar (hide when sidebar opens, show when closes).
+- **Tabler icons webfont:** Added `@tabler/icons-webfont` CSS for sidebar trigger icons.
+- **Search modal header:** Added header row with title and minimize button. Fixed tiny vertical scrollbar in tab bar (`overflow: hidden` instead of `overflow-x: hidden`).
 - Phase 2A continuation: search popup modal now opens on Projects tab by default. Projects tab shows search input + stage/owner filters + batch ops (add/remove tag, set stage, export). Tags tab (separate tab) shows tag selector + Search by Tag button to find deals by tag. Tab switching auto-loads data. Error display scoped to active tab's error div. Tag selector deduplicated (removed duplicate from projects tab). Enter key supported on tag select. Preview tabs fall back to Projects on close.
 - Fix add tile modal close button and backdrop: added onclick fallbacks directly in HTML elements (the JS event listener was not firing despite correct code — root cause unclear; fallback approach guarantees the buttons work regardless of JS binding timing).
 - Added Phase 2H (Documents modal) to sietch-crm-plan.md: shared folder file manager modal with list/upload/delete/rename/copy/move/open-in-editor for Document Server files. Header button with files icon. Refresh dashboard button and Nuke Cache button in group tiles confirmed still useful and kept.

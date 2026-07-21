@@ -7,8 +7,10 @@ All data owned locally. Zero external API calls.
 
 from __future__ import annotations
 
+import collections
 import base64
 import gzip
+import sys
 import hashlib
 import hmac
 import io
@@ -16,6 +18,7 @@ import json
 import os
 import re
 import socket
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -30,6 +33,16 @@ import logging
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("sietch_server")
+
+# ── Infrastructure ring buffer (rolling 200 events) ───────────────────────────
+_infra_log: collections.deque = collections.deque(maxlen=200)
+_infra_start_time = time.time()
+
+def log_infra_event(level: str, msg: str) -> None:
+    """Append an event to the infrastructure ring buffer."""
+    _infra_log.append({"ts": datetime.now(timezone.utc).isoformat(), "level": level, "msg": msg})
+
+log_infra_event("info", "Server started")
 
 from ics_calendar import _MAX_ICS_BYTES, is_allowed_calendar_url, parse_ics_calendar
 
@@ -93,6 +106,8 @@ DOCUMENT_STORAGE_PATH = Path(os.getenv("DOCUMENT_STORAGE_PATH", str(DATA_DIR / "
 DOCS_JWT_SECRET = os.environ.get("DOCS_JWT_SECRET", "")
 DOCS_INTERNAL_URL = os.environ.get("DOCS_INTERNAL_URL", "").rstrip("/")
 DOCS_PUBLIC_URL = os.environ.get("DOCS_PUBLIC_URL", "").rstrip("/")
+CRM_PUBLIC_URL = os.environ.get("CRM_PUBLIC_URL", "").rstrip("/") or DOCS_PUBLIC_URL
+CONTAINER_NAME = os.environ.get("CONTAINER_NAME", "sietch-crm")
 
 # ── DB init ────────────────────────────────────────────────────────────────────
 import db
@@ -187,6 +202,22 @@ def _sign_jwt(payload: dict, secret: str) -> str:
     return f"{enc_header}.{enc_payload}.{_b64url_encode(sig)}"
 
 
+def _verify_jwt(token: str, secret: str) -> dict | None:
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        signing_input = f"{parts[0]}.{parts[1]}".encode("utf-8")
+        sig = _b64url_decode(parts[2])
+        expected = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+        if not hmac.compare_digest(sig, expected):
+            return None
+        payload = json.loads(_b64url_decode(parts[1]).decode("utf-8"))
+        return payload
+    except Exception:
+        return None
+
+
 def _proxy_document_server(method: str, ds_path: str, body: bytes | None = None, headers: dict | None = None, timeout: int = 30) -> tuple:
     """Forward a request to the internal OnlyOffice Document Server. Returns (status, body, content_type)."""
     if not DOCS_INTERNAL_URL:
@@ -202,7 +233,19 @@ def _proxy_document_server(method: str, ds_path: str, body: bytes | None = None,
     except urllib.error.HTTPError as e:
         return e.code, e.read(), e.headers.get("Content-Type", "application/json")
     except Exception:
+        log_infra_event("error", f"Document Server unreachable: {ds_path}")
         return 502, b'{"error": "Document Server unreachable"}', "application/json"
+
+
+def _download_from_docserver(url: str, timeout: int = 60) -> bytes:
+    """Download a file from OnlyOffice Document Server URL with JWT auth and self-signed cert bypass."""
+    token = _sign_jwt({"ts": int(time.time())}, DOCS_JWT_SECRET)
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        return resp.read()
 
 
 _EXT_TO_MIME = {
@@ -231,7 +274,34 @@ def _document_type_from_ext(ext: str) -> str:
         return "cell"
     if ext in ("pptx", "ppt", "odp"):
         return "slide"
+    if ext in ("pdf", "djvu", "xps", "oxps"):
+        return "pdf"
     return "word"
+
+
+def _blank_docx_bytes() -> bytes:
+    """Return a minimal valid .docx file (OOXML zip with empty document)."""
+    import zipfile, io
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        zf.writestr("_rels/.rels", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
+        zf.writestr("word/_rels/document.xml.rels", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>')
+        zf.writestr("word/document.xml", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t></w:t></w:r></w:p></w:body></w:document>')
+    return buf.getvalue()
+
+
+def _blank_xlsx_bytes() -> bytes:
+    """Return a minimal valid .xlsx file (OOXML zip with empty workbook)."""
+    import zipfile, io
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>')
+        zf.writestr("_rels/.rels", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>')
+        zf.writestr("xl/_rels/workbook.xml.rels", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>')
+        zf.writestr("xl/workbook.xml", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>')
+        zf.writestr("xl/worksheets/sheet1.xml", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>')
+    return buf.getvalue()
 
 
 def _parse_multipart(body: bytes, content_type: str) -> dict:
@@ -365,6 +435,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
     def do_DELETE(self) -> None:
         if self.path.startswith("/api/"):
             self._handle_api_post_put("DELETE")
+            return
+        self.send_error(405)
+
+    def do_PATCH(self) -> None:
+        if self.path.startswith("/api/"):
+            self._handle_api_post_put("PATCH")
             return
         self.send_error(405)
 
@@ -570,6 +646,20 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 200, {"dbReachable": False})
             return
 
+        # ── Infrastructure (admin-only) ──
+        if api_path == "/api/v2/admin/infra-log":
+            user = _require_admin(self)
+            if not user:
+                return
+            _json_response(self, 200, {"events": list(_infra_log), "uptime": time.time() - _infra_start_time})
+            return
+        if api_path == "/api/v2/admin/docker-health":
+            user = _require_admin(self)
+            if not user:
+                return
+            self._handle_docker_health()
+            return
+
         # ── Presence / Team (local store, unchanged) ──
         if api_path.startswith("/api/presence"):
             if api_path == "/api/presence/users":
@@ -698,6 +788,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/projects/simple":
             self._handle_projects_simple()
             return
+        if api_path == "/api/v2/documents/folders":
+            self._handle_document_folders_list(qs)
+            return
+        if api_path == "/api/v2/documents/folders/tree":
+            self._handle_document_folders_tree(qs)
+            return
         m = re.match(r"^/api/v2/documents/(\d+)$", api_path)
         if m:
             self._handle_document_download(int(m.group(1)))
@@ -815,6 +911,48 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 _json_response(self, 500, {"error": "Failed to update branding"})
             return
 
+        # ── Infrastructure restart (admin-only) ──
+        if api_path == "/api/v2/admin/restart-server" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            log_infra_event("info", f"Server restart requested by {user.get('email', 'unknown')}")
+            _json_response(self, 200, {"ok": True, "message": "Server restarting…"})
+            import subprocess
+            import threading
+            def _respawn():
+                try:
+                    # Spawn a new server process detached from this one, then exit.
+                    subprocess.Popen([sys.executable] + sys.argv, start_new_session=True)
+                except Exception:
+                    logger.exception("Failed to spawn replacement server process")
+                finally:
+                    os._exit(0)
+            threading.Timer(1.0, _respawn).start()
+            return
+        if api_path == "/api/v2/admin/restart-container" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            log_infra_event("info", f"Docker container restart requested by {user.get('email', 'unknown')}")
+            try:
+                import subprocess
+                # In Docker, socket.gethostname() returns the container id (not the
+                # Compose container_name). Use the configured CONTAINER_NAME so the
+                # restart command resolves correctly both inside and outside Docker.
+                result = subprocess.run(["docker", "restart", CONTAINER_NAME], capture_output=True, text=True, timeout=30)
+                if result.returncode == 0:
+                    _json_response(self, 200, {"ok": True, "message": "Container restart triggered"})
+                else:
+                    err = result.stderr.strip() or result.stdout.strip() or "docker restart returned non-zero"
+                    log_infra_event("error", f"Docker restart failed: {err}")
+                    _json_response(self, 500, {"error": f"Docker restart failed: {err}"})
+            except Exception as exc:
+                logger.exception("Docker restart failed")
+                log_infra_event("error", f"Docker restart exception: {exc}")
+                _json_response(self, 500, {"error": str(exc)})
+            return
+
         # ── Bot customers (admin) ──
         if api_path.startswith("/api/bot-customers"):
             self._handle_bot_customers_post_put(method)
@@ -828,7 +966,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             self._handle_project_create()
             return
         m = re.match(r"^/api/v2/projects/(\d+)$", api_path)
-        if m and method == "PUT":
+        if m and method in ("PUT", "PATCH"):
             self._handle_project_update(int(m.group(1)))
             return
         m = re.match(r"^/api/v2/projects/(\d+)$", api_path)
@@ -889,6 +1027,26 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         if api_path == "/api/v2/documents/company/upload" and method == "POST":
             self._handle_document_upload_company()
+            return
+        if api_path == "/api/v2/documents/folders" and method == "POST":
+            self._handle_document_folder_create()
+            return
+        if api_path == "/api/v2/documents/create" and method == "POST":
+            self._handle_document_create_blank()
+            return
+        m = re.match(r"^/api/v2/documents/(\d+)/command$", api_path)
+        if m and method == "POST":
+            self._handle_document_command(int(m.group(1)))
+            return
+        if api_path == "/api/v2/documents/save-as" and method == "POST":
+            self._handle_document_save_as()
+            return
+        m = re.match(r"^/api/v2/documents/folders/(\d+)$", api_path)
+        if m and method in ("PUT", "PATCH"):
+            self._handle_document_folder_rename(int(m.group(1)))
+            return
+        if m and method == "DELETE":
+            self._handle_document_folder_delete(int(m.group(1)))
             return
 
         # ── v2 API: Resources ──
@@ -956,7 +1114,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if m and method == "DELETE":
             self._handle_document_delete(int(m.group(1)))
             return
-        if m and method == "PUT":
+        if m and method in ("PUT", "PATCH"):
             self._handle_document_update(int(m.group(1)))
             return
         m = re.match(r"^/api/v2/notifications/(\d+)/read$", api_path)
@@ -1865,22 +2023,27 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         user = _require_auth(self)
         if not user:
             return
-        rows = db.query(
-            """SELECT id, title, notes, file_path, file_size, mime_type, uploaded_by, uploaded_at, company_scope
-               FROM project_documents WHERE opportunity_id = %s AND is_deleted = FALSE
-               ORDER BY uploaded_at DESC""",
-            (opp_id,),
-        )
-        docs = []
-        for r in rows:
-            docs.append({
-                "id": r[0], "title": r[1], "notes": r[2], "filePath": r[3],
-                "fileSize": r[4], "mimeType": r[5], "uploadedBy": r[6],
-                "uploadedAt": r[7].isoformat() if r[7] else None,
-                "companyScope": r[8],
-                "editUrl": f"/api/v2/documents/{r[0]}/editor-config",
-            })
-        _json_response(self, 200, {"documents": docs})
+        try:
+            rows = db.query(
+                """SELECT id, title, file_path, file_size, mime_type, uploaded_by, uploaded_at, company_scope, folder_id
+                   FROM project_documents WHERE opportunity_id = %s AND is_deleted = FALSE
+                   ORDER BY uploaded_at DESC""",
+                (opp_id,),
+            )
+            docs = []
+            for r in rows:
+                docs.append({
+                    "id": r[0], "title": r[1], "filePath": r[2],
+                    "fileSize": r[3], "mimeType": r[4], "uploadedBy": r[5],
+                    "uploadedAt": r[6].isoformat() if r[6] else None,
+                    "companyScope": r[7],
+                    "editUrl": f"/doc-editor.html?id={r[0]}",
+                })
+            _json_response(self, 200, {"documents": docs})
+        except Exception as exc:
+            logger.exception("projects/{id}/documents failed")
+            log_infra_event("error", f"projects/{opp_id}/documents failed: {exc}")
+            _json_response(self, 500, {"error": "Failed to load project documents"})
 
     def _handle_project_document_upload(self, opp_id: int) -> None:
         user = _require_auth(self)
@@ -1919,13 +2082,55 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         )
         _json_response(self, 201, {
             "id": doc_id, "title": filename, "fileSize": file_size,
-            "mimeType": mime_type, "editUrl": f"/api/v2/documents/{doc_id}/editor-config",
+            "mimeType": mime_type, "editUrl": f"/doc-editor.html?id={doc_id}",
         })
 
-    def _handle_document_download(self, doc_id: int) -> None:
-        user = _require_auth(self)
-        if not user:
+    def _handle_docker_health(self) -> None:
+        """Return Docker container status if running inside Docker."""
+        info = {"containerName": None, "status": "unknown", "restartCount": None, "inDocker": False}
+        try:
+            with open("/proc/1/cgroup", "r") as f:
+                content = f.read()
+                if "docker" in content or "kubepods" in content:
+                    info["inDocker"] = True
+        except Exception:
+            pass
+        if not info["inDocker"]:
+            _json_response(self, 200, info)
             return
+        try:
+            hostname = socket.gethostname()
+            info["containerName"] = hostname
+            import subprocess
+            result = subprocess.run(
+                ["docker", "inspect", "--format", "{{.State.Status}} {{.RestartCount}}", hostname],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                parts = result.stdout.strip().split()
+                info["status"] = parts[0] if parts else "unknown"
+                info["restartCount"] = int(parts[1]) if len(parts) > 1 else 0
+            else:
+                info["status"] = "inspect-failed"
+        except Exception as exc:
+            info["status"] = f"error: {exc}"
+        _json_response(self, 200, info)
+
+    def _handle_document_download(self, doc_id: int) -> None:
+        # Authenticate either via session or a valid document-server JWT token
+        qs = parse_qs(urlparse(self.path).query)
+        token = (qs.get("token") or [""])[0]
+        user = _require_auth(self) if not token else None
+        if not user and not token:
+            return
+        if not user:
+            if not DOCS_JWT_SECRET:
+                self.send_error(401)
+                return
+            payload = _verify_jwt(token, DOCS_JWT_SECRET)
+            if not payload or payload.get("id") != doc_id:
+                self.send_error(401)
+                return
         row = db.query(
             "SELECT opportunity_id, title, file_path, file_size, mime_type FROM project_documents WHERE id = %s AND is_deleted = FALSE",
             (doc_id,), fetch="one",
@@ -1966,25 +2171,27 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         file_ext = Path(title).suffix.lstrip(".").lower() or "docx"
         doc_type = _document_type_from_ext(file_ext)
-        # Public URL that Document Server will use to download the file
-        download_url = f"{DOCS_PUBLIC_URL}/api/v2/documents/{doc_id}/download"
         key = _sign_jwt({"id": doc_id, "path": file_path, "ts": int(time.time())}, DOCS_JWT_SECRET)
+        # Public URL that Document Server will use to download the file
+        download_url = f"{CRM_PUBLIC_URL}/api/v2/documents/{doc_id}?token={key}"
+        editor_mode = "view" if doc_type == "pdf" else "edit"
         config = {
             "document": {
                 "fileType": file_ext,
                 "key": key,
                 "title": title,
                 "url": download_url,
+                "permissions": {"download": True, "edit": editor_mode == "edit"},
             },
             "documentType": doc_type,
             "editorConfig": {
-                "callbackUrl": f"{DOCS_PUBLIC_URL}/api/v2/documents/{doc_id}/callback",
-                "mode": "edit",
+                "callbackUrl": f"{CRM_PUBLIC_URL}/api/v2/documents/{doc_id}/callback",
+                "mode": editor_mode,
                 "user": {"id": str(user["id"]), "name": user.get("display_name") or user.get("email") or "User"},
             },
         }
-        token = _sign_jwt({"payload": config}, DOCS_JWT_SECRET)
-        config["token"] = token
+        config["token"] = _sign_jwt(config, DOCS_JWT_SECRET)
+        config["docsApiUrl"] = f"{DOCS_PUBLIC_URL}/web-apps/apps/api/documents/api.js"
         _json_response(self, 200, config)
 
     def _handle_document_delete(self, doc_id: int) -> None:
@@ -1998,7 +2205,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         _json_response(self, 200, {"ok": True})
 
     def _handle_document_update(self, doc_id: int) -> None:
-        """PATCH equivalent: rename, update notes, or move to project."""
+        """PATCH equivalent: rename, update notes, move to project, or move to folder."""
         user = _require_auth(self)
         if not user:
             return
@@ -2021,20 +2228,31 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 400, {"error": "Invalid JSON body"})
             return
         title = body.get("title")
-        notes = body.get("notes")
         new_opp_id = body.get("opportunity_id")
+        folder_id = body.get("folder_id")
+        scope = body.get("scope")  # "personal" | "company" to move out of project
         updates = []
         params = []
         if title is not None:
             updates.append("title = %s")
             params.append(title)
-        if notes is not None:
-            updates.append("notes = %s")
-            params.append(notes)
         if new_opp_id is not None:
-            # Move to project scope: clear personal/company flags
             updates.append("opportunity_id = %s")
             params.append(new_opp_id)
+            updates.append("company_scope = FALSE")
+            updates.append("folder_id = NULL")
+        if scope is not None:
+            if scope == "company":
+                updates.append("opportunity_id = NULL")
+                updates.append("company_scope = TRUE")
+            else:
+                updates.append("opportunity_id = NULL")
+                updates.append("company_scope = FALSE")
+            updates.append("uploaded_by = %s")
+            params.append(user["id"])
+        if folder_id is not None and new_opp_id is None and scope is None:
+            updates.append("folder_id = %s")
+            params.append(folder_id)
         if not updates:
             _json_response(self, 400, {"error": "Nothing to update"})
             return
@@ -2043,107 +2261,194 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         _json_response(self, 200, {"ok": True})
 
     def _handle_documents_personal(self) -> None:
-        """List current user's personal documents (uploaded_by = user, no opp, not company)."""
+        """List current user's personal documents in a folder (or root)."""
         user = _require_auth(self)
         if not user:
             return
-        rows = db.query(
-            """SELECT id, title, notes, file_path, file_size, mime_type, uploaded_at, opportunity_id, company_scope
-               FROM project_documents
-               WHERE uploaded_by = %s AND is_deleted = FALSE AND opportunity_id IS NULL AND company_scope = FALSE
-               ORDER BY uploaded_at DESC""",
-            (user["id"],),
-        )
-        docs = [self._doc_row(r) for r in rows]
-        _json_response(self, 200, {"documents": docs})
+        try:
+            qs = parse_qs(urlparse(self.path).query)
+            folder_id = qs.get("folder_id", [None])[0]
+            if folder_id:
+                folder_id = int(folder_id)
+            # List folders at this level
+            if folder_id:
+                folder_rows = db.query(
+                    """SELECT id, name FROM document_folders
+                       WHERE parent_id = %s AND scope = 'personal' AND uploaded_by = %s AND is_deleted = FALSE
+                       ORDER BY name""",
+                    (folder_id, user["id"]),
+                )
+            else:
+                folder_rows = db.query(
+                    """SELECT id, name FROM document_folders
+                       WHERE parent_id IS NULL AND scope = 'personal' AND uploaded_by = %s AND is_deleted = FALSE
+                       ORDER BY name""",
+                    (user["id"],),
+                )
+            folders = [{"id": r[0], "name": r[1]} for r in folder_rows]
+            # List documents at this level
+            if folder_id:
+                rows = db.query(
+                    """SELECT id, title, file_path, file_size, mime_type, uploaded_at, opportunity_id, company_scope, folder_id
+                       FROM project_documents
+                       WHERE uploaded_by = %s AND is_deleted = FALSE AND opportunity_id IS NULL AND company_scope = FALSE AND folder_id = %s
+                       ORDER BY uploaded_at DESC""",
+                    (user["id"], folder_id),
+                )
+            else:
+                rows = db.query(
+                    """SELECT id, title, file_path, file_size, mime_type, uploaded_at, opportunity_id, company_scope, folder_id
+                       FROM project_documents
+                       WHERE uploaded_by = %s AND is_deleted = FALSE AND opportunity_id IS NULL AND company_scope = FALSE AND folder_id IS NULL
+                       ORDER BY uploaded_at DESC""",
+                    (user["id"],),
+                )
+            docs = [self._doc_row(r) for r in rows]
+            _json_response(self, 200, {"documents": docs, "folders": folders})
+        except Exception as exc:
+            logger.exception("documents/personal failed")
+            log_infra_event("error", f"documents/personal failed: {exc}")
+            _json_response(self, 500, {"error": "Failed to load personal documents"})
 
     def _handle_documents_company(self) -> None:
-        """List all company-scoped documents."""
+        """List all company-scoped documents in a folder (or root)."""
         user = _require_auth(self)
         if not user:
             return
-        rows = db.query(
-            """SELECT id, title, notes, file_path, file_size, mime_type, uploaded_at, opportunity_id, company_scope
-               FROM project_documents
-               WHERE company_scope = TRUE AND is_deleted = FALSE
-               ORDER BY uploaded_at DESC""",
-        )
-        docs = [self._doc_row(r) for r in rows]
-        _json_response(self, 200, {"documents": docs})
+        try:
+            qs = parse_qs(urlparse(self.path).query)
+            folder_id = qs.get("folder_id", [None])[0]
+            if folder_id:
+                folder_id = int(folder_id)
+            # List folders at this level
+            if folder_id:
+                folder_rows = db.query(
+                    """SELECT id, name FROM document_folders
+                       WHERE parent_id = %s AND scope = 'company' AND is_deleted = FALSE
+                       ORDER BY name""",
+                    (folder_id,),
+                )
+            else:
+                folder_rows = db.query(
+                    """SELECT id, name FROM document_folders
+                       WHERE parent_id IS NULL AND scope = 'company' AND is_deleted = FALSE
+                       ORDER BY name""",
+                )
+            folders = [{"id": r[0], "name": r[1]} for r in folder_rows]
+            # List documents at this level
+            if folder_id:
+                rows = db.query(
+                    """SELECT id, title, file_path, file_size, mime_type, uploaded_at, opportunity_id, company_scope, folder_id
+                       FROM project_documents
+                       WHERE company_scope = TRUE AND is_deleted = FALSE AND folder_id = %s
+                       ORDER BY uploaded_at DESC""",
+                    (folder_id,),
+                )
+            else:
+                rows = db.query(
+                    """SELECT id, title, file_path, file_size, mime_type, uploaded_at, opportunity_id, company_scope, folder_id
+                       FROM project_documents
+                       WHERE company_scope = TRUE AND is_deleted = FALSE AND folder_id IS NULL
+                       ORDER BY uploaded_at DESC""",
+                )
+            docs = [self._doc_row(r) for r in rows]
+            _json_response(self, 200, {"documents": docs, "folders": folders})
+        except Exception as exc:
+            logger.exception("documents/company failed")
+            log_infra_event("error", f"documents/company failed: {exc}")
+            _json_response(self, 500, {"error": "Failed to load company documents"})
 
     def _handle_documents_search(self, qs: dict) -> None:
         """Search all non-deleted project documents. Returns results grouped by project."""
         user = _require_auth(self)
         if not user:
             return
-        q = (qs.get("q", [""])[0]).strip().lower()
-        project_id = qs.get("project_id", [None])[0]
-        if project_id:
-            project_id = int(project_id)
-        if q:
+        try:
+            q = (qs.get("q", [""])[0]).strip().lower()
+            project_id = qs.get("project_id", [None])[0]
             if project_id:
-                rows = db.query(
-                    """SELECT d.id, d.title, d.notes, d.file_path, d.file_size, d.mime_type, d.uploaded_at,
-                              d.opportunity_id, d.company_scope, o.title AS opp_title
-                       FROM project_documents d
-                       JOIN opportunities o ON o.id = d.opportunity_id
-                       WHERE d.opportunity_id = %s AND d.is_deleted = FALSE
-                         AND (LOWER(d.title) LIKE %s OR LOWER(d.notes) LIKE %s)
-                       ORDER BY d.uploaded_at DESC""",
-                    (project_id, f"%{q}%", f"%{q}%"),
-                )
+                project_id = int(project_id)
+            if q:
+                if project_id:
+                    rows = db.query(
+                        """SELECT d.id, d.title, d.file_path, d.file_size, d.mime_type, d.uploaded_at,
+                                  d.opportunity_id, d.company_scope, o.title AS opp_title
+                           FROM project_documents d
+                           JOIN opportunities o ON o.id = d.opportunity_id
+                           WHERE d.opportunity_id = %s AND d.is_deleted = FALSE
+                             AND LOWER(d.title) LIKE %s
+                           ORDER BY d.uploaded_at DESC""",
+                        (project_id, f"%{q}%"),
+                    )
+                else:
+                    rows = db.query(
+                        """SELECT d.id, d.title, d.file_path, d.file_size, d.mime_type, d.uploaded_at,
+                                  d.opportunity_id, d.company_scope, o.title AS opp_title
+                           FROM project_documents d
+                           JOIN opportunities o ON o.id = d.opportunity_id
+                           WHERE d.opportunity_id IS NOT NULL AND d.is_deleted = FALSE
+                             AND LOWER(d.title) LIKE %s
+                           ORDER BY o.title, d.uploaded_at DESC""",
+                        (f"%{q}%",),
+                    )
             else:
-                rows = db.query(
-                    """SELECT d.id, d.title, d.notes, d.file_path, d.file_size, d.mime_type, d.uploaded_at,
-                              d.opportunity_id, d.company_scope, o.title AS opp_title
-                       FROM project_documents d
-                       JOIN opportunities o ON o.id = d.opportunity_id
-                       WHERE d.opportunity_id IS NOT NULL AND d.is_deleted = FALSE
-                         AND (LOWER(d.title) LIKE %s OR LOWER(d.notes) LIKE %s)
-                       ORDER BY o.title, d.uploaded_at DESC""",
-                    (f"%{q}%", f"%{q}%"),
-                )
-        else:
-            if project_id:
-                rows = db.query(
-                    """SELECT d.id, d.title, d.notes, d.file_path, d.file_size, d.mime_type, d.uploaded_at,
-                              d.opportunity_id, d.company_scope, o.title AS opp_title
-                       FROM project_documents d
-                       JOIN opportunities o ON o.id = d.opportunity_id
-                       WHERE d.opportunity_id = %s AND d.is_deleted = FALSE
-                       ORDER BY d.uploaded_at DESC""",
-                    (project_id,),
-                )
-            else:
-                rows = db.query(
-                    """SELECT d.id, d.title, d.notes, d.file_path, d.file_size, d.mime_type, d.uploaded_at,
-                              d.opportunity_id, d.company_scope, o.title AS opp_title
-                       FROM project_documents d
-                       JOIN opportunities o ON o.id = d.opportunity_id
-                       WHERE d.opportunity_id IS NOT NULL AND d.is_deleted = FALSE
-                       ORDER BY o.title, d.uploaded_at DESC""",
-                )
-        # Group by project
-        grouped = {}
-        for r in rows:
-            opp_title = r[-1]
-            if opp_title not in grouped:
-                grouped[opp_title] = {"project": opp_title, "projectId": r[7], "documents": []}
-            grouped[opp_title]["documents"].append(self._doc_row(r[:-1]))
-        _json_response(self, 200, {"results": list(grouped.values()), "total": len(rows)})
+                if project_id:
+                    rows = db.query(
+                        """SELECT d.id, d.title, d.file_path, d.file_size, d.mime_type, d.uploaded_at,
+                                  d.opportunity_id, d.company_scope, o.title AS opp_title
+                           FROM project_documents d
+                           JOIN opportunities o ON o.id = d.opportunity_id
+                           WHERE d.opportunity_id = %s AND d.is_deleted = FALSE
+                           ORDER BY d.uploaded_at DESC""",
+                        (project_id,),
+                    )
+                else:
+                    rows = db.query(
+                        """SELECT d.id, d.title, d.file_path, d.file_size, d.mime_type, d.uploaded_at,
+                                  d.opportunity_id, d.company_scope, o.title AS opp_title
+                           FROM project_documents d
+                           JOIN opportunities o ON o.id = d.opportunity_id
+                           WHERE d.opportunity_id IS NOT NULL AND d.is_deleted = FALSE
+                           ORDER BY o.title, d.uploaded_at DESC""",
+                    )
+            # Group by project
+            grouped = {}
+            for r in rows:
+                opp_title = r[-1]
+                if opp_title not in grouped:
+                    grouped[opp_title] = {"project": opp_title, "projectId": r[7], "documents": []}
+                grouped[opp_title]["documents"].append(self._doc_row(r[:-1]))
+            _json_response(self, 200, {"results": list(grouped.values()), "total": len(rows)})
+        except Exception as exc:
+            logger.exception("documents/search failed")
+            log_infra_event("error", f"documents/search failed: {exc}")
+            _json_response(self, 500, {"error": "Failed to search documents"})
 
     def _handle_projects_simple(self) -> None:
         """Lightweight project list for document move/copy picker. Recent 20."""
         user = _require_auth(self)
         if not user:
             return
-        rows = db.query(
-            """SELECT o.id, o.title, s.title AS stage_title
-               FROM opportunities o
-               LEFT JOIN stages s ON s.id = o.stage_id
-               ORDER BY o.id DESC
-               LIMIT 20""",
-        )
+        qs = parse_qs(urlparse(self.path).query)
+        q = (qs.get("q", [""])[0] or "").strip().lower()
+        if q:
+            rows = db.query(
+                """SELECT o.id, o.title, s.title AS stage_title
+                   FROM opportunities o
+                   LEFT JOIN stages s ON s.id = o.stage_id
+                   WHERE LOWER(o.title) LIKE %s
+                   ORDER BY o.title ASC
+                   LIMIT 20""",
+                (f"%{q}%",),
+            )
+        else:
+            rows = db.query(
+                """SELECT o.id, o.title, s.title AS stage_title
+                   FROM opportunities o
+                   LEFT JOIN stages s ON s.id = o.stage_id
+                   ORDER BY o.id DESC
+                   LIMIT 20""",
+            )
         projects = [{"id": r[0], "title": r[1], "stage": r[2]} for r in rows]
         _json_response(self, 200, {"projects": projects})
 
@@ -2153,13 +2458,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if not user:
             return
         row = db.query(
-            "SELECT title, notes, file_path, file_size, mime_type FROM project_documents WHERE id = %s AND is_deleted = FALSE",
+            "SELECT title, file_path, file_size, mime_type FROM project_documents WHERE id = %s AND is_deleted = FALSE",
             (doc_id,), fetch="one",
         )
         if not row:
             _json_response(self, 404, {"error": "Document not found"})
             return
-        title, notes, file_path, file_size, mime_type = row
+        title, file_path, file_size, mime_type = row
         try:
             body = json.loads(_read_body(self))
         except Exception:
@@ -2191,9 +2496,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 500, {"error": "Failed to copy file"})
             return
         doc_id = db.insert_returning(
-            """INSERT INTO project_documents (title, notes, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-            (title, notes, str(dst.relative_to(ROOT)), file_size, mime_type, uploaded_by, new_opp_id, company_scope),
+            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope)
+               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (title, str(dst.relative_to(ROOT)), file_size, mime_type, uploaded_by, new_opp_id, company_scope),
         )
         _json_response(self, 201, {"id": doc_id, "title": title})
 
@@ -2232,7 +2537,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         _json_response(self, 200, {"ok": True, "count": len(ids)})
 
     def _handle_documents_batch_move(self) -> None:
-        """Move multiple documents to a project (updates opportunity_id, clears personal/company flags)."""
+        """Move multiple documents to a project, personal, or company scope."""
         user = _require_auth(self)
         if not user:
             return
@@ -2243,8 +2548,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         ids = body.get("ids", [])
         new_opp_id = body.get("opportunity_id")
-        if not ids or new_opp_id is None:
-            _json_response(self, 400, {"error": "ids and opportunity_id required"})
+        company_scope = body.get("company_scope", False)
+        if not ids:
+            _json_response(self, 400, {"error": "ids required"})
             return
         is_admin = user.get("is_admin")
         rows = db.query(
@@ -2252,11 +2558,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             (ids,),
         )
         for r in rows:
-            doc_id, uploaded_by, company_scope = r[0], r[1], r[2]
+            doc_id, uploaded_by, cs = r[0], r[1], r[2]
             if uploaded_by != user["id"] and not is_admin:
                 _json_response(self, 403, {"error": f"Not authorized to move document {doc_id}"})
                 return
-        # Move file to new project directory
         for doc_id in ids:
             row = db.query(
                 "SELECT file_path, title FROM project_documents WHERE id = %s AND is_deleted = FALSE",
@@ -2266,18 +2571,28 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 continue
             old_path, title = row
             src = ROOT / old_path
-            new_dir = DOCUMENT_STORAGE_PATH / "shared" / "project" / str(new_opp_id)
-            new_dir.mkdir(parents=True, exist_ok=True)
-            safe_name = re.sub(r'[^\w.\-]', '_', title)
-            new_path = new_dir / f"{int(time.time())}_{safe_name}"
-            if src.exists():
-                new_path.write_bytes(src.read_bytes())
-            db.execute(
-                """UPDATE project_documents
-                   SET opportunity_id = %s, company_scope = FALSE, uploaded_by = NULL, file_path = %s
-                   WHERE id = %s""",
-                (new_opp_id, str(new_path.relative_to(ROOT)), doc_id),
-            )
+            if new_opp_id is not None:
+                new_dir = DOCUMENT_STORAGE_PATH / "shared" / "project" / str(new_opp_id)
+                new_dir.mkdir(parents=True, exist_ok=True)
+                safe_name = re.sub(r'[^\w.\-]', '_', title)
+                new_path = new_dir / f"{int(time.time())}_{safe_name}"
+                if src.exists():
+                    new_path.write_bytes(src.read_bytes())
+                db.execute(
+                    """UPDATE project_documents
+                       SET opportunity_id = %s, company_scope = FALSE, uploaded_by = NULL, file_path = %s, folder_id = NULL
+                       WHERE id = %s""",
+                    (new_opp_id, str(new_path.relative_to(ROOT)), doc_id),
+                )
+            else:
+                # Move to personal or company (no file move needed — same storage area)
+                new_opp_val = "NULL"
+                db.execute(
+                    """UPDATE project_documents
+                       SET opportunity_id = NULL, company_scope = %s, uploaded_by = %s, folder_id = NULL
+                       WHERE id = %s""",
+                    (company_scope, user["id"], doc_id),
+                )
         _json_response(self, 200, {"ok": True, "count": len(ids)})
 
     def _handle_documents_batch_copy(self) -> None:
@@ -2300,12 +2615,12 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         for doc_id in ids:
             # Use the single copy handler logic inline
             row = db.query(
-                "SELECT title, notes, file_path, file_size, mime_type FROM project_documents WHERE id = %s AND is_deleted = FALSE",
+                "SELECT title, file_path, file_size, mime_type FROM project_documents WHERE id = %s AND is_deleted = FALSE",
                 (doc_id,), fetch="one",
             )
             if not row:
                 continue
-            title, notes, file_path, file_size, mime_type = row
+            title, file_path, file_size, mime_type = row
             if new_opp_id is not None:
                 scope_dir = DOCUMENT_STORAGE_PATH / "shared" / "project" / str(new_opp_id)
                 company_scope, uploaded_by = False, None
@@ -2324,10 +2639,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                 dst.write_bytes(src.read_bytes())
             except OSError:
                 continue
-            db.insert_returning(
-                """INSERT INTO project_documents (title, notes, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-                (title, notes, str(dst.relative_to(ROOT)), file_size, mime_type, uploaded_by, new_opp_id, company_scope),
+            db.execute(
+                """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (title, str(dst.relative_to(ROOT)), file_size, mime_type, uploaded_by, new_opp_id, company_scope),
             )
             copied += 1
         _json_response(self, 200, {"ok": True, "copied": copied})
@@ -2362,14 +2677,22 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         file_path = scope_dir / unique_name
         file_path.write_bytes(data)
         file_size = len(data)
+        # Extract optional folder_id from form data
+        folder_id = None
+        folder_field = parsed.get("folder_id")
+        if folder_field and folder_field.get("data"):
+            try:
+                folder_id = int(folder_field["data"].decode("utf-8").strip())
+            except (ValueError, UnicodeDecodeError):
+                folder_id = None
         doc_id = db.insert_returning(
-            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope)
-               VALUES (%s, %s, %s, %s, %s, NULL, FALSE) RETURNING id""",
-            (title, str(file_path.relative_to(ROOT)), file_size, mime_type, user["id"]),
+            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope, folder_id)
+               VALUES (%s, %s, %s, %s, %s, NULL, FALSE, %s) RETURNING id""",
+            (title, str(file_path.relative_to(ROOT)), file_size, mime_type, user["id"], folder_id),
         )
         _json_response(self, 201, {
             "id": doc_id, "title": title, "fileSize": file_size,
-            "mimeType": mime_type, "editUrl": f"/api/v2/documents/{doc_id}/editor-config",
+            "mimeType": mime_type, "editUrl": f"/doc-editor.html?id={doc_id}",
         })
 
     def _handle_document_upload_company(self) -> None:
@@ -2402,33 +2725,396 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         file_path = scope_dir / unique_name
         file_path.write_bytes(data)
         file_size = len(data)
+        # Extract optional folder_id from form data
+        folder_id = None
+        folder_field = parsed.get("folder_id")
+        if folder_field and folder_field.get("data"):
+            try:
+                folder_id = int(folder_field["data"].decode("utf-8").strip())
+            except (ValueError, UnicodeDecodeError):
+                folder_id = None
         doc_id = db.insert_returning(
-            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope)
-               VALUES (%s, %s, %s, %s, %s, NULL, TRUE) RETURNING id""",
-            (title, str(file_path.relative_to(ROOT)), file_size, mime_type, user["id"]),
+            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope, folder_id)
+               VALUES (%s, %s, %s, %s, %s, NULL, TRUE, %s) RETURNING id""",
+            (title, str(file_path.relative_to(ROOT)), file_size, mime_type, user["id"], folder_id),
         )
         _json_response(self, 201, {
             "id": doc_id, "title": title, "fileSize": file_size,
-            "mimeType": mime_type, "editUrl": f"/api/v2/documents/{doc_id}/editor-config",
+            "mimeType": mime_type, "editUrl": f"/doc-editor.html?id={doc_id}",
         })
 
     def _doc_row(self, r: tuple) -> dict:
         """Build document response dict from a project_documents row."""
         # r may include opp_title as last element (for search grouped results)
-        doc_id, title, notes, file_path, file_size, mime_type, uploaded_at, opportunity_id, company_scope = r[:9]
+        doc_id, title, file_path, file_size, mime_type, uploaded_at, opportunity_id, company_scope = r[:8]
+        folder_id = r[8] if len(r) > 8 else None
         result = {
             "id": doc_id,
             "title": title,
-            "notes": notes,
             "filePath": file_path,
             "fileSize": file_size,
             "mimeType": mime_type,
             "uploadedAt": uploaded_at.isoformat() if uploaded_at else None,
             "opportunityId": opportunity_id,
             "companyScope": company_scope,
-            "editUrl": f"/api/v2/documents/{doc_id}/editor-config",
+            "folderId": folder_id,
+            "editUrl": f"/doc-editor.html?id={doc_id}",
         }
         return result
+
+    def _handle_document_folders_list(self, qs: dict) -> None:
+        """List folders. scope=personal|company, optional folder_id for nesting."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            scope = qs.get("scope", ["personal"])[0]
+            folder_id = qs.get("folder_id", [None])[0]
+            if folder_id:
+                folder_id = int(folder_id)
+            if scope == "personal":
+                if folder_id:
+                    rows = db.query(
+                        """SELECT id, name, parent_id FROM document_folders
+                           WHERE parent_id = %s AND scope = 'personal' AND uploaded_by = %s AND is_deleted = FALSE
+                           ORDER BY name""",
+                        (folder_id, user["id"]),
+                    )
+                else:
+                    rows = db.query(
+                        """SELECT id, name, parent_id FROM document_folders
+                           WHERE parent_id IS NULL AND scope = 'personal' AND uploaded_by = %s AND is_deleted = FALSE
+                           ORDER BY name""",
+                        (user["id"],),
+                    )
+            else:
+                if folder_id:
+                    rows = db.query(
+                        """SELECT id, name, parent_id FROM document_folders
+                           WHERE parent_id = %s AND scope = 'company' AND is_deleted = FALSE
+                           ORDER BY name""",
+                        (folder_id,),
+                    )
+                else:
+                    rows = db.query(
+                        """SELECT id, name, parent_id FROM document_folders
+                           WHERE parent_id IS NULL AND scope = 'company' AND is_deleted = FALSE
+                           ORDER BY name""",
+                    )
+            folders = [{"id": r[0], "name": r[1], "parentId": r[2]} for r in rows]
+            _json_response(self, 200, {"folders": folders})
+        except Exception as exc:
+            logger.exception("documents/folders failed")
+            log_infra_event("error", f"documents/folders failed: {exc}")
+            _json_response(self, 500, {"error": "Failed to load folders"})
+
+    def _handle_document_folders_tree(self, qs: dict) -> None:
+        """Return all folders for a scope as a flat list (for building a sidebar tree)."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            scope = qs.get("scope", ["personal"])[0]
+            if scope == "personal":
+                rows = db.query(
+                    """SELECT id, name, parent_id FROM document_folders
+                       WHERE scope = 'personal' AND uploaded_by = %s AND is_deleted = FALSE
+                       ORDER BY name""",
+                    (user["id"],),
+                )
+            else:
+                rows = db.query(
+                    """SELECT id, name, parent_id FROM document_folders
+                       WHERE scope = 'company' AND is_deleted = FALSE
+                       ORDER BY name""",
+                )
+            folders = [{"id": r[0], "name": r[1], "parentId": r[2]} for r in rows]
+            _json_response(self, 200, {"folders": folders})
+        except Exception as exc:
+            logger.exception("documents/folders/tree failed")
+            log_infra_event("error", f"documents/folders/tree failed: {exc}")
+            _json_response(self, 500, {"error": "Failed to load folder tree"})
+
+    def _handle_document_folder_create(self) -> None:
+        """Create a new folder."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            body = json.loads(_read_body(self))
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        name = (body.get("name") or "").strip()
+        scope = body.get("scope", "personal")
+        parent_id = body.get("parent_id")
+        if not name:
+            _json_response(self, 400, {"error": "Folder name required"})
+            return
+        if scope not in ("personal", "company"):
+            _json_response(self, 400, {"error": "Scope must be personal or company"})
+            return
+        if scope == "personal":
+            folder_id = db.insert_returning(
+                """INSERT INTO document_folders (name, scope, uploaded_by, parent_id)
+                   VALUES (%s, 'personal', %s, %s) RETURNING id""",
+                (name, user["id"], parent_id),
+            )
+        else:
+            folder_id = db.insert_returning(
+                """INSERT INTO document_folders (name, scope, parent_id)
+                   VALUES (%s, 'company', %s) RETURNING id""",
+                (name, parent_id),
+            )
+        _json_response(self, 201, {"id": folder_id, "name": name})
+
+    def _handle_document_folder_rename(self, folder_id: int) -> None:
+        """Rename a folder."""
+        user = _require_auth(self)
+        if not user:
+            return
+        row = db.query(
+            "SELECT uploaded_by, scope FROM document_folders WHERE id = %s AND is_deleted = FALSE",
+            (folder_id,), fetch="one",
+        )
+        if not row:
+            _json_response(self, 404, {"error": "Folder not found"})
+            return
+        uploaded_by, scope = row
+        is_admin = user.get("is_admin")
+        if scope == "personal" and uploaded_by != user["id"] and not is_admin:
+            _json_response(self, 403, {"error": "Not authorized"})
+            return
+        try:
+            body = json.loads(_read_body(self))
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        name = (body.get("name") or "").strip()
+        if not name:
+            _json_response(self, 400, {"error": "Folder name required"})
+            return
+        db.execute("UPDATE document_folders SET name = %s WHERE id = %s", (name, folder_id))
+        _json_response(self, 200, {"ok": True})
+
+    def _handle_document_folder_delete(self, folder_id: int) -> None:
+        """Delete a folder and all its contents (recursive soft-delete)."""
+        user = _require_auth(self)
+        if not user:
+            return
+        row = db.query(
+            "SELECT uploaded_by, scope FROM document_folders WHERE id = %s AND is_deleted = FALSE",
+            (folder_id,), fetch="one",
+        )
+        if not row:
+            _json_response(self, 404, {"error": "Folder not found"})
+            return
+        uploaded_by, scope = row
+        is_admin = user.get("is_admin")
+        if scope == "personal" and uploaded_by != user["id"] and not is_admin:
+            _json_response(self, 403, {"error": "Not authorized"})
+            return
+        try:
+            # Recursively soft-delete all descendant folders using CTE
+            db.execute("""
+                WITH RECURSIVE folder_tree AS (
+                    SELECT id FROM document_folders WHERE id = %s
+                    UNION ALL
+                    SELECT df.id FROM document_folders df
+                    JOIN folder_tree ft ON df.parent_id = ft.id
+                )
+                UPDATE document_folders SET is_deleted = TRUE WHERE id IN (SELECT id FROM folder_tree)
+            """, (folder_id,))
+            # Soft-delete all documents in this folder and its subfolders
+            db.execute("""
+                WITH RECURSIVE folder_tree AS (
+                    SELECT id FROM document_folders WHERE id = %s
+                    UNION ALL
+                    SELECT df.id FROM document_folders df
+                    JOIN folder_tree ft ON df.parent_id = ft.id
+                )
+                UPDATE project_documents SET is_deleted = TRUE, deleted_at = NOW()
+                WHERE folder_id IN (SELECT id FROM folder_tree) AND is_deleted = FALSE
+            """, (folder_id,))
+            _json_response(self, 200, {"ok": True})
+        except Exception as exc:
+            logger.exception("documents/folders/%d delete failed", folder_id)
+            log_infra_event("error", f"documents/folders/{folder_id} delete failed: {exc}")
+            _json_response(self, 500, {"error": "Failed to delete folder"})
+
+    def _handle_document_create_blank(self) -> None:
+        """Create a blank document from a template (Word or Excel)."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            body = json.loads(_read_body(self))
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        doc_type = body.get("type", "word")
+        title = (body.get("title") or "").strip()
+        scope = body.get("scope", "personal")
+        folder_id = body.get("folder_id")
+        new_opp_id = body.get("opportunity_id")
+        if not title:
+            _json_response(self, 400, {"error": "Document title required"})
+            return
+        if doc_type == "word":
+            ext = "docx"
+            mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            data = _blank_docx_bytes()
+        elif doc_type == "excel":
+            ext = "xlsx"
+            mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            data = _blank_xlsx_bytes()
+        else:
+            _json_response(self, 400, {"error": "type must be word or excel"})
+            return
+        full_title = f"{title}.{ext}"
+        # Determine storage directory
+        if new_opp_id is not None:
+            scope_dir = DOCUMENT_STORAGE_PATH / "shared" / "project" / str(new_opp_id)
+            company_scope = False
+            uploaded_by = None
+            folder_id = None
+        elif scope == "company":
+            scope_dir = DOCUMENT_STORAGE_PATH / "shared" / "company"
+            company_scope = True
+            uploaded_by = None
+        else:
+            scope_dir = DOCUMENT_STORAGE_PATH / "shared" / "personal" / str(user["id"])
+            company_scope = False
+            uploaded_by = user["id"]
+        scope_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = re.sub(r'[^\w.\-]', '_', full_title)
+        unique_name = f"{int(time.time())}_{safe_name}"
+        file_path = scope_dir / unique_name
+        file_path.write_bytes(data)
+        file_size = len(data)
+        doc_id = db.insert_returning(
+            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope, folder_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (full_title, str(file_path.relative_to(ROOT)), file_size, mime, uploaded_by, new_opp_id, company_scope, folder_id),
+        )
+        _json_response(self, 201, {
+            "id": doc_id, "title": full_title, "fileSize": file_size,
+            "mimeType": mime, "editUrl": f"/doc-editor.html?id={doc_id}",
+        })
+
+    def _handle_document_command(self, doc_id: int) -> None:
+        """Proxy a command (e.g. meta rename) to OnlyOffice Command Service."""
+        user = _require_auth(self)
+        if not user:
+            return
+        if not DOCS_PUBLIC_URL or not DOCS_JWT_SECRET:
+            _json_response(self, 503, {"error": "Document Server not configured"})
+            return
+        try:
+            body = json.loads(_read_body(self))
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        row = db.query(
+            "SELECT file_path FROM project_documents WHERE id = %s AND is_deleted = FALSE",
+            (doc_id,), fetch="one",
+        )
+        if not row:
+            _json_response(self, 404, {"error": "Document not found"})
+            return
+        file_path = row[0]
+        key = _sign_jwt({"id": doc_id, "path": file_path, "ts": int(time.time())}, DOCS_JWT_SECRET)
+        command = dict(body)
+        command["key"] = key
+        token = _sign_jwt(command, DOCS_JWT_SECRET)
+        command["token"] = token
+        try:
+            cmd_url = f"{DOCS_PUBLIC_URL}/coauthoring/CommandService.ashx"
+            req = urllib.request.Request(
+                cmd_url,
+                data=json.dumps(command).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read() or b"{}")
+            _json_response(self, 200, result)
+        except Exception as exc:
+            logger.exception("Document command proxy failed")
+            _json_response(self, 502, {"error": f"Command Service error: {exc}"})
+
+    def _handle_document_save_as(self) -> None:
+        """Handle Save As from OnlyOffice editor — download file and create new doc."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            body = json.loads(_read_body(self))
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        file_url = body.get("url")
+        title = (body.get("title") or "").strip()
+        source_doc_id = body.get("source_doc_id")
+        scope = body.get("scope")
+        folder_id = body.get("folder_id")
+        new_opp_id = body.get("opportunity_id")
+        if not file_url or not title:
+            _json_response(self, 400, {"error": "url and title required"})
+            return
+        # If no explicit scope/opportunity, look up from the source document
+        if source_doc_id and not scope and not new_opp_id:
+            src = db.query(
+                "SELECT opportunity_id, company_scope, folder_id, uploaded_by FROM project_documents WHERE id = %s AND is_deleted = FALSE",
+                (source_doc_id,), fetch="one",
+            )
+            if src:
+                new_opp_id = src[0]
+                scope = "company" if src[1] else "personal"
+                folder_id = src[2] if not new_opp_id else None
+        if not scope:
+            scope = "personal"
+        try:
+            data = _download_from_docserver(file_url, timeout=120)
+        except Exception as exc:
+            _json_response(self, 502, {"error": f"Failed to download file: {exc}"})
+            return
+        file_ext = Path(title).suffix.lstrip(".").lower() or "docx"
+        mime_map = {
+            "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "pdf": "application/pdf",
+        }
+        mime = mime_map.get(file_ext, "application/octet-stream")
+        if new_opp_id is not None:
+            scope_dir = DOCUMENT_STORAGE_PATH / "shared" / "project" / str(new_opp_id)
+            company_scope = False
+            uploaded_by = None
+            folder_id = None
+        elif scope == "company":
+            scope_dir = DOCUMENT_STORAGE_PATH / "shared" / "company"
+            company_scope = True
+            uploaded_by = None
+        else:
+            scope_dir = DOCUMENT_STORAGE_PATH / "shared" / "personal" / str(user["id"])
+            company_scope = False
+            uploaded_by = user["id"]
+        scope_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = re.sub(r'[^\w.\-]', '_', title)
+        unique_name = f"{int(time.time())}_{safe_name}"
+        file_path = scope_dir / unique_name
+        file_path.write_bytes(data)
+        file_size = len(data)
+        doc_id = db.insert_returning(
+            """INSERT INTO project_documents (title, file_path, file_size, mime_type, uploaded_by, opportunity_id, company_scope, folder_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (title, str(file_path.relative_to(ROOT)), file_size, mime, uploaded_by, new_opp_id, company_scope, folder_id),
+        )
+        _json_response(self, 201, {
+            "id": doc_id, "title": title, "fileSize": file_size,
+            "editUrl": f"/doc-editor.html?id={doc_id}",
+        })
 
     def _handle_document_callback(self, doc_id: int) -> None:
         """OnlyOffice Document Server save callback. Saves updated file if provided."""
@@ -2438,12 +3124,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             _json_response(self, 200, {"error": 0})
             return
         status = payload.get("status")
-        if status in (2, 6):
+        if status in (1, 2, 4):
             url = payload.get("url")
             if url:
                 try:
-                    with urllib.request.urlopen(url, timeout=60) as resp:
-                        data = resp.read()
+                    data = _download_from_docserver(url)
                     row = db.query(
                         "SELECT file_path FROM project_documents WHERE id = %s AND is_deleted = FALSE",
                         (doc_id,), fetch="one",
@@ -2455,8 +3140,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                             "UPDATE project_documents SET file_size = %s WHERE id = %s",
                             (len(data), doc_id),
                         )
-                except Exception:
-                    pass
+                        log_infra_event("info", f"Callback saved doc {doc_id}: {len(data)} bytes (status={status})")
+                except Exception as exc:
+                    log_infra_event("error", f"Callback download failed for doc {doc_id}: {exc}")
         _json_response(self, 200, {"error": 0})
 
     # ── Batch Tags ──────────────────────────────────────────────────────────

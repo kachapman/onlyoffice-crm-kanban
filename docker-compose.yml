@@ -2,7 +2,13 @@ services:
   dashboard:
     container_name: sietch-crm
     build: .
-    restart: unless-stopped
+    restart: on-failure:5
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8766/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     env_file:
       - .env
     environment:
@@ -11,6 +17,7 @@ services:
       DB_HOST: db
       DB_PORT: "5432"
       DOCS_INTERNAL_URL: http://docserver:8080
+      CONTAINER_NAME: "sietch-crm"
     depends_on:
       db:
         condition: service_healthy

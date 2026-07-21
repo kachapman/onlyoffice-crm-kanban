@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Document Editor — Sietch CRM</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #181b24;
+      --text: #e8ecf4;
+      --muted: #8b95a8;
+      --accent: #4f8cff;
+    }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "DM Sans", system-ui, sans-serif;
+    }
+    #loading, #error {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      padding: 2rem;
+      text-align: center;
+    }
+    #error { display: none; }
+    #editor { height: 100%; }
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid rgba(255,255,255,0.1);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-bottom: 1rem;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    h1 { font-size: 1.25rem; margin: 0 0 0.5rem; }
+    p { color: var(--muted); margin: 0; max-width: 500px; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <div id="loading">
+    <div class="spinner"></div>
+    <p>Loading document editor…</p>
+  </div>
+  <div id="error">
+    <h1>Could not open editor</h1>
+    <p id="error-message">Document editor is not available.</p>
+  </div>
+  <div id="editor"></div>
+
+  <script>
+    (async function() {
+      const params = new URLSearchParams(window.location.search);
+      const docId = params.get("id");
+      const loadingEl = document.getElementById("loading");
+      const errorEl = document.getElementById("error");
+      const errorMsgEl = document.getElementById("error-message");
+
+      function showError(msg) {
+        loadingEl.style.display = "none";
+        errorEl.style.display = "flex";
+        errorMsgEl.textContent = msg;
+      }
+
+      if (!docId || !/^\d+$/.test(docId)) {
+        showError("Invalid document ID.");
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/v2/documents/${docId}/editor-config`, { credentials: "same-origin" });
+        const text = await res.text();
+        let config;
+        try {
+          config = text ? JSON.parse(text) : {};
+        } catch {
+          showError("Server returned an invalid editor configuration.");
+          return;
+        }
+
+        if (!res.ok) {
+          showError(config.error || config.message || `Server error (HTTP ${res.status}).`);
+          return;
+        }
+
+        if (!config.docsApiUrl) {
+          showError("Document Server API URL is not configured.");
+          return;
+        }
+
+        const script = document.createElement("script");
+        script.src = config.docsApiUrl;
+        script.onload = () => {
+          if (typeof DocsAPI === "undefined" || typeof DocsAPI.DocEditor !== "function") {
+            showError("Document Server API failed to load.");
+            return;
+          }
+          loadingEl.style.display = "none";
+
+          config.events = config.events || {};
+
+          // onMetaChange: receive title renames broadcast from OnlyOffice (from any user)
+          config.events.onMetaChange = function(e) {
+            if (e && e.data && e.data.title) {
+              fetch(`/api/v2/documents/${docId}`, {
+                method: "PATCH",
+                credentials: "same-origin",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({ title: e.data.title }),
+              }).catch(() => {});
+            }
+          };
+
+          // onRequestRename: user clicked "Rename..." in editor title bar
+          config.events.onRequestRename = function(e) {
+            const newTitle = e && e.data;
+            if (!newTitle) return;
+            // 1) Update CRM database
+            fetch(`/api/v2/documents/${docId}`, {
+              method: "PATCH",
+              credentials: "same-origin",
+              headers: {"Content-Type": "application/json"},
+              body: JSON.stringify({ title: newTitle }),
+            }).catch(() => {});
+            // 2) Broadcast rename to all editors via OnlyOffice Command Service
+            fetch(`/api/v2/documents/${docId}/command`, {
+              method: "POST",
+              credentials: "same-origin",
+              headers: {"Content-Type": "application/json"},
+              body: JSON.stringify({ c: "meta", meta: { title: newTitle } }),
+            }).catch(() => {});
+          };
+
+          // onRequestSaveAs: user clicked "Save Copy as..." in File menu
+          config.events.onRequestSaveAs = function(e) {
+            if (!e || !e.data) return;
+            const fileUrl = e.data.url;
+            const title = e.data.title || "Document";
+            if (!fileUrl) return;
+            fetch("/api/v2/documents/save-as", {
+              method: "POST",
+              credentials: "same-origin",
+              headers: {"Content-Type": "application/json"},
+              body: JSON.stringify({ url: fileUrl, title: title, source_doc_id: Number(docId) }),
+            }).then(r => r.json()).then(data => {
+              if (data && data.error) {
+                alert("Save As failed: " + data.error);
+              } else {
+                try { localStorage.setItem("crm-docs-refresh", Date.now().toString()); } catch {}
+                if (data && data.editUrl) {
+                  window.open(data.editUrl, "_blank");
+                }
+              }
+            }).catch(err => {
+              alert("Save As failed: " + err.message);
+            });
+          };
+
+          new DocsAPI.DocEditor("editor", config);
+        };
+        script.onerror = () => {
+          showError(`Could not load the document editor from the configured server.\nURL: ${config.docsApiUrl}`);
+        };
+        document.head.appendChild(script);
+      } catch (err) {
+        showError("Failed to reach the server. Check your connection or try again.");
+      }
+    })();
+  </script>
+</body>
+</html>

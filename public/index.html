@@ -19,7 +19,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=1.87.4" />
+  <link rel="stylesheet" href="styles.css?v=1.87.11" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css" />
 </head>
 <body>
   <!-- Early vanilla script for error handling and fallback in case main app.js fails to parse/execute (prevents blank screen) -->
@@ -82,24 +83,35 @@
        the sign-in form is still visible instead of a blank page. -->
   <div id="app" class="app hidden">
     <header class="hero">
-      <button type="button" id="admin-console-btn" class="btn btn-secondary btn-icon-only admin-console-btn hidden" title="Admin Console" aria-label="Admin Console">
-        <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="3"/>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-        </svg>
-      </button>
-      <button type="button" id="logout-btn" class="btn btn-ghost hero-sign-out">Sign out</button>
+      <div class="hero-header-actions">
+        <button type="button" id="admin-console-btn" class="btn btn-secondary btn-icon-only header-control-btn hidden" title="Admin Console" aria-label="Admin Console">
+          <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+        </button>
+        <span id="server-health-indicator" class="server-health-indicator header-control-btn hidden" title="Server status" role="status" aria-live="polite">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+            <path d="M3 7a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v2a3 3 0 0 1 -3 3h-12a3 3 0 0 1 -3 -3"/>
+            <path d="M3 15a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v2a3 3 0 0 1 -3 3h-12a3 3 0 0 1 -3 -3l0 -2"/>
+            <path d="M7 8l0 .01"/>
+            <path d="M7 16l0 .01"/>
+          </svg>
+        </span>
+        <button type="button" id="logout-btn" class="btn btn-ghost header-control-btn hero-sign-out">Sign out</button>
+      </div>
       <div class="hero-inner">
         <div class="hero-copy">
-          <p class="eyebrow">Sietch CRM · OnlyOffice CRM</p>
+          <p class="eyebrow">Sietch CRM Dashboard</p>
           <h1 class="hero-title">Workspace <em>dashboard</em></h1>
         </div>
         <div class="hero-actions">
-          <button type="button" id="search-popup-btn" class="btn btn-secondary btn-icon-only" title="Search deals" aria-label="Search deals">
-            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <circle cx="11" cy="11" r="8"/>
-              <path d="m21 21-4.3-4.3"/>
-            </svg>
+          <button type="button" id="quick-note-btn" class="btn btn-primary btn-icon-only" title="Quick note" aria-label="Quick note">
+            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4"/><path d="M2 6h4"/><path d="M2 10h4"/><path d="M2 14h4"/><path d="M2 18h4"/><path d="M21.378 5.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z"/></svg>
+          </button>
+          <button type="button" id="new-opportunity-btn" class="btn btn-primary btn-icon-only" title="New opportunity" aria-label="New opportunity">
+            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 14h6"/><path d="M12 17v-6"/></svg>
           </button>
           <div class="global-opp-search" id="global-opp-search">
             <label class="visually-hidden" for="global-opp-search-input">Search opportunities</label>
@@ -112,11 +124,11 @@
             />
             <div id="global-opp-search-results" class="global-opp-search-results hidden" role="listbox"></div>
           </div>
-          <button type="button" id="quick-note-btn" class="btn btn-primary btn-icon-only" title="Quick note" aria-label="Quick note">
-            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4"/><path d="M2 6h4"/><path d="M2 10h4"/><path d="M2 14h4"/><path d="M2 18h4"/><path d="M21.378 5.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z"/></svg>
-          </button>
-          <button type="button" id="new-opportunity-btn" class="btn btn-primary btn-icon-only" title="New opportunity" aria-label="New opportunity">
-            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 14h6"/><path d="M12 17v-6"/></svg>
+          <button type="button" id="search-popup-btn" class="btn btn-secondary btn-icon-only" title="Search deals" aria-label="Search deals">
+            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="11" cy="11" r="8"/>
+              <path d="m21 21-4.3-4.3"/>
+            </svg>
           </button>
           <!-- Team / Presence button: hidden — functionality moved to team tile toolbar -->
           <button type="button" id="presence-btn" class="btn btn-secondary btn-icon-only hidden" title="Team presence &amp; messages" aria-label="Team presence &amp; messages">
@@ -133,9 +145,11 @@
             <span id="presence-online-badge" class="presence-badge presence-green-count hidden" aria-hidden="true" style="background:#22c55e; top:auto; bottom:-2px; right:-2px; font-size:8px; min-width:10px; height:10px; line-height:9px; padding:0 1px;"></span>
           </button>
           <button type="button" id="mail-inbox-btn" class="btn btn-secondary btn-icon-only" title="CRM Mail Quick View" aria-label="CRM Mail Quick View">
-            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
-              <polyline points="22,6 12,13 2,6"></polyline>
+            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+              <path d="M10 21v-6.5a3.5 3.5 0 0 0 -7 0v6.5h18v-6a4 4 0 0 0 -4 -4h-10.5" />
+              <path d="M12 11v-8h4l2 2l-2 2h-4" />
+              <path d="M6 15h1" />
             </svg>
           </button>
           <button type="button" id="documents-btn" class="btn btn-secondary btn-icon-only" title="Documents" aria-label="Documents">
@@ -175,17 +189,30 @@
     <div id="dashboard-panel-row" class="dashboard-panel-row" aria-label="CRM notifications and tasks"></div>
     <div id="dashboard-tiles" class="dashboard-tiles" aria-label="Dashboard tiles"></div>
 
-    <!-- Search sidebar trigger tab — right edge, above bookmark trigger, shown when search is minimized -->
-    <button type="button" id="search-trigger" class="search-trigger trigger-hidden" title="Search" aria-label="Search">
-      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-      <span class="search-trigger-text">Search</span>
-    </button>
+    <!-- Right-edge trigger stack: minimized modals above, bookmarks at bottom -->
+    <div class="right-sidebar-triggers">
+      <button type="button" id="search-trigger" class="search-trigger trigger-hidden" title="Search" aria-label="Search">
+        <i class="ti ti-search"></i>
+      </button>
 
-    <!-- Bookmark sidebar trigger tab — rounded pill visible on right edge when sidebar is hidden -->
-    <button type="button" id="bookmark-trigger" class="bookmark-trigger" title="Open bookmarks" aria-label="Open bookmarks">
-      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
-      <span class="bookmark-trigger-text">Bookmarks</span>
-    </button>
+      <button type="button" id="email-trigger" class="modal-sidebar-trigger trigger-hidden" title="Email" aria-label="Email">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+          <path d="M10 21v-6.5a3.5 3.5 0 0 0 -7 0v6.5h18v-6a4 4 0 0 0 -4 -4h-10.5" />
+          <path d="M12 11v-8h4l2 2l-2 2h-4" />
+          <path d="M6 15h1" />
+        </svg>
+      </button>
+
+      <button type="button" id="documents-trigger" class="modal-sidebar-trigger trigger-hidden" title="Documents" aria-label="Documents">
+        <i class="ti ti-files"></i>
+      </button>
+
+      <button type="button" id="bookmark-trigger" class="bookmark-trigger" title="Open bookmarks" aria-label="Open bookmarks">
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+        <span class="bookmark-trigger-text">Bookmarks</span>
+      </button>
+    </div>
 
     <!-- Dimming backdrop for bookmark sidebar preview (shown only when preview panel is active) -->
     <div id="bookmark-preview-backdrop" class="bookmark-preview-backdrop hidden"></div>
@@ -242,7 +269,7 @@
   <div id="bookmark-indicator-stack" class="bookmark-indicator-stack hidden" aria-live="polite" aria-label="Notifications"></div>
 
   <div id="add-tile-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="add-tile-modal-title">
-    <div class="modal-backdrop" data-add-tile-dismiss onclick="closeAddTileModal()"></div>
+    <div class="modal-backdrop" data-add-tile-dismiss></div>
     <div class="modal-card modal-card-add-tile">
       <h2 id="add-tile-modal-title" class="modal-title">Add tile</h2>
       <p class="modal-message">Choose a tile type for your dashboard.</p>
@@ -309,7 +336,7 @@
         </div>
       </div>
       <div class="modal-actions" id="add-tile-modal-actions">
-        <button type="button" id="add-tile-cancel" class="btn btn-secondary" onclick="closeAddTileModal()">Cancel</button>
+        <button type="button" id="add-tile-cancel" class="btn btn-secondary">Cancel</button>
       </div>
     </div>
   </div>
@@ -402,7 +429,12 @@
       <div class="mail-inbox-header">
         <h2 id="mail-inbox-title" class="modal-title">CRM Mail Quick View</h2>
         <div class="mail-header-actions">
-          <!-- Close moved to bottom right per request -->
+          <button type="button" id="mail-inbox-minimize" class="btn btn-icon-only modal-header-control modal-minimize-btn" title="Minimize to sidebar">
+            <i class="ti ti-window-minimize"></i>
+          </button>
+          <button type="button" class="btn btn-icon-only modal-header-control" title="Close" data-mail-inbox-dismiss>
+            <i class="ti ti-x"></i>
+          </button>
         </div>
       </div>
 
@@ -457,9 +489,14 @@
         <div class="documents-modal-search-wrap">
           <input type="search" id="documents-search-input" class="documents-search-input" placeholder="Search documents…" autocomplete="off" />
         </div>
-        <button type="button" id="documents-modal-close" class="btn btn-ghost btn-icon-only" title="Close">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-        </button>
+        <div class="documents-modal-header-actions">
+          <button type="button" id="documents-modal-minimize" class="btn btn-icon-only modal-header-control modal-minimize-btn" title="Minimize to sidebar">
+            <i class="ti ti-window-minimize"></i>
+          </button>
+          <button type="button" id="documents-modal-close" class="btn btn-icon-only modal-header-control" title="Close">
+            <i class="ti ti-x"></i>
+          </button>
+        </div>
       </div>
       <div class="documents-modal-body">
         <div class="documents-sidebar" id="documents-sidebar">
@@ -468,7 +505,6 @@
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
               <span>Projects</span>
             </button>
-            <div class="documents-project-list" id="documents-project-list"></div>
             <button type="button" class="documents-scope-btn" data-scope="mydocs" id="docs-scope-mydocs">
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
               <span>My Documents</span>
@@ -479,15 +515,66 @@
             </button>
           </div>
         </div>
+        <button type="button" id="documents-sidebar-toggle" class="documents-sidebar-toggle" title="Toggle sidebar" aria-label="Toggle sidebar">▶</button>
         <div class="documents-main" id="documents-main">
           <div class="documents-toolbar" id="documents-toolbar">
-            <button type="button" id="documents-upload-btn" class="btn btn-primary btn-sm">
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-              Upload
+            <button type="button" id="documents-upload-btn" class="btn btn-primary btn-icon-only btn-sm" title="Upload">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
             </button>
-            <button type="button" id="documents-delete-btn" class="btn btn-secondary btn-sm" disabled>Delete</button>
-            <button type="button" id="documents-move-btn" class="btn btn-secondary btn-sm" disabled>Move to Project</button>
-            <button type="button" id="documents-copy-btn" class="btn btn-secondary btn-sm" disabled>Copy to…</button>
+            <div class="documents-new-wrap">
+              <button type="button" id="documents-new-btn" class="btn btn-primary btn-icon-only btn-sm" title="New document or folder">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4m0 2a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z"/><path d="M12 8v8"/><path d="M8 12h8"/></svg>
+              </button>
+              <div id="documents-new-menu" class="documents-new-menu hidden">
+                <button type="button" class="documents-new-option" data-new="word">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6b9fd6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M2 15v6h1a2 2 0 0 0 2 -2v-2a2 2 0 0 0 -2 -2h-1"/><path d="M17 16.5a1.5 1.5 0 0 0 -3 0v3a1.5 1.5 0 0 0 3 0"/><path d="M9.5 15a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1 -3 0v-3a1.5 1.5 0 0 1 1.5 -1.5"/><path d="M19.5 15l3 6"/><path d="M19.5 21l3 -6"/></svg>
+                  Word Document
+                </button>
+                <button type="button" class="documents-new-option" data-new="excel">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#4da377" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 12v-7a2 2 0 0 1 2 -2h7l5 5v4"/><path d="M4 15l4 6"/><path d="M4 21l4 -6"/><path d="M17 20.25c0 .414 .336 .75 .75 .75h1.25a1 1 0 0 0 1 -1v-1a1 1 0 0 0 -1 -1h-1a1 1 0 0 1 -1 -1v-1a1 1 0 0 1 1 -1h1.25a.75 .75 0 0 1 .75 .75"/><path d="M11 15v6h3"/></svg>
+                  Excel Spreadsheet
+                </button>
+                <div class="documents-new-divider"></div>
+                <button type="button" class="documents-new-option" data-new="folder">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                  New Folder
+                </button>
+              </div>
+            </div>
+            <select id="documents-actions-select" class="btn btn-secondary btn-sm" disabled>
+              <option value="">Actions…</option>
+              <option value="delete">Delete</option>
+              <option value="move">Move to…</option>
+              <option value="copy">Copy to…</option>
+            </select>
+            <div class="documents-sort-wrap">
+              <button type="button" id="documents-sort-btn" class="btn btn-secondary btn-icon-only btn-sm" title="Sort">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-sort-descending">
+                  <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+                  <path d="M4 6l9 0" />
+                  <path d="M4 12l7 0" />
+                  <path d="M4 18l7 0" />
+                  <path d="M15 15l3 3l3 -3" />
+                  <path d="M18 6l0 12" />
+                </svg>
+              </button>
+              <div id="documents-sort-menu" class="documents-sort-menu hidden">
+                <button type="button" class="documents-sort-option" data-sort="recent">Most recent</button>
+                <button type="button" class="documents-sort-option" data-sort="oldest">Oldest</button>
+                <button type="button" class="documents-sort-option" data-sort="largest">Largest</button>
+                <button type="button" class="documents-sort-option" data-sort="smallest">Smallest</button>
+                <button type="button" class="documents-sort-option" data-sort="name-asc">Name A–Z</button>
+                <button type="button" class="documents-sort-option" data-sort="name-desc">Name Z–A</button>
+              </div>
+            </div>
+            <button type="button" id="documents-rename-btn" class="btn btn-secondary btn-icon-only btn-sm hidden" title="Rename selected file">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-edit" aria-hidden="true">
+                <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+                <path d="M7 7h-1a2 2 0 0 0 -2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2 -2v-1" />
+                <path d="M20.385 6.585a2.1 2.1 0 0 0 -2.97 -2.97l-8.415 8.385v3h3l8.385 -8.415z" />
+                <path d="M12 15l-8.385 8.385" />
+              </svg>
+            </button>
             <span id="documents-selected-count" class="documents-selected-count hidden">0 selected</span>
             <button type="button" id="documents-clear-selection-btn" class="btn btn-ghost btn-sm hidden">Clear</button>
           </div>
@@ -495,6 +582,38 @@
           <div id="documents-drop-overlay" class="documents-drop-overlay hidden">
             <div class="documents-drop-message">Drop files to upload</div>
           </div>
+
+          <!-- Move/Copy popup panel -->
+          <div id="documents-move-copy-panel" class="documents-move-copy-panel hidden" role="dialog" aria-label="Move or copy documents">
+            <div class="documents-move-copy-head">
+              <span id="documents-move-copy-title">Move to</span>
+              <button type="button" id="documents-move-copy-close" class="btn-icon-only" title="Close" aria-label="Close">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M18 6l-12 12" /><path d="M6 6l12 12" /></svg>
+              </button>
+            </div>
+            <div class="documents-move-copy-body">
+              <label class="documents-move-copy-label" for="documents-move-copy-dest">Destination</label>
+              <select id="documents-move-copy-dest" class="documents-move-copy-select">
+                <option value="project">Project</option>
+                <option value="personal">Personal docs</option>
+                <option value="company">Company docs</option>
+              </select>
+            </div>
+            <div class="documents-move-copy-project" id="documents-move-copy-project-wrap">
+              <label class="documents-move-copy-label" for="documents-move-copy-project-input">Search project</label>
+              <div class="documents-move-copy-project-field">
+                <input type="text" id="documents-move-copy-project-input" class="documents-move-copy-project-input" placeholder="Type project name…" autocomplete="off" />
+                <div id="documents-move-copy-project-results" class="documents-move-copy-project-results hidden" role="listbox"></div>
+              </div>
+            </div>
+            <div class="documents-move-copy-actions">
+              <button type="button" id="documents-move-copy-confirm" class="btn btn-primary btn-icon-only" title="Confirm" disabled>
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 5a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14" /><path d="M9 12l2 2l4 -4" /></svg>
+              </button>
+              <button type="button" id="documents-move-copy-cancel" class="btn btn-secondary btn-sm">Cancel</button>
+            </div>
+          </div>
+
           <div id="documents-ctx" class="ctx-menu hidden" role="menu">
             <button type="button" class="ctx-menu-item" data-doc-ctx="open" data-doc-id="">
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
@@ -511,7 +630,7 @@
             </button>
             <button type="button" class="ctx-menu-item" data-doc-ctx="move" data-doc-id="">
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l14 9-14 9V3z"/></svg>
-              Move to Project…
+              Move to…
             </button>
             <button type="button" class="ctx-menu-item" data-doc-ctx="copy" data-doc-id="">
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
@@ -521,6 +640,13 @@
             <button type="button" class="ctx-menu-item ctx-menu-item--danger" data-doc-ctx="delete" data-doc-id="">
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
               Delete
+            </button>
+            <div class="ctx-menu-divider ctx-folder-divider hidden" data-folder-divider></div>
+            <button type="button" class="ctx-menu-item ctx-folder-item hidden" data-doc-ctx="rename-folder" data-folder-id="">
+              Rename folder
+            </button>
+            <button type="button" class="ctx-menu-item ctx-menu-item--danger ctx-folder-item hidden" data-doc-ctx="delete-folder" data-folder-id="">
+              Delete folder
             </button>
           </div>
         </div>
@@ -902,6 +1028,18 @@
   <div id="search-popup-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="search-popup-title">
     <div class="modal-backdrop" data-search-popup-dismiss></div>
     <div class="modal-card modal-card-search-popup">
+      <!-- Header with minimize and close -->
+      <div class="search-popup-header">
+        <span class="search-popup-title" id="search-popup-title">Search</span>
+        <div class="search-popup-header-actions">
+          <button type="button" id="search-popup-minimize" class="btn btn-icon-only modal-header-control modal-minimize-btn" title="Minimize to sidebar">
+            <i class="ti ti-window-minimize"></i>
+          </button>
+          <button type="button" id="search-popup-close" class="btn btn-icon-only modal-header-control" title="Close and clear tabs" data-search-popup-dismiss>
+            <i class="ti ti-x"></i>
+          </button>
+        </div>
+      </div>
       <!-- Tab bar -->
       <div class="search-popup-tabs" id="search-popup-tabs">
         <button type="button" class="search-popup-tab search-popup-tab-projects active" data-tab="projects" title="Projects">
@@ -961,13 +1099,6 @@
 
       <!-- Preview tab containers injected dynamically -->
       <div id="search-popup-preview-containers"></div>
-
-      <div class="modal-actions">
-        <button type="button" id="search-popup-minimize" class="btn btn-secondary btn-icon-only" title="Save tabs and minimize">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 17a1 1 0 0 1 1 -1h3a1 1 0 0 1 1 1v3a1 1 0 0 1 -1 1h-3a1 1 0 0 1 -1 -1l0 -3"/><path d="M4 12v-6a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-6"/><path d="M15 13h-4v-4"/><path d="M11 13l5 -5"/></svg>
-        </button>
-        <button type="button" id="search-popup-close" class="btn btn-secondary" title="Close and clear tabs">Close</button>
-      </div>
     </div>
   </div>
 
@@ -1046,6 +1177,16 @@
               <line x1="8" y1="17" x2="12" y2="17"/>
             </svg>
             Logs
+          </button>
+          <button class="admin-tab-btn btn btn-ghost" data-tab="infra">
+            <svg class="btn-inline-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+              <path d="M3 7a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v2a3 3 0 0 1 -3 3h-12a3 3 0 0 1 -3 -3"/>
+              <path d="M3 15a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v2a3 3 0 0 1 -3 3h-12a3 3 0 0 1 -3 -3l0 -2"/>
+              <path d="M7 8l0 .01"/>
+              <path d="M7 16l0 .01"/>
+            </svg>
+            Infrastructure
           </button>
         </div>
         <div class="admin-main">
@@ -1294,6 +1435,29 @@
           <span id="event-log-health-status" class="event-log-health-status"></span>
         </div>
       </div>
+      <div id="admin-tab-infra" class="admin-tab-content hidden">
+        <h3 style="margin-top:0;">Infrastructure</h3>
+        <div class="infra-section">
+          <h4>Server Status</h4>
+          <div id="infra-server-status" class="infra-status-box">Loading…</div>
+        </div>
+        <div class="infra-section">
+          <h4>Docker Container</h4>
+          <div id="infra-docker-status" class="infra-status-box">Loading…</div>
+        </div>
+        <div class="infra-section">
+          <h4>Infrastructure Log <span id="infra-log-count" class="event-log-health-status"></span></h4>
+          <div id="infra-log-list" class="event-log-list" style="max-height:300px;"></div>
+          <button type="button" id="infra-log-refresh" class="btn btn-secondary btn-sm" style="margin-top:0.5rem;">Refresh</button>
+        </div>
+        <div class="infra-section" style="margin-top:1rem; padding-top:1rem; border-top:1px solid var(--border);">
+          <h4>Restart Controls</h4>
+          <p style="font-size:0.82rem; color:var(--muted); margin:0 0 0.5rem;">Max 5 automatic restarts on failure (Docker policy). Use manual restart to recover.</p>
+          <button type="button" id="infra-restart-server" class="btn btn-secondary btn-sm">Restart server process</button>
+          <button type="button" id="infra-restart-container" class="btn btn-danger btn-sm" style="margin-left:0.5rem;">Restart Docker container</button>
+          <span id="infra-restart-status" class="event-log-health-status" style="margin-left:0.5rem;"></span>
+        </div>
+      </div>
         </div>
       </div>
       <div class="modal-actions">
@@ -1302,6 +1466,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=1.87.6" type="module"></script>
+  <script src="app.js?v=1.93.0" type="module"></script>
 </body>
 </html>

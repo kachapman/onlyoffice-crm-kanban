@@ -1,7 +1,29 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** Phase 2H all code complete (commits 1a2e654, c5de6e5, bd4bf66, 4be8a1e pushed to new-crm). Documents modal (3 scopes, upload, batch ops, context menu), preview modal docs tab overhaul. Documents icon fixed (Tabler files), refresh button removed. Moving development to LAN server — see LAN_SERVER_SETUP.md for full setup instructions. AGENTS.md updated: test-server.py is chaos-only, not for functional testing. No further development until LAN server is operational.
+**Last session summary (for next resume):** 2026-07-20 session: Implemented nested folder system for Documents (Personal + Company scopes). DB migration: `document_folders` table (id, name, parent_id, scope, uploaded_by) + `folder_id` column on `project_documents`. Backend endpoints: `GET /documents/folders`, `POST /documents/folders`, `PATCH /documents/folders/{id}`, `DELETE /documents/folders/{id}` (recursive CTE soft-delete). Personal/Company list endpoints accept `?folder_id=` and return `{documents, folders}`. New "New" button dropdown: Word Document (blank .docx), Excel Spreadsheet (blank .xlsx), New Folder — all created in current folder via `POST /documents/create`. Folder right-click context menu: rename/delete. Folder rows render with folder icon, navigate on click. Breadcrumb navigation for folder scopes. Upload endpoints accept `folder_id` form field. OnlyOffice editor title-bar rename: added `permissions: { rename: true }` to editor config + `onMetaChange` handler in `doc-editor.html` syncs renames back to CRM via `PATCH /documents/{id}`. Cache-bust bumped to v=1.93.0. Server restarted. Updated CHANGELOG.
+
+- Known issue: server process dies when backgrounded from opencode shell (use `setsid` to detach — see ISSUE-012).
+- Known issue: server must be killed and restarted after opencode session exits (use `setsid` to detach — see ISSUE-012).
+- Known issue: OnlyOffice self-signed cert requires SSL bypass in `_download_from_docserver()`.
+- Pending: sidebar toggle arrow direction may be reversed (expanded `◀` vs collapsed `▶`) — needs verification.
+- Documents icons: Tabler SVG file-type icons with muted per-type colors, stroke-width 2 for legibility.
+- Documents: drag-and-drop file move into folders, inline rename, move-to-personal/company, auto-refresh after save-as.
+- Documents: sidebar folder tree (My Documents + Company scopes), XLS icon fix (substring "document" in mime type matched word check first), larger muted folder icons in file list.
+- Sidebar folder tree uses `GET /documents/folders/tree` endpoint, repositions under active scope button, chevron expand/collapse separated from navigation.
+
+- Added server health indicator (tabler-server icon, amber when unreachable, hidden when healthy; 60s poller + api() hooks; skips when tab hidden).
+- Added Admin Infrastructure tab (server status, Docker health, infra log, restart controls).
+- Documents toolbar: Delete/Move/Copy consolidated into dropdown.
+- Docker: healthcheck + `restart: on-failure:5`.
+- In-memory 200-event infra ring buffer in server.py.
+- Added `do_PATCH` handler — stage updates from preview modal now work (`PATCH /api/v2/projects/{id}`).
+- Documents endpoints wrapped in try/except — no more server crashes on DB errors (returns 500 JSON + logs to infra ring buffer).
+- Minimize-to-sidebar for Email, Documents, and Search modals — universal minimize button (— icon) in modal header, icon-only sidebar triggers on right edge. Email saves scroll+selection; Documents saves scope+query; Search saves preview tabs. All coordinate with bookmark sidebar.
+- Tabler icons webfont added for sidebar trigger icons.
+- Search modal header row added with minimize button. Fixed tiny scrollbar in tab bar.
+- Fixed desktop header positions (admin-console-btn restored to right: 9rem; health indicator at right: 11.5rem).
+- Fixed mobile header positions (sign-out rightmost, admin gear left, health indicator left of that).
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 

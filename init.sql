@@ -391,6 +391,19 @@ CREATE TABLE project_photos (
 CREATE INDEX idx_project_photos_opp ON project_photos(opportunity_id);
 CREATE INDEX idx_project_photos_uploaded ON project_photos(uploaded_at DESC);
 
+CREATE TABLE document_folders (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    parent_id INTEGER REFERENCES document_folders(id) ON DELETE CASCADE,
+    scope TEXT NOT NULL CHECK (scope IN ('personal', 'company')),
+    uploaded_by INTEGER REFERENCES users(id),
+    created_at TIMESTAMP DEFAULT NOW(),
+    is_deleted BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE INDEX idx_doc_folders_parent ON document_folders(parent_id) WHERE is_deleted = FALSE;
+CREATE INDEX idx_doc_folders_scope ON document_folders(scope, uploaded_by) WHERE is_deleted = FALSE;
+
 CREATE TABLE project_documents (
     id SERIAL PRIMARY KEY,
     opportunity_id INTEGER REFERENCES opportunities(id) ON DELETE CASCADE,
@@ -403,12 +416,14 @@ CREATE TABLE project_documents (
     uploaded_at TIMESTAMP DEFAULT NOW(),
     is_deleted BOOLEAN DEFAULT FALSE,
     deleted_at TIMESTAMP,
-    company_scope BOOLEAN NOT NULL DEFAULT FALSE
+    company_scope BOOLEAN NOT NULL DEFAULT FALSE,
+    folder_id INTEGER REFERENCES document_folders(id)
 );
 
 CREATE INDEX idx_project_documents_opp ON project_documents(opportunity_id);
 CREATE INDEX idx_project_documents_uploaded ON project_documents(uploaded_at DESC);
 CREATE INDEX idx_documents_company ON project_documents(company_scope) WHERE company_scope = TRUE;
+CREATE INDEX idx_project_documents_folder ON project_documents(folder_id) WHERE folder_id IS NOT NULL;
 
 CREATE TABLE photo_exif_cache (
     image_path TEXT PRIMARY KEY,

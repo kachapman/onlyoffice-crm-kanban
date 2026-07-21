@@ -359,6 +359,7 @@ See **[Toaster_Features](./Toaster_Features)** for dashboard tile/widget ideas (
 | FEAT-006 | Export group/opportunities to CSV | Medium |
 | FEAT-007 | **Advanced Opportunity Search** — filter by stage, user, tags, custom fields, date range (see detailed section below) | High |
 | FEAT-022 | OnlyOffice document / spreadsheet tile (explore) | High — see above |
+| FEAT-023 | **Documents: Save-as conversion** — export doc to PDF/ODT/Markdown from the documents modal context menu or toolbar. OnlyOffice Document Server supports format conversion via callback, but a simpler approach is server-side conversion using LibreOffice headless (`soffice --convert-to pdf`). Needs Docker container with LibreOffice or a dedicated conversion API. | Medium |
 
 ### FEAT-008 — AccuLynx API research (post-v1.1, from user list)
 
