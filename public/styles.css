@@ -1341,9 +1341,11 @@ body {
 }
 
 /* Dashboard tile grid — 4 columns; double height spans 2 rows */
-/* NOTE: no grid-auto-flow:dense — dense re-packs ALL tiles on any span change,
-   causing cascading reflow + visual reorder vs saved order (ISSUE-013). Row-major
-   flow keeps visual order == DOM order == saved order. */
+/* grid-auto-flow: dense backfills holes with later tiles (tight masonry-like
+   packing). It is safe now because resize commits ONCE on pointerup (single
+   re-pack) and SortableJS animates sibling movement — the old jumpiness came
+   from live mousemove commits + fallback clone + transform transitions
+   (ISSUE-013), not from dense itself. */
 .dashboard-tiles {
   --tile-row-height: 400px;
   max-width: 1820px;
@@ -1352,9 +1354,19 @@ body {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   grid-auto-rows: auto;
+  grid-auto-flow: dense;
   gap: 1.25rem;
   align-items: start;
   position: relative; /* anchor for .tile-resize-ghost */
+}
+
+/* .panel is a legacy full-width top-panel class reused on feed/tasks/presence
+   tiles. As a GRID TILE, `margin: 0 auto` shrinks + horizontally centers the
+   tile inside its grid area (dead strips on both sides) and margin-bottom adds
+   extra vertical space. Kill both so tiles stretch to fill their cells. */
+.dashboard-tile.panel {
+  margin: 0;
+  max-width: none;
 }
 
 .dashboard-tile {

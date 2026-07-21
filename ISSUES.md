@@ -22,20 +22,26 @@ Secondary: `mountDashboardTiles()` did `root.innerHTML = ""` + destroy/recreate 
 
 ### Fix (Phase 2D-3)
 
-1. **Removed `grid-auto-flow: dense`** → row-major flow; visual order == DOM order == saved order. Trade-off: occasional gaps with mixed tile widths (accepted by user).
-2. **Ghost-preview resize** — `bindTileResize` rewritten: measure column/gap/offsets ONCE at `pointerdown`; during `pointermove` only a `.tile-resize-ghost` dashed overlay moves (clamped inside the grid content box so it can't force a horizontal scrollbar); span class + `saveLayoutToStorage()` commit exactly ONCE on `pointerup`, only if the span changed. Unified to pointer events (`touch-action: none` on handles).
-3. **SortableJS `forceFallback: false`** — the dragged tile participates in grid flow; neighbors shift once with the existing 200ms animation. Instance is now created once and kept (`root._sortableInstance`), not destroyed/recreated per mount.
-4. **Removed** `transform` transition + `will-change: transform` from `.dashboard-tile` (hover shadow/border kept).
-5. **`mountDashboardTiles()`** — no more `innerHTML = ""` teardown; reorders in place via `appendChild` (preserves listeners/scroll/iframes) + sweeps only stray tiles whose id left the layout.
-6. **Removed dead `toolbar.draggable = true`** from all four tile-chrome creators (`createTileChrome`, `bindGroupTileChrome`, `bindCalendarTileChrome`, `bindNotesTileChrome`) — conflicted with native-mode Sortable drag.
+1. **Ghost-preview resize** — `bindTileResize` rewritten: measure column/gap/offsets ONCE at `pointerdown`; during `pointermove` only a `.tile-resize-ghost` dashed overlay moves (clamped inside the grid content box so it can't force a horizontal scrollbar); span class + `saveLayoutToStorage()` commit exactly ONCE on `pointerup`, only if the span changed. Unified to pointer events (`touch-action: none` on handles).
+2. **SortableJS `forceFallback: false`** — the dragged tile participates in grid flow; neighbors shift once with the existing 200ms animation. Instance is now created once and kept (`root._sortableInstance`), not destroyed/recreated per mount.
+3. **Removed** `transform` transition + `will-change: transform` from `.dashboard-tile` (hover shadow/border kept).
+4. **`mountDashboardTiles()`** — no more `innerHTML = ""` teardown; reorders in place via `appendChild` (preserves listeners/scroll/iframes) + sweeps only stray tiles whose id left the layout.
+5. **Removed dead `toolbar.draggable = true`** from all four tile-chrome creators (`createTileChrome`, `bindGroupTileChrome`, `bindCalendarTileChrome`, `bindNotesTileChrome`) — conflicted with native-mode Sortable drag.
+
+### Follow-up (same day): gaps between tiles
+
+Removing `grid-auto-flow: dense` left dead space whenever tile widths/heights didn't fill a row — user: "not at all how tiling works." Two-part fix:
+
+1. **Restored `grid-auto-flow: dense`** so later tiles backfill holes (tight packing). Safe now: resize commits once per gesture (single re-pack) and the other four jumpiness causes are gone. Accepted behavior: with mixed widths, drop placement during drag can be "filled around" by smaller tiles — deterministic for a given (order, widths) set.
+2. **Root-caused the thin strips between tiles:** the legacy `.panel` class (reused on feed/tasks/presence tiles) carries `margin: 0 auto 1.25rem` from when it was a full-width top panel. Auto left/right margins on a grid item override stretch — the tile shrank to content width and centered in its grid area, leaving dead strips on both sides plus extra bottom margin. Added `.dashboard-tile.panel { margin: 0; max-width: none; }` so panel tiles stretch to fill their cells.
 
 ### Files changed
 
 | File | Role |
 |------|------|
-| `public/styles.css` | no dense flow, `position: relative` grid, ghost styles, handle `touch-action`, tile transition slimmed |
+| `public/styles.css` | dense flow restored, `position: relative` grid, `.dashboard-tile.panel` margin override, ghost styles, handle `touch-action`, tile transition slimmed |
 | `public/app.js` | `bindTileResize` rewrite, `mountDashboardTiles` in-place reorder, Sortable options, 4× draggable removal |
-| `public/index.html` | cache-bust `app.js?v=1.95.5`, `styles.css?v=1.87.12` |
+| `public/index.html` | cache-bust `app.js?v=1.95.5`, `styles.css?v=1.87.13` |
 
 ### Known follow-up (out of scope, not fixed)
 
