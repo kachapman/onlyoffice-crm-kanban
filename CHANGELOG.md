@@ -2,6 +2,31 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
+## Phase 2D-2 — Tile layout redesign
+
+### v1.95.4 (latest)
+- **Removed all auto-pinning:** Feed, Tasks, and Team tiles are no longer pinned to a special top row. All tiles are now normal CSS grid tiles in the main `#dashboard-tiles` container.
+- **Removed dead infrastructure:** Deleted `#dashboard-panel-row`, `#dashboard-tiles-pinned`, `mountPanelTile`, `syncPanelRowLayout`, `ensurePanelToolbarCount`, `ensurePanelLayoutButtons`, `ensurePanelPinButton`, and all `PINNED_TILE_IDS`/`PANEL_TILE_IDS` constants.
+- **Fixed SortableJS:** Now properly destroys old instances before re-creating on `mountDashboardTiles()`. Single instance on `#dashboard-tiles`. No more erratic drag behavior.
+- **Fixed grid layout:** Added `grid-auto-flow: dense` to prevent gaps when mixing tile widths.
+- **Removed chrome-row wrapper:** Toolbar is now a single row with extras inline. No more two-row layout on desktop.
+- **All tiles resizable:** Feed, Tasks, and Team tiles now get resize handles (no longer skipped by pin check).
+- **Task tile buttons fixed:** "New task" and archive buttons now insert next to count badge.
+- **Mobile logo:** Already positioned correctly (left side of first row).
+- Cache-bust bumped to `v=1.95.4`.
+
+- **Drag-to-resize handles:** Removed quarter/half/full/double layout buttons from tile toolbars. Added resize handles in bottom-left and bottom-right corners of tiles. Drag to resize width (snaps to quarter/half/full) and height (normal/double). Ghost outline shows target size during drag. Mobile-friendly with larger touch targets (28x28px).
+- **Pin button:** Added thumbtack pin button to all tile toolbars. Pinned tiles appear in a separate row above unpinned tiles. Feed, Tasks, and Presence default to pinned (preserving current layout). Any tile can be pinned/unpinned. Pin state persisted in profile.
+- **Generalized pinning:** Removed hardcoded `PANEL_TILE_IDS` restriction. Any tile can now be pinned to the top row. `isTilePinnedToTop()` checks `state.tileLayout.pinned[tileId]` for all tiles.
+- **SortableJS cross-container drag:** Pinned and unpinned tiles share a SortableJS `group`, enabling drag between the pinned row and main grid. Dragging a tile out of the pinned row unpins it; dragging into the pinned row pins it.
+- **Group tile click-to-edit title:** Group tile name is now static text with a pencil edit button. Click the pencil to edit, Enter/blur to save, Escape to cancel. No more always-visible input field.
+- **Filter toggle icon:** Replaced "Show filters"/"Hide filters" text with Tabler filter icon. Outline when collapsed, filled when expanded.
+- **Template dropdown consolidated:** Replaced template `<select>` + save icon + delete icon with a single template icon button. Opens a popover with "Save current as template", list of templates (click to apply), and "Delete templates…".
+- **Nuke cache icon:** Changed group tile refresh icon from snowflake to Tabler refresh icon. Tooltip changed from "Nuke Cache (refresh tile)" to "Clear Cache and Refresh".
+- **Fix horizontal scroll on group tiles:** Changed `.tile-body-content` overflow from `hidden` to `overflow-x: auto; overflow-y: hidden` so kanban board horizontal scroll works.
+- **Fix minimize animation:** Collapse/expand now toggles the `tile-body-collapsed` class directly without full re-render, allowing the CSS `grid-template-rows` transition to play smoothly.
+- Cache-bust bumped to `v=1.95.4`.
+
 ## Phase 2D — Dashboard layout overhaul (Odysseus-style)
 
 - **SortableJS integration:** Replaced native HTML5 drag-and-drop with SortableJS for smooth 200ms reorder animations. Tiles use ghost/chosen/drag CSS classes during reorder. No more full re-render on drop — tiles animate to new positions. Drag handle is the `⋮⋮` hint in each tile toolbar.

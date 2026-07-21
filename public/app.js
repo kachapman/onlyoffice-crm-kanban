@@ -791,7 +791,7 @@ function calendarTileId(cal) {
 }
 
 function isAutoRefreshTileId(tileId) {
-  return PANEL_TILE_IDS.has(tileId) || (typeof tileId === "string" && (tileId.startsWith("calendar-") || tileId.startsWith("group-")));
+  return tileId === "tile-feed" || tileId === "tile-tasks" || (typeof tileId === "string" && (tileId.startsWith("calendar-") || tileId.startsWith("group-")));
 }
 
 function getCalendarByTileId(tileId) {
@@ -802,22 +802,12 @@ function getCalendarByTileId(tileId) {
 function ensureTileLayout() {
   const order = state.tileLayout.order?.length ? [...state.tileLayout.order] : defaultTileOrder();
   const known = new Set(defaultTileOrder());
-  // Always include tile-presence in known tiles
   known.add("tile-presence");
   const filtered = order.filter((id) => known.has(id));
   for (const id of known) {
     if (!filtered.includes(id)) filtered.push(id);
   }
   state.tileLayout.order = filtered;
-  for (const id of PANEL_TILE_IDS) {
-    if (state.tileLayout.heights?.[id]) delete state.tileLayout.heights[id];
-    if (!state.tileLayout.widths[id]) state.tileLayout.widths[id] = "half";
-    if (!state.tileLayout.pinned) state.tileLayout.pinned = {};
-    if (state.tileLayout.pinned[id] === undefined) state.tileLayout.pinned[id] = true;
-  }
-  // Always ensure tile-presence is pinned
-  if (!state.tileLayout.pinned) state.tileLayout.pinned = {};
-  state.tileLayout.pinned["tile-presence"] = true;
   if (!state.tileLayout.order.includes("tile-presence")) {
     state.tileLayout.order.push("tile-presence");
   }
@@ -854,7 +844,10 @@ function setTileBodyCollapsed(tileId, collapsed) {
   if (collapsed) state.tileLayout.collapsed[tileId] = true;
   else delete state.tileLayout.collapsed[tileId];
   saveLayoutToStorage();
-  mountDashboardTiles();
+  const tileEl = document.querySelector(`[data-tile-id="${tileId}"]`);
+  if (tileEl) {
+    applyTileBodyCollapsed(tileEl, tileId);
+  }
 }
 
 /** Tiles that fetch CRM (or calendar feed) data when expanded. Notes tiles are local-only. */
@@ -994,23 +987,15 @@ async function loadExpandedDashboardTiles({ quiet = false, force = false } = {})
   return Promise.resolve();
 }
 
-const PINNED_TILE_IDS = ["tile-feed", "tile-tasks", "tile-presence"];
-const PANEL_TILE_IDS = new Set(PINNED_TILE_IDS);
+const PINNED_TILE_IDS = [];
+const PANEL_TILE_IDS = new Set();
 
 function isTilePinnedToTop(tileId) {
-  if (!PANEL_TILE_IDS.has(tileId)) return false;
-  if (!state.tileLayout.pinned) state.tileLayout.pinned = {};
-  if (state.tileLayout.pinned[tileId] === undefined) {
-    state.tileLayout.pinned[tileId] = true; // default to pinned at top for feed + tasks
-  }
-  return !!state.tileLayout.pinned[tileId];
+  return false;
 }
 
 function setTilePinnedToTop(tileId, pinned) {
-  if (!PANEL_TILE_IDS.has(tileId)) return;
-  if (!state.tileLayout.pinned) state.tileLayout.pinned = {};
-  state.tileLayout.pinned[tileId] = !!pinned;
-  saveLayoutToStorage();
+  // Pin functionality disabled
 }
 
 /** Ensure currently-pinned tiles (feed/tasks) appear first in the order array (in their relative user order).
@@ -1036,12 +1021,8 @@ function saveFeedKeywordToStorage() {
 
 function collectDashboardTileNodes() {
   const nodes = new Map();
-  for (const container of [
-    $("#dashboard-tiles-pinned"),
-    $("#dashboard-panel-row"),
-    $("#dashboard-tiles"),
-  ]) {
-    if (!container) continue;
+  const container = $("#dashboard-tiles");
+  if (container) {
     for (const child of [...container.children]) {
       if (child.dataset.tileId) nodes.set(child.dataset.tileId, child);
     }
@@ -1064,22 +1045,9 @@ function applyTileBodyCollapsed(tileEl, tileId) {
 
 function applyTileLayoutClasses(tileEl, tileId) {
   if (!tileEl || !tileId) return;
-  const isCurrentlyPinnedPanel = PANEL_TILE_IDS.has(tileId) && isTilePinnedToTop(tileId);
-  if (isCurrentlyPinnedPanel) {
-    if (state.tileLayout.heights?.[tileId]) {
-      delete state.tileLayout.heights[tileId];
-      saveLayoutToStorage();
-    }
-    tileEl.classList.add("panel-tile");
-    tileEl.classList.remove("tile-double", "tile-half", "tile-quarter", "tasks-tile-full", "panel-width-quarter", "panel-width-half", "panel-width-full");
-    syncPanelRowLayout();
-    return;
-  }
-  // Non-pinned or regular tile: use normal grid classes (quarter/half/full + double height)
-  tileEl.classList.remove("panel-tile", "panel-width-quarter", "panel-width-half", "panel-width-full");
   const w = tileWidth(tileId);
   const h = tileHeight(tileId);
-  tileEl.classList.remove("tile-half", "tile-quarter");
+  tileEl.classList.remove("tile-half", "tile-quarter", "tile-three");
   if (w === "half") tileEl.classList.add("tile-half");
   else if (w === "quarter") tileEl.classList.add("tile-quarter");
   if (tileBodyCollapsed(tileId)) {
@@ -1087,11 +1055,6 @@ function applyTileLayoutClasses(tileEl, tileId) {
     return;
   }
   tileEl.classList.toggle("tile-double", h === "double");
-
-  // Notes narrow toolbar: put resizing (layouts + remove) on top row when quarter/half
-  if (tileEl && tileEl.classList.contains('notes-tile')) {
-    ensureNotesToolbarRows(tileEl);
-  }
 }
 
 function createCollapseTileButton(tileEl, tileId) {
@@ -1124,10 +1087,14 @@ function createCollapseTileButton(tileEl, tileId) {
 function attachTileCollapseButton(tileEl, tileId) {
   const toolbar = tileEl.querySelector(":scope > .tile-toolbar, :scope > .group-tile-bar");
   if (!toolbar) return;
-  const layoutBtns = toolbar.querySelector(".tile-layout-btns");
-  if (!layoutBtns || layoutBtns.querySelector(".btn-collapse-tile")) return;
+  if (toolbar.querySelector(".btn-collapse-tile")) return;
   const collapseBtn = createCollapseTileButton(tileEl, tileId);
-  layoutBtns.insertBefore(collapseBtn, layoutBtns.firstChild);
+  const removeBtn = toolbar.querySelector(".btn-remove-group, .btn-remove-calendar, .btn-remove-notes, .tile-remove-icon");
+  if (removeBtn && removeBtn.parentNode === toolbar) {
+    toolbar.insertBefore(collapseBtn, removeBtn);
+  } else {
+    toolbar.appendChild(collapseBtn);
+  }
 }
 
 function confirmDialog({ title, message, confirmLabel = "OK", danger = true }) {
@@ -1204,7 +1171,14 @@ const TILE_ICON_PIN = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/20
 
 const TILE_ICON_REMOVE = `<svg class="tile-remove-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`;
 
-const TILE_ICON_SAVE = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.2 3a2 2 0 0 1 1.4.6l2.8 2.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/></svg>`;
+  const TILE_ICON_SAVE = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.2 3a2 2 0 0 1 1.4.6l2.8 2.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/></svg>`;
+  const TILE_ICON_FILTER = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 4h16v2.172a2 2 0 0 1 -.586 1.414l-4.414 4.414v7l-6 2v-8.5l-4.48 -4.928a2 2 0 0 1 -.52 -1.345v-2.227"/></svg>`;
+  const TILE_ICON_FILTER_FILLED = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 4h16v2.172a2 2 0 0 1 -.586 1.414l-4.414 4.414v7l-6 2v-8.5l-4.48 -4.928a2 2 0 0 1 -.52 -1.345v-2.227" fill="currentColor"/></svg>`;
+  const TILE_ICON_TEMPLATE = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 5a1 1 0 0 1 1 -1h14a1 1 0 0 1 1 1v2a1 1 0 0 1 -1 1h-14a1 1 0 0 1 -1 -1l0 -2"/><path d="M4 13a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v6a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1l0 -6"/><path d="M14 12l6 0"/><path d="M14 16l6 0"/><path d="M14 20l6 0"/></svg>`;
+  const TILE_ICON_EDIT = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>`;
+  const TILE_ICON_EYE = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M21 12c-2.4 4 -5.4 6 -9 6c-3.6 0 -6.6 -2 -9 -6c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6"/></svg>`;
+  const TILE_ICON_EYE_FILLED = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" fill="currentColor"/><path d="M21 12c-2.4 4 -5.4 6 -9 6c-3.6 0 -6.6 -2 -9 -6c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6" fill="currentColor"/></svg>`;
+  const TILE_ICON_BRUSH = `<svg class="tile-layout-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 21v-4a4 4 0 1 1 4 4h-4"/><path d="M21 3a16 16 0 0 0 -12.8 10.2"/><path d="M21 3a16 16 0 0 1 -10.2 12.8"/><path d="M10.6 9a9 9 0 0 1 4.4 4.4"/></svg>`;
 
 const FEED_LOADING_SPINNER_HTML = `<svg class="feed-loading-spinner" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>`;
 
@@ -1360,35 +1334,6 @@ function bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn, quarte
   return syncTileLayout;
 }
 
-function bindTilePinButton(tileEl, tileId, pinBtn) {
-  if (!pinBtn || !PANEL_TILE_IDS.has(tileId)) return;
-  const sync = () => {
-    const pinned = isTilePinnedToTop(tileId);
-    setTileLayoutIconButton(pinBtn, TILE_ICON_PIN, pinned ? "Unpin from top of dashboard" : "Pin to top of dashboard");
-    pinBtn.classList.toggle("tile-btn-active", pinned);
-  };
-  pinBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const next = !isTilePinnedToTop(tileId);
-    setTilePinnedToTop(tileId, next);
-    sync();
-    mountDashboardTiles();
-    // For the special feed/tasks tiles we always keep drag affordance enabled (even when pinned)
-    // so the user can drag them left/right within the top area when both are pinned.
-    // We do NOT touch the order array here (no normalize), so unpinning does not auto-reposition
-    // the tile in the array / grid. It simply switches rendering layer (top containers vs main grid)
-    // at its existing stable position in order; other tiles can only displace it via later drags.
-    const tb = tileEl.querySelector(":scope > .tile-toolbar");
-    if (tb) {
-      tb.draggable = true;
-      const h = tb.querySelector(".tile-drag-hint");
-      if (h) h.classList.remove("hidden");
-      bindTileDragDrop(tileEl, tileId, tb);
-    }
-  });
-  sync();
-}
-
 function createTileChrome(tileId, label) {
   const toolbar = document.createElement("div");
   toolbar.className = "tile-toolbar";
@@ -1399,9 +1344,7 @@ function createTileChrome(tileId, label) {
   hint.className = "tile-drag-hint";
   hint.textContent = "⋮⋮";
   hint.setAttribute("aria-hidden", "true");
-  hint.title = "Drag to reorder (left/right or up/down)";
-
-  const isPanel = PANEL_TILE_IDS.has(tileId) && isTilePinnedToTop(tileId);
+  hint.title = "Drag to reorder";
 
   const name = document.createElement("span");
   name.className = "tile-toolbar-title";
@@ -1420,21 +1363,7 @@ function createTileChrome(tileId, label) {
   toolbar.appendChild(countBadge);
   toolbar.appendChild(spacer);
 
-  // Panel tiles (feed/tasks/presence): no layout buttons, no pin button — fixed equal width
-  if (!isPanel) {
-    const { wrap, quarterBtn, halfBtn, fullBtn, tallBtn } = createLayoutButtons({
-      showDoubleHeight: true,
-      showQuarterWidth: false,
-    });
-    toolbar.appendChild(wrap);
-    return { toolbar, quarterBtn: null, halfBtn, fullBtn, tallBtn, pinBtn: null, layoutWrap: wrap };
-  }
-
-  return { toolbar, quarterBtn: null, halfBtn: null, fullBtn: null, tallBtn: null, pinBtn: null, layoutWrap: null };
-}
-
-function syncPanelRowLayout() {
-  // All panel tiles are equal width — no layout sync needed
+  return { toolbar };
 }
 
 function updatePanelTileCount(tileId, count) {
@@ -1443,48 +1372,16 @@ function updatePanelTileCount(tileId, count) {
   });
 }
 
-function ensurePanelToolbarCount(tileEl, tileId) {
-  if (!PANEL_TILE_IDS.has(tileId)) return;
-  const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
-  if (!toolbar) return;
-  // Always enable drag + hint for the two special tiles (feed/notifications + tasks).
-  // This makes them movable left/right at the top when pinned (and normal when unpinned), matching other tiles' reordering.
-  toolbar.draggable = true;
-  const hint = toolbar.querySelector(".tile-drag-hint");
-  if (hint) hint.classList.remove("hidden");
-  if (!toolbar.querySelector(`[data-tile-count-for="${tileId}"]`)) {
-    const countBadge = document.createElement("span");
-    countBadge.className = "tile-toolbar-count";
-    countBadge.dataset.tileCountFor = tileId;
-    countBadge.textContent = "(0)";
-    const title = toolbar.querySelector(".tile-toolbar-title");
-    if (title) title.after(countBadge);
-    else toolbar.insertBefore(countBadge, toolbar.querySelector(".tile-toolbar-spacer"));
-  }
-}
-
-function ensurePanelLayoutButtons(tileEl, tileId) {
-  // Panel tiles have fixed equal width — no layout buttons
-}
-
-function ensurePanelPinButton(tileEl, tileId) {
-  // Pin button removed — all panel tiles are always pinned
-}
-
 function bindTileChrome(tileEl, tileId) {
   if (!tileEl.querySelector(":scope > .tile-toolbar")) {
-    const { toolbar, halfBtn, fullBtn, tallBtn } = createTileChrome(tileId, tileEl.dataset.tileLabel || "Section");
-    if (halfBtn || fullBtn || tallBtn) {
-      bindTileLayoutButtons(tileEl, tileId, halfBtn, fullBtn, tallBtn, null);
-    }
+    const { toolbar } = createTileChrome(tileId, tileEl.dataset.tileLabel || "Section");
     tileEl.prepend(toolbar);
     wrapTileBodyContent(tileEl);
     bindTileDragDrop(tileEl, tileId, toolbar);
-  } else {
-    ensurePanelToolbarCount(tileEl, tileId);
   }
   attachTileCollapseButton(tileEl, tileId);
   applyTileBodyCollapsed(tileEl, tileId);
+  addResizeHandles(tileEl, tileId);
   if (isAutoRefreshTileId(tileId)) ensureTileAutoRefreshButton(tileEl, tileId);
   if (tileId === "tile-feed") ensureFeedHiddenToolbarButton(tileEl);
   if (tileId === "tile-tasks") ensureTasksNewTaskButton(tileEl);
@@ -1494,7 +1391,7 @@ function wrapTileBodyContent(tileEl) {
   if (tileEl.querySelector(":scope > .tile-body-content")) return;
   const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
   if (!toolbar) return;
-  const children = [...tileEl.children].filter(c => c !== toolbar && !c.classList.contains('tile-body-content'));
+  const children = [...tileEl.children].filter(c => c !== toolbar && !c.classList.contains('tile-body-content') && !c.classList.contains('tile-resize-handle'));
   if (!children.length) return;
   const wrapper = document.createElement('div');
   wrapper.className = 'tile-body-content';
@@ -1507,6 +1404,107 @@ function bindTileDragDrop(tileEl, tileId, toolbar) {
   tileEl.dataset.dragBound = "1";
   const h = toolbar.querySelector(".tile-drag-hint");
   if (h) h.classList.remove("hidden");
+}
+
+function isTilePinned(tileId) {
+  if (!state.tileLayout.pinned) state.tileLayout.pinned = {};
+  return !!state.tileLayout.pinned[tileId];
+}
+
+function setTilePinned(tileId, pinned) {
+  if (!state.tileLayout.pinned) state.tileLayout.pinned = {};
+  if (pinned) state.tileLayout.pinned[tileId] = true;
+  else delete state.tileLayout.pinned[tileId];
+  saveLayoutToStorage();
+}
+
+function applyTilePinState(tileEl, tileId) {
+  // Pin functionality disabled
+}
+
+function bindTilePinButton(tileEl, tileId, pinBtn) {
+  // Pin functionality disabled
+}
+
+function addResizeHandles(tileEl, tileId) {
+  if (tileEl.querySelector(":scope > .tile-resize-handle")) return;
+  if (isTilePinnedToTop(tileId)) return;
+
+  const se = document.createElement("div");
+  se.className = "tile-resize-handle tile-resize-se";
+  se.title = "Drag to resize";
+  tileEl.appendChild(se);
+
+  const sw = document.createElement("div");
+  sw.className = "tile-resize-handle tile-resize-sw";
+  sw.title = "Drag to resize";
+  tileEl.appendChild(sw);
+
+  bindTileResize(tileEl, tileId, se, "se");
+  bindTileResize(tileEl, tileId, sw, "sw");
+}
+
+function bindTileResize(tileEl, tileId, handle, corner) {
+  let startX, startW, startH;
+
+  const onPointerDown = (e) => {
+    if (e.button && e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    startX = e.clientX || e.touches?.[0]?.clientX || 0;
+    startW = tileEl.offsetWidth;
+    startH = tileEl.offsetHeight;
+
+    document.addEventListener("mousemove", onPointerMove, { passive: false });
+    document.addEventListener("mouseup", onPointerUp);
+    document.addEventListener("touchmove", onPointerMove, { passive: false });
+    document.addEventListener("touchend", onPointerUp);
+    handle.setPointerCapture?.(e.pointerId);
+    tileEl.classList.add("tile-resizing");
+  };
+
+  const onPointerMove = (e) => {
+    e.preventDefault();
+    const cx = e.clientX || e.touches?.[0]?.clientX || 0;
+    const dx = cx - startX;
+
+    const grid = tileEl.parentElement;
+    if (!grid) return;
+    const gridStyle = getComputedStyle(grid);
+    const cols = gridStyle.gridTemplateColumns.split(" ");
+    const colWidth = parseFloat(cols[0]) + parseFloat(gridStyle.gap || 20);
+
+    let newColSpan;
+    if (corner === "se") {
+      newColSpan = Math.round((startW + dx) / colWidth);
+    } else {
+      newColSpan = Math.round((startW - dx) / colWidth);
+    }
+    newColSpan = Math.max(1, Math.min(4, newColSpan));
+    if (newColSpan === 3) newColSpan = newColSpan > (startW / colWidth) ? 4 : 2;
+
+    let newWidth;
+    if (newColSpan <= 1) newWidth = "quarter";
+    else if (newColSpan <= 2) newWidth = "half";
+    else newWidth = "full";
+
+    setTileWidth(tileId, newWidth);
+    applyTileLayoutClasses(tileEl, tileId);
+  };
+
+  const onPointerUp = () => {
+    document.removeEventListener("mousemove", onPointerMove);
+    document.removeEventListener("mouseup", onPointerUp);
+    document.removeEventListener("touchmove", onPointerMove);
+    document.removeEventListener("touchend", onPointerUp);
+    tileEl.classList.remove("tile-resizing");
+  };
+
+  handle.addEventListener("pointerdown", onPointerDown);
+  handle.addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    onPointerDown({ clientX: e.touches[0].clientX, clientY: e.touches[0].clientY, button: 0, preventDefault: () => {}, stopPropagation: () => {}, touches: e.touches });
+  }, { passive: false });
 }
 
 function loadGroupTemplates() {
@@ -1588,8 +1586,11 @@ function applyGroupTemplate(group, template) {
   const el = groupDomEl(group);
   if (el) {
     el.dataset.tileLabel = group.name || "Opportunity group";
-    const nameInput = $(".group-tile-name", el);
-    if (nameInput) nameInput.value = group.name;
+    if (group._syncNameDisplay) group._syncNameDisplay();
+    else {
+      const nameInput = $(".group-tile-name-input", el);
+      if (nameInput) nameInput.value = group.name;
+    }
     updateGroupFilterSummary(group);
   }
 }
@@ -1608,12 +1609,48 @@ function bindGroupTileChrome(section, group, tileId) {
   hint.setAttribute("aria-hidden", "true");
   hint.title = "Drag to reorder (left/right or up/down)";
 
+  // --- Click-to-edit title ---
+  const nameDisplay = document.createElement("span");
+  nameDisplay.className = "group-tile-name-display";
+  nameDisplay.textContent = group.name || "Opportunity group";
+  nameDisplay.title = "Click edit to rename";
+
   const nameInput = document.createElement("input");
   nameInput.type = "text";
-  nameInput.className = "group-tile-name";
+  nameInput.className = "group-tile-name-input";
   nameInput.placeholder = "Group label";
   nameInput.value = group.name || "";
   nameInput.setAttribute("aria-label", "Group label");
+  nameInput.style.display = "none";
+
+  const editNameBtn = document.createElement("button");
+  editNameBtn.type = "button";
+  editNameBtn.className = "btn btn-ghost tile-btn tile-btn-icon btn-edit-group-name";
+  setTileLayoutIconButton(editNameBtn, TILE_ICON_EDIT, "Edit group name");
+
+  const startEditName = () => {
+    nameDisplay.style.display = "none";
+    nameInput.style.display = "";
+    nameInput.value = group.name || "";
+    nameInput.focus();
+    nameInput.select();
+  };
+  const finishEditName = (save) => {
+    if (save) {
+      group.name = nameInput.value.trim() || "New group";
+    }
+    nameDisplay.textContent = group.name || "Opportunity group";
+    nameDisplay.style.display = "";
+    nameInput.style.display = "none";
+    section.dataset.tileLabel = group.name || "Opportunity group";
+    saveGroupsToStorage();
+  };
+  editNameBtn.addEventListener("click", (e) => { e.stopPropagation(); startEditName(); });
+  nameInput.addEventListener("blur", () => finishEditName(true));
+  nameInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); nameInput.blur(); }
+    else if (e.key === "Escape") { nameInput.value = group.name || ""; nameInput.blur(); }
+  });
 
   const countEl = document.createElement("span");
   countEl.className = "group-tile-count board-group-count";
@@ -1623,106 +1660,142 @@ function bindGroupTileChrome(section, group, tileId) {
   summaryCompactBar.className = "group-filter-summary-compact";
   summaryCompactBar.textContent = groupFilterSummary(group);
 
+  // --- Filter icon toggle ---
   const toggleFiltersBtn = document.createElement("button");
   toggleFiltersBtn.type = "button";
-  toggleFiltersBtn.className = "btn btn-ghost btn-toggle-filters";
-  toggleFiltersBtn.textContent = "Hide filters";
+  toggleFiltersBtn.className = "btn btn-ghost tile-btn tile-btn-icon btn-toggle-filters";
+  toggleFiltersBtn.setAttribute("aria-expanded", "true");
 
-  const templateSelect = document.createElement("select");
-  templateSelect.className = "group-tile-templates";
-  templateSelect.title = "Apply a saved template";
-  const tplOpt0 = document.createElement("option");
-  tplOpt0.value = "";
-  tplOpt0.textContent = "Templates…";
-  templateSelect.appendChild(tplOpt0);
-  for (const t of state.groupTemplates) {
-    const opt = document.createElement("option");
-    opt.value = t.id;
-    opt.textContent = t.name;
-    templateSelect.appendChild(opt);
-  }
+  // --- Template popover ---
+  const templateBtn = document.createElement("button");
+  templateBtn.type = "button";
+  templateBtn.className = "btn btn-ghost tile-btn tile-btn-icon btn-template-menu";
+  setTileLayoutIconButton(templateBtn, TILE_ICON_TEMPLATE, "Templates");
 
-  const saveTplBtn = createTileIconActionButton(
-    TILE_ICON_SAVE,
-    "Save current filters as a template",
-    "btn-save-template"
-  );
+  const templateDropdown = document.createElement("div");
+  templateDropdown.className = "template-dropdown hidden";
 
-  const manageTplBtn = createTileIconActionButton(
-    TILE_ICON_TRASH,
-    "Delete saved templates",
-    "btn-manage-templates"
-  );
+  const renderTemplateDropdown = () => {
+    templateDropdown.innerHTML = "";
+
+    // Save current
+    const saveItem = document.createElement("button");
+    saveItem.type = "button";
+    saveItem.className = "template-dropdown-item";
+    saveItem.innerHTML = `<span class="template-dropdown-icon">${TILE_ICON_SAVE}</span> Save current as template`;
+    saveItem.addEventListener("click", (e) => {
+      e.stopPropagation();
+      templateDropdown.classList.add("hidden");
+      const name = prompt("Template name", group.name || "My filters");
+      if (!name?.trim()) return;
+      const tpl = { id: newId(), name: name.trim(), config: groupConfigSnapshot(group) };
+      state.groupTemplates.push(tpl);
+      saveGroupTemplatesToStorage();
+      renderBoardGroups();
+      showToast(`Saved template "${tpl.name}"`);
+    });
+    templateDropdown.appendChild(saveItem);
+
+    // Divider + template list
+    const divider1 = document.createElement("div");
+    divider1.className = "template-dropdown-divider";
+    templateDropdown.appendChild(divider1);
+
+    if (state.groupTemplates.length) {
+      for (const t of state.groupTemplates) {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "template-dropdown-item";
+        item.textContent = t.name;
+        item.addEventListener("click", (e) => {
+          e.stopPropagation();
+          templateDropdown.classList.add("hidden");
+          applyGroupTemplate(group, t);
+          saveGroupsToStorage();
+          renderBoardGroups();
+          refreshGroup(group).catch((err) => showToast(err.message, true));
+          showToast(`Applied template "${t.name}"`);
+        });
+        templateDropdown.appendChild(item);
+      }
+    } else {
+      const empty = document.createElement("div");
+      empty.className = "template-dropdown-item";
+      empty.style.color = "var(--muted)";
+      empty.style.cursor = "default";
+      empty.textContent = "No templates saved";
+      templateDropdown.appendChild(empty);
+    }
+
+    // Divider + delete
+    const divider2 = document.createElement("div");
+    divider2.className = "template-dropdown-divider";
+    templateDropdown.appendChild(divider2);
+
+    const deleteItem = document.createElement("button");
+    deleteItem.type = "button";
+    deleteItem.className = "template-dropdown-item template-dropdown-item--danger";
+    deleteItem.innerHTML = `<span class="template-dropdown-icon">${TILE_ICON_TRASH}</span> Delete templates…`;
+    if (!state.groupTemplates.length) {
+      deleteItem.style.opacity = "0.4";
+      deleteItem.style.pointerEvents = "none";
+    }
+    deleteItem.addEventListener("click", (e) => {
+      e.stopPropagation();
+      templateDropdown.classList.add("hidden");
+      openTemplateDeleteModal();
+    });
+    templateDropdown.appendChild(deleteItem);
+  };
+
+  templateBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    renderTemplateDropdown();
+    templateDropdown.classList.toggle("hidden");
+    if (!templateDropdown.classList.contains("hidden")) {
+      const close = (ev) => {
+        if (!templateDropdown.contains(ev.target) && ev.target !== templateBtn) {
+          templateDropdown.classList.add("hidden");
+          document.removeEventListener("click", close);
+        }
+      };
+      setTimeout(() => document.addEventListener("click", close), 0);
+    }
+  });
 
   const removeBtn = createTileRemoveButton("Remove this grouping from the board", "btn-remove-group");
 
-  const { wrap, halfBtn, fullBtn, tallBtn } = createLayoutButtons();
+  const spacer = document.createElement("span");
+  spacer.className = "tile-toolbar-spacer";
 
   toolbar.appendChild(hint);
+  toolbar.appendChild(nameDisplay);
   toolbar.appendChild(nameInput);
+  toolbar.appendChild(editNameBtn);
   toolbar.appendChild(countEl);
   toolbar.appendChild(summaryCompactBar);
+  toolbar.appendChild(spacer);
   toolbar.appendChild(toggleFiltersBtn);
-  toolbar.appendChild(templateSelect);
-  toolbar.appendChild(saveTplBtn);
-  toolbar.appendChild(manageTplBtn);
+  toolbar.appendChild(templateBtn);
+  toolbar.appendChild(templateDropdown);
   toolbar.appendChild(removeBtn);
-  toolbar.appendChild(wrap);
 
   section.prepend(toolbar);
   wrapTileBodyContent(section);
-  bindTileLayoutButtons(section, tileId, halfBtn, fullBtn, tallBtn);
   bindTileDragDrop(section, tileId, toolbar);
   attachTileCollapseButton(section, tileId);
+  addResizeHandles(section, tileId);
 
   const setFiltersCollapsed = (collapsed) => {
     group.filtersCollapsed = collapsed;
     section.classList.toggle("filters-collapsed", collapsed);
     toggleFiltersBtn.setAttribute("aria-expanded", String(!collapsed));
-    toggleFiltersBtn.textContent = collapsed ? "Show filters" : "Hide filters";
+    toggleFiltersBtn.innerHTML = collapsed ? TILE_ICON_FILTER : TILE_ICON_FILTER_FILLED;
+    toggleFiltersBtn.title = collapsed ? "Show filters" : "Hide filters";
     saveGroupsToStorage();
   };
   setFiltersCollapsed(!!group.filtersCollapsed);
   toggleFiltersBtn.addEventListener("click", () => setFiltersCollapsed(!group.filtersCollapsed));
-
-  nameInput.addEventListener("input", () => {
-    group.name = nameInput.value;
-    section.dataset.tileLabel = group.name || "Opportunity group";
-    saveGroupsToStorage();
-  });
-  nameInput.addEventListener("change", () => {
-    group.name = nameInput.value.trim() || "New group";
-    nameInput.value = group.name;
-    section.dataset.tileLabel = group.name;
-    saveGroupsToStorage();
-  });
-
-  templateSelect.addEventListener("change", () => {
-    const id = templateSelect.value;
-    templateSelect.value = "";
-    if (!id) return;
-    const tpl = state.groupTemplates.find((t) => t.id === id);
-    if (!tpl) return;
-    applyGroupTemplate(group, tpl);
-    saveGroupsToStorage();
-    renderBoardGroups();
-    refreshGroup(group).catch((err) => showToast(err.message, true));
-    showToast(`Applied template “${tpl.name}”`);
-  });
-
-  saveTplBtn.addEventListener("click", () => {
-    const name = prompt("Template name", group.name || "My filters");
-    if (!name?.trim()) return;
-    const tpl = { id: newId(), name: name.trim(), config: groupConfigSnapshot(group) };
-    state.groupTemplates.push(tpl);
-    saveGroupTemplatesToStorage();
-    renderBoardGroups();
-    showToast(`Saved template “${tpl.name}”`);
-  });
-
-  manageTplBtn.addEventListener("click", () => {
-    openTemplateDeleteModal();
-  });
 
   removeBtn.addEventListener("click", async () => {
     if (state.groups.length <= 1) {
@@ -1732,7 +1805,7 @@ function bindGroupTileChrome(section, group, tileId) {
     const label = group.name?.trim() || "this group";
     const ok = await confirmDialog({
       title: "Remove grouping?",
-      message: `Remove “${label}” from the board? This cannot be undone.`,
+      message: `Remove "${label}" from the board? This cannot be undone.`,
       confirmLabel: "Remove",
       danger: true,
     });
@@ -1744,99 +1817,47 @@ function bindGroupTileChrome(section, group, tileId) {
     delete state.tileLayout.heights[tid];
     saveGroupsToStorage();
     saveLayoutToStorage();
-    // Flush immediately (beyond debounce) so reloads after quick remove don't resurrect the tile from server profile.
     saveUserProfileToServer({ quiet: true }).catch(() => {});
-    // Re-render the board (groups + calendars + notes + local kanbans) cleanly.
-    // Do NOT call refreshAll() here — it does a full data reload + profile re-fetch which can race
-    // with saves and clobber client-only tiles like local kanbans (and feels like an unwanted page refresh).
     renderBoardGroups();
   });
 
   group._setFiltersCollapsed = setFiltersCollapsed;
-}
-
-function mountPanelTile(node, tileId, parent) {
-  if (!node || !parent) return;
-  parent.appendChild(node);
-  node.classList.remove("tile-half", "tile-double", "tile-quarter", "tasks-tile-full");
-  node.classList.add("panel-tile");
-  // Slot classes for left/right are set by the caller (mountDashboardTiles) based on position
-  // in the current pinned list. This allows the two tiles to be swapped L<->R by the user
-  // while both are pinned at the top (they remain visually above the main grid).
-  applyTileBodyCollapsed(node, tileId);
-  if (!tileBodyCollapsed(tileId)) applyTileLayoutClasses(node, tileId);
+  group._syncNameDisplay = () => {
+    nameDisplay.textContent = group.name || "Opportunity group";
+    nameInput.value = group.name || "";
+    section.dataset.tileLabel = group.name || "Opportunity group";
+  };
 }
 
 function mountDashboardTiles() {
   const root = $("#dashboard-tiles");
-  const panelRow = $("#dashboard-panel-row");
-  const pinnedRoot = $("#dashboard-tiles-pinned");
   if (!root) return;
   ensureTileLayout();
 
-  // Ensure presence tile element exists (always visible, not removable)
   if (!document.querySelector('[data-tile-id="tile-presence"]')) {
     renderPresenceTile();
   }
 
+  // Destroy old Sortable instance before clearing DOM
+  if (root._sortableInstance) {
+    root._sortableInstance.destroy();
+    root._sortableInstance = null;
+  }
+
   const nodes = collectDashboardTileNodes();
-  if (pinnedRoot) pinnedRoot.innerHTML = "";
-  if (panelRow) panelRow.innerHTML = "";
   root.innerHTML = "";
 
-  let hasPinned = false;
-  // Build the list of pinned tiles in the sequence they appear in the user's tileLayout.order.
-  // This makes the two tiles (notifications + tasks) reorderable left<->right while pinned at the top,
-  // just like other tiles can be reordered. The top containers always place them above the main grid,
-  // so other tiles cannot be put above pinned ones visually.
-  const currentOrder = state.tileLayout.order || [];
-  let pinnedToRender = currentOrder.filter((id) => PANEL_TILE_IDS.has(id) && isTilePinnedToTop(id));
-  // Defensive: include any pinned tiles missing from order
-  for (const id of PINNED_TILE_IDS) {
-    if (isTilePinnedToTop(id) && !pinnedToRender.includes(id)) pinnedToRender.push(id);
-  }
-  let pinnedIdx = 0;
-  for (const tileId of pinnedToRender) {
-    const node = nodes.get(tileId);
-    if (!node) continue;
-    // Assign slot classes by current position among pinned (supports swap)
-    const isLeft = pinnedIdx === 0;
-    const isRight = pinnedIdx === 1;
-    node.classList.toggle("panel-slot-left", isLeft);
-    node.classList.toggle("panel-slot-right", isRight);
-    if (tileBodyCollapsed(tileId)) {
-      mountPanelTile(node, tileId, pinnedRoot);
-    } else {
-      mountPanelTile(node, tileId, panelRow);
-    }
-    hasPinned = true;
-    pinnedIdx++;
-  }
-
-  if (pinnedRoot) pinnedRoot.classList.toggle("hidden", !hasPinned);
-  syncPanelRowLayout();
-
   for (const tileId of state.tileLayout.order) {
-    if (PANEL_TILE_IDS.has(tileId) && isTilePinnedToTop(tileId)) continue;
     const node = nodes.get(tileId);
     if (!node) continue;
     root.appendChild(node);
-    node.classList.remove("panel-slot-left", "panel-slot-right");
     applyTileLayoutClasses(node, tileId);
     applyTileBodyCollapsed(node, tileId);
   }
 
-  initSortableDashboard();
-}
-
-function initSortableDashboard() {
-  if (typeof Sortable === "undefined") return;
-
-  const mainRoot = $("#dashboard-tiles");
-  const panelRow = $("#dashboard-panel-row");
-
-  if (mainRoot && !mainRoot._sortableInstance) {
-    mainRoot._sortableInstance = Sortable.create(mainRoot, {
+  // Create fresh Sortable instance
+  if (typeof Sortable !== "undefined") {
+    root._sortableInstance = Sortable.create(root, {
       animation: 200,
       handle: ".tile-drag-hint",
       ghostClass: "sortable-ghost",
@@ -1844,53 +1865,12 @@ function initSortableDashboard() {
       dragClass: "sortable-drag",
       forceFallback: true,
       fallbackTolerance: 3,
-      onEnd: function (evt) {
+      onEnd: (evt) => {
         const order = [];
-        mainRoot.querySelectorAll(":scope > .dashboard-tile[data-tile-id]").forEach((el) => {
+        root.querySelectorAll(":scope > .dashboard-tile[data-tile-id]").forEach((el) => {
           order.push(el.dataset.tileId);
         });
-        const pinnedOrder = [];
-        panelRow?.querySelectorAll(":scope > .dashboard-tile[data-tile-id]").forEach((el) => {
-          pinnedOrder.push(el.dataset.tileId);
-        });
-        const pinnedCollapsed = [];
-        const pinnedRoot = $("#dashboard-tiles-pinned");
-        pinnedRoot?.querySelectorAll(":scope > .dashboard-tile[data-tile-id]").forEach((el) => {
-          pinnedCollapsed.push(el.dataset.tileId);
-        });
-        state.tileLayout.order = [...pinnedOrder, ...pinnedCollapsed, ...order];
-        normalizeOrderForPinned();
-        saveLayoutToStorage();
-      }
-    });
-  }
-
-  if (panelRow && !panelRow._sortableInstance) {
-    panelRow._sortableInstance = Sortable.create(panelRow, {
-      animation: 200,
-      handle: ".tile-drag-hint",
-      ghostClass: "sortable-ghost",
-      chosenClass: "sortable-chosen",
-      dragClass: "sortable-drag",
-      group: "pinned-tiles",
-      forceFallback: true,
-      fallbackTolerance: 3,
-      onEnd: function (evt) {
-        const pinnedOrder = [];
-        panelRow.querySelectorAll(":scope > .dashboard-tile[data-tile-id]").forEach((el) => {
-          pinnedOrder.push(el.dataset.tileId);
-        });
-        const pinnedCollapsed = [];
-        const pinnedRoot = $("#dashboard-tiles-pinned");
-        pinnedRoot?.querySelectorAll(":scope > .dashboard-tile[data-tile-id]").forEach((el) => {
-          pinnedCollapsed.push(el.dataset.tileId);
-        });
-        const mainOrder = [];
-        mainRoot?.querySelectorAll(":scope > .dashboard-tile[data-tile-id]").forEach((el) => {
-          mainOrder.push(el.dataset.tileId);
-        });
-        state.tileLayout.order = [...pinnedOrder, ...pinnedCollapsed, ...mainOrder];
-        normalizeOrderForPinned();
+        state.tileLayout.order = order;
         saveLayoutToStorage();
       }
     });
@@ -1913,7 +1893,7 @@ function renderFeedTile() {
       </div>
       <ul id="notification-feed" class="feed-list" aria-live="polite"></ul>
     `;
-    $("#dashboard-panel-row")?.appendChild(tile);
+    $("#dashboard-tiles")?.appendChild(tile);
     bindTileChrome(tile, tileId);
     bindFeedInfiniteScroll();
     const kw = $("#feed-keyword-filter", tile);
@@ -1927,7 +1907,6 @@ function renderFeedTile() {
     }
   }
   applyTileLayoutClasses(tile, tileId);
-  ensurePanelToolbarCount(tile, tileId);
   ensureTileAutoRefreshButton(tile, tileId);
   ensureFeedHiddenToolbarButton(tile);
   syncFeedFilterPlaceholder();
@@ -1964,11 +1943,10 @@ function renderTasksTile() {
       </div>
       <div id="tasks-by-user" class="tasks-by-user"></div>
     `;
-    $("#dashboard-panel-row")?.appendChild(tile);
+    $("#dashboard-tiles")?.appendChild(tile);
     bindTileChrome(tile, tileId);
   }
   applyTileLayoutClasses(tile, tileId);
-  ensurePanelToolbarCount(tile, tileId);
   ensureTileAutoRefreshButton(tile, tileId);
   ensureTasksNewTaskButton(tile);
   if (tile && !tile.dataset.tasksFilterBound) {
@@ -4310,21 +4288,21 @@ function bindCalendarTileChrome(section, cal, tileId) {
 
   const removeBtn = createTileRemoveButton("Remove this calendar tile from the dashboard", "btn-remove-calendar");
 
-  const { wrap, halfBtn, fullBtn, tallBtn } = createLayoutButtons();
-
+  const pinBtn = document.createElement("button");
+  pinBtn.type = "button";
+  pinBtn.className = "btn btn-ghost tile-btn tile-btn-icon btn-pin-tile";
   toolbar.appendChild(hint);
   toolbar.appendChild(nameInput);
   toolbar.appendChild(countEl);
   toolbar.appendChild(nav);
   toolbar.appendChild(tzWrap);
   toolbar.appendChild(removeBtn);
-  toolbar.appendChild(wrap);
 
   section.prepend(toolbar);
   wrapTileBodyContent(section);
-  bindTileLayoutButtons(section, tileId, halfBtn, fullBtn, tallBtn);
   bindTileDragDrop(section, tileId, toolbar);
   attachTileCollapseButton(section, tileId);
+  addResizeHandles(section, tileId);
   ensureTileAutoRefreshButton(section, tileId);
 
   const syncMonth = () => {
@@ -5495,15 +5473,48 @@ function bindNotesTileChrome(section, notes, tileId) {
   hint.setAttribute("aria-hidden", "true");
   hint.title = "Drag to reorder (left/right or up/down)";
 
+  // --- Click-to-edit title ---
+  const nameDisplay = document.createElement("span");
+  nameDisplay.className = "group-tile-name-display";
+  nameDisplay.textContent = notes.name || "Notes";
+  nameDisplay.title = "Click edit to rename";
+
   const nameInput = document.createElement("input");
   nameInput.type = "text";
-  nameInput.className = "group-tile-name notes-tile-name";
+  nameInput.className = "group-tile-name-input";
   nameInput.placeholder = "Notes label";
   nameInput.value = notes.name || "";
   nameInput.setAttribute("aria-label", "Notes label");
+  nameInput.style.display = "none";
 
-  const utils = document.createElement("div");
-  utils.className = "notes-tile-utils";
+  const editNameBtn = document.createElement("button");
+  editNameBtn.type = "button";
+  editNameBtn.className = "btn btn-ghost tile-btn tile-btn-icon btn-edit-group-name";
+  setTileLayoutIconButton(editNameBtn, TILE_ICON_EDIT, "Edit notes name");
+
+  const startEditName = () => {
+    nameDisplay.style.display = "none";
+    nameInput.style.display = "";
+    nameInput.value = notes.name || "";
+    nameInput.focus();
+    nameInput.select();
+  };
+  const finishEditName = (save) => {
+    if (save) {
+      notes.name = nameInput.value.trim() || "Notes";
+    }
+    nameDisplay.textContent = notes.name || "Notes";
+    nameDisplay.style.display = "";
+    nameInput.style.display = "none";
+    section.dataset.tileLabel = notes.name || "Notes";
+    saveNotesTilesToStorage();
+  };
+  editNameBtn.addEventListener("click", (e) => { e.stopPropagation(); startEditName(); });
+  nameInput.addEventListener("blur", () => finishEditName(true));
+  nameInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); nameInput.blur(); }
+    else if (e.key === "Escape") { nameInput.value = notes.name || ""; nameInput.blur(); }
+  });
 
   const mkTextBtn = (label, className, title) => {
     const b = document.createElement("button");
@@ -5560,55 +5571,33 @@ function bindNotesTileChrome(section, notes, tileId) {
     "btn-notes-quick-note"
   );
 
-  // List buttons for bullet and numbered lists (standard markdown editor behavior)
-  const bulletBtn = mkTextBtn("•", "btn-notes-bullet", "Bullet list — inserts '- ' (auto-continues on Enter)");
-  const numberedBtn = mkTextBtn("1.", "btn-notes-numbered", "Numbered list — inserts '1. ' (auto-continues + increments on Enter)");
-  // Wrap the two list buttons tightly together with a visible box/shadow so they read as grouped action buttons.
-  const listBtnsWrap = document.createElement("span");
-  listBtnsWrap.className = "notes-list-btns";
-  listBtnsWrap.appendChild(bulletBtn);
-  listBtnsWrap.appendChild(numberedBtn);
+  const bulletBtn = mkTextBtn("•", "btn-notes-bullet", "Bullet list");
+  const numberedBtn = mkTextBtn("1.", "btn-notes-numbered", "Numbered list");
+  const quoteBtn = mkTextBtn(">", "btn-notes-quote", "Quote block");
+  const codeBtn = mkTextBtn("`", "btn-notes-code", "Inline code");
 
-  // Inline formatting buttons (bold/italic/underline/highlight/quote/code) placed next to lists.
-  // Uses markdown syntax; renderer extended for _underline_ and ==highlight==.
+  // Edit menu: copy, date, lists, quote, code, print, crm
+  const editMenu = createTileMenu({
+    label: "Edit",
+    className: "btn-notes-edit-menu",
+    items: [
+      { label: "Copy",            onSelect: () => copyBtn.click() },
+      { label: "Insert date",     onSelect: () => dateBtn.click() },
+      { label: "Bullet list",     onSelect: () => bulletBtn.click() },
+      { label: "Numbered list",   onSelect: () => numberedBtn.click() },
+      { label: "Quote block",     onSelect: () => quoteBtn.click() },
+      { label: "Inline code",     onSelect: () => codeBtn.click() },
+      { label: "Print preview",   onSelect: () => printBtn.click() },
+      { label: "Quick note",      onSelect: () => crmBtn.click() },
+    ],
+  });
+
+  // Quick format buttons: B/I/S/U/H + emoji (in toolbar for fast access)
   const boldBtn = mkTextBtn("B", "btn-notes-bold", "Bold — **text**");
   const italicBtn = mkTextBtn("I", "btn-notes-italic", "Italic — *text*");
   const strikeBtn = mkTextBtn("S", "btn-notes-strike", "Strikethrough — ~~text~~");
   const underlineBtn = mkTextBtn("U", "btn-notes-underline", "Underline — _text_");
   const highlightBtn = mkTextBtn("H", "btn-notes-highlight", "Highlight — ==text==");
-  const quoteBtn = mkTextBtn(">", "btn-notes-quote", "Quote — > text (or selection)");
-  const codeBtn = mkTextBtn("`", "btn-notes-code", "Inline code — `text`");
-  const formatBtnsWrap = document.createElement("span");
-  formatBtnsWrap.className = "notes-format-btns";
-  formatBtnsWrap.append(boldBtn, italicBtn, strikeBtn, underlineBtn, highlightBtn, quoteBtn, codeBtn);
-
-  const editBtn = mkTextBtn("Edit", "btn-notes-mode", "Edit mode");
-  editBtn.dataset.mode = "edit";
-  const previewBtn = mkTextBtn("Preview", "btn-notes-mode", "Preview mode");
-  previewBtn.dataset.mode = "preview";
-
-  const defaultPreviewBtn = createTileIconActionButton(
-    TILE_ICON_PIN,
-    "Always open this tile in preview on load",
-    "btn-notes-default-preview btn-notes-pin"
-  );
-
-  const accentSel = document.createElement("select");
-  accentSel.className = "notes-accent-select";
-  accentSel.title = "Tile accent color";
-  accentSel.setAttribute("aria-label", "Accent color");
-  for (const opt of NOTES_ACCENT_OPTIONS) {
-    const o = document.createElement("option");
-    o.value = opt.value;
-    o.textContent = opt.label;
-    accentSel.appendChild(o);
-  }
-  accentSel.value = notes.accent || "";
-
-  const { wrap, quarterBtn, halfBtn, fullBtn, tallBtn } = createLayoutButtons({
-    showDoubleHeight: true,
-    showQuarterWidth: true,
-  });
 
   const emojiBtn = document.createElement("button");
   emojiBtn.type = "button";
@@ -5617,41 +5606,104 @@ function bindNotesTileChrome(section, notes, tileId) {
   emojiBtn.title = "Insert emoji";
   emojiBtn.setAttribute("aria-label", "Insert emoji");
 
-  utils.append(
-    fileMenu,
-    copyBtn,
-    dateBtn,
-    emojiBtn,
-    listBtnsWrap,
-    formatBtnsWrap,
-    printBtn,
-    crmBtn,
-    accentSel,
-    defaultPreviewBtn,
-    editBtn,
-    previewBtn
-  );
+  const formatGroup = document.createElement("span");
+  formatGroup.className = "notes-quick-format-group";
+  formatGroup.append(boldBtn, italicBtn, strikeBtn, underlineBtn, highlightBtn, emojiBtn);
+
+  const modeToggleBtn = document.createElement("button");
+  modeToggleBtn.type = "button";
+  modeToggleBtn.className = "btn btn-ghost tile-btn tile-btn-icon btn-notes-mode-toggle";
+  modeToggleBtn.title = "Toggle edit/preview mode";
+  modeToggleBtn.setAttribute("aria-label", "Toggle edit/preview mode");
+
+  const syncModeToggle = () => {
+    const isPreview = notes.viewMode === "preview";
+    modeToggleBtn.innerHTML = isPreview ? TILE_ICON_EYE_FILLED : TILE_ICON_EYE;
+    modeToggleBtn.title = isPreview ? "Switch to edit mode (preview active)" : "Switch to preview mode (edit active)";
+    modeToggleBtn.classList.toggle("tile-btn-active", isPreview);
+  };
+  syncModeToggle();
+  modeToggleBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    notes.viewMode = notes.viewMode === "preview" ? "edit" : "preview";
+    saveNotesTilesToStorage();
+    syncModeToggle();
+    syncNotesTileBody(section, notes);
+    syncNotesUpdatedFooter(section, notes);
+  });
+
+  const accentBtn = document.createElement("button");
+  accentBtn.type = "button";
+  accentBtn.className = "btn btn-ghost tile-btn tile-btn-icon btn-notes-accent";
+  setTileLayoutIconButton(accentBtn, TILE_ICON_BRUSH, "Tile accent color");
+  if (notes.accent) accentBtn.style.color = notes.accent;
+
+  const accentDropdown = document.createElement("div");
+  accentDropdown.className = "template-dropdown hidden";
+  const renderAccentDropdown = () => {
+    accentDropdown.innerHTML = "";
+    for (const opt of NOTES_ACCENT_OPTIONS) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "template-dropdown-item";
+      item.textContent = opt.label || "No accent";
+      if (opt.value) item.style.color = opt.value;
+      if (opt.value === notes.accent) item.style.fontWeight = "700";
+      item.addEventListener("click", (e) => {
+        e.stopPropagation();
+        accentDropdown.classList.add("hidden");
+        notes.accent = opt.value;
+        accentBtn.style.color = opt.value || "";
+        saveNotesTilesToStorage();
+        syncNotesTileBody(section, notes);
+      });
+      accentDropdown.appendChild(item);
+    }
+  };
+  accentBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    renderAccentDropdown();
+    accentDropdown.classList.toggle("hidden");
+    if (!accentDropdown.classList.contains("hidden")) {
+      const close = (ev) => {
+        if (!accentDropdown.contains(ev.target) && ev.target !== accentBtn) {
+          accentDropdown.classList.add("hidden");
+          document.removeEventListener("click", close);
+        }
+      };
+      setTimeout(() => document.addEventListener("click", close), 0);
+    }
+  });
+
+  const utils = document.createElement("div");
+  utils.className = "notes-tile-utils";
+  utils.append(fileMenu, editMenu, formatGroup, accentBtn, accentDropdown, modeToggleBtn);
+
+  const spacer = document.createElement("span");
+  spacer.className = "tile-toolbar-spacer";
 
   const removeBtn = createTileRemoveButton("Remove this notes tile from the dashboard", "btn-remove-notes");
 
+  const pinBtn = document.createElement("button");
+  pinBtn.type = "button";
+  // Row 1: title bar
   toolbar.appendChild(hint);
+  toolbar.appendChild(nameDisplay);
   toolbar.appendChild(nameInput);
+  toolbar.appendChild(editNameBtn);
+  toolbar.appendChild(spacer);
   toolbar.appendChild(utils);
   toolbar.appendChild(removeBtn);
-  toolbar.appendChild(wrap);
 
   section.prepend(toolbar);
   wrapTileBodyContent(section);
-  bindTileLayoutButtons(section, tileId, halfBtn, fullBtn, tallBtn, quarterBtn);
   bindTileDragDrop(section, tileId, toolbar);
   attachTileCollapseButton(section, tileId);
+  addResizeHandles(section, tileId);
   bindNotesPreviewInteractions(section, notes);
 
   const syncModeButtons = () => {
-    const isPreview = notes.viewMode === "preview";
-    editBtn.classList.toggle("tile-btn-active", !isPreview);
-    previewBtn.classList.toggle("tile-btn-active", isPreview);
-    defaultPreviewBtn.classList.toggle("tile-btn-active", notes.defaultViewMode === "preview");
+    syncModeToggle();
     syncNotesTileBody(section, notes);
     syncNotesUpdatedFooter(section, notes);
   };
@@ -5836,17 +5888,6 @@ function bindNotesTileChrome(section, notes, tileId) {
     syncModeButtons();
   });
 
-  nameInput.addEventListener("input", () => {
-    notes.name = nameInput.value;
-    section.dataset.tileLabel = notes.name || "Notes";
-    scheduleNotesTileSave(notes);
-  });
-  nameInput.addEventListener("change", () => {
-    notes.name = nameInput.value.trim() || "Notes";
-    nameInput.value = notes.name;
-    section.dataset.tileLabel = notes.name;
-    scheduleNotesTileSave(notes);
-  });
 
   const editor = $(".notes-editor", section);
   editor?.addEventListener("input", () => {
@@ -9562,7 +9603,7 @@ function bindFeedHiddenModal() {
 }
 
 const TILE_REFRESH_ICON_HTML = `<svg class="tile-refresh-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M21 21v-5h-5"/></svg>`;
-const GROUP_NUKE_ICON_HTML = `<svg class="tile-refresh-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M13.5 14.6l3 5.19a9 9 0 0 0 4.5 -7.79h-6a3 3 0 0 1 -1.5 2.6" /><path d="M13.5 9.4l3 -5.19a9 9 0 0 0 -9 0l3 5.19a3 3 0 0 1 3 0" /><path d="M10.5 14.6l-3 5.19a9 9 0 0 1 -4.5 -7.79h6a3 3 0 0 0 1.5 2.6" /></svg>`;
+const GROUP_NUKE_ICON_HTML = `<svg class="tile-refresh-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -4v4h4" /><path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4" /></svg>`;
 
 let lastDashboardActivityAt = Date.now();
 let panelTileAutoRefreshTimer = null;
@@ -9675,7 +9716,7 @@ function ensureTileAutoRefreshButton(tileEl, tileId) {
   if (tileId === "tile-feed") label = "Refresh notifications";
   else if (tileId === "tile-tasks") label = "Refresh tasks";
   else if (tileId.startsWith("calendar-")) label = "Refresh calendar";
-  else if (isGroup) label = "Nuke Cache (refresh tile)";
+  else if (isGroup) label = "Clear Cache and Refresh";
 
   const iconHtml = isGroup ? GROUP_NUKE_ICON_HTML : TILE_REFRESH_ICON_HTML;
 
@@ -9703,9 +9744,12 @@ function ensureTileAutoRefreshButton(tileEl, tileId) {
     }
   });
 
-  const countBadge = toolbar.querySelector(".tile-toolbar-count");
-  if (countBadge?.nextSibling) toolbar.insertBefore(btn, countBadge.nextSibling);
-  else toolbar.appendChild(btn);
+  const spacer = toolbar.querySelector(".tile-toolbar-spacer");
+  if (spacer) {
+    toolbar.insertBefore(btn, spacer.nextSibling);
+  } else {
+    toolbar.appendChild(btn);
+  }
 }
 
 function ensureTasksNewTaskButton(tileEl) {
@@ -9713,7 +9757,10 @@ function ensureTasksNewTaskButton(tileEl) {
   const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
   if (!toolbar) return;
 
-  // Ensure archive/list button (file cabinet icon) to the left of new task
+  // Insert buttons next to count badge
+  const countBadge = toolbar.querySelector(".tile-toolbar-count");
+  const insertAfter = countBadge || toolbar.querySelector(".tile-toolbar-title");
+
   let archiveBtn = toolbar.querySelector("#tasks-list-btn");
   if (!archiveBtn) {
     archiveBtn = document.createElement("button");
@@ -9721,15 +9768,8 @@ function ensureTasksNewTaskButton(tileEl) {
     archiveBtn.id = "tasks-list-btn";
     archiveBtn.className = "btn btn-ghost btn-tasks-list";
     archiveBtn.title = "View all tasks (open + completed)";
-    // minimalistic file cabinet (one of the examples)
-    // Minimalistic file cabinet icon (chosen; see 3 examples below in comments)
     archiveBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="1"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><rect x="6" y="5" width="3" height="2" rx="0.5"/><rect x="15" y="5" width="3" height="2" rx="0.5"/><rect x="6" y="11" width="3" height="2" rx="0.5"/><rect x="15" y="11" width="3" height="2" rx="0.5"/></svg>`;
-    // 3 example minimalistic file cabinet icons (stroke-based):
-    // 1. (chosen) Rect with 3 horizontal dividers + small drawer handles: above svg
-    // 2. Simple 2-drawer: <svg ...><rect x="2" y="2" width="20" height="20" rx="2"/><line x1="2" y1="8" x2="22" y2="8"/><line x1="2" y1="16" x2="22" y2="16"/><rect x="4" y="3" width="4" height="2"/><rect x="16" y="3" width="4" height="2"/></svg>
-    // 3. With verticals: <svg ...><rect x="4" y="2" width="16" height="20" rx="1"/><line x1="4" y1="8" x2="20" y2="8"/><line x1="4" y1="14" x2="20" y2="14"/><line x1="12" y1="2" x2="12" y2="22"/><circle cx="7" cy="5" r="0.8"/><circle cx="17" cy="5" r="0.8"/></svg>
-    const layoutBtns = toolbar.querySelector(".tile-layout-btns");
-    if (layoutBtns) toolbar.insertBefore(archiveBtn, layoutBtns);
+    if (insertAfter && insertAfter.nextSibling) toolbar.insertBefore(archiveBtn, insertAfter.nextSibling);
     else toolbar.appendChild(archiveBtn);
     archiveBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -9746,8 +9786,8 @@ function ensureTasksNewTaskButton(tileEl) {
     e.stopPropagation();
     openNewTaskModal().catch((err) => showToast(err.message, true));
   });
-  const layoutBtns = toolbar.querySelector(".tile-layout-btns");
-  if (layoutBtns) toolbar.insertBefore(btn, layoutBtns);
+  if (archiveBtn && archiveBtn.nextSibling) toolbar.insertBefore(btn, archiveBtn.nextSibling);
+  else if (insertAfter && insertAfter.nextSibling) toolbar.insertBefore(btn, insertAfter.nextSibling);
   else toolbar.appendChild(btn);
 }
 
@@ -20409,36 +20449,77 @@ function renderOpportunityPreviewContent(container, data) {
         chip.appendChild(rm);
         tagList.appendChild(chip);
       }
-      // Add tag input
+      // Add tag button with dropdown
       const addWrap = document.createElement("span");
       addWrap.className = "opp-preview-tag-add-wrap";
-      const addSel = document.createElement("select");
-      addSel.className = "opp-preview-tag-add";
-      addSel.setAttribute("aria-label", "Add tag");
-      addSel.innerHTML = '<option value="">+ Add tag\u2026</option>';
-      const usedLower = new Set(currentTags.map((t) => normalizeTagTitle(t).toLowerCase()));
-      for (const tag of (state.allTags || [])) {
-        const title = normalizeTagTitle(tag.title ?? tag);
-        if (!title || usedLower.has(title.toLowerCase())) continue;
-        const opt = document.createElement("option");
-        opt.value = title;
-        opt.textContent = title;
-        addSel.appendChild(opt);
-      }
-      addSel.addEventListener("change", async () => {
-        const title = addSel.value;
-        if (!title) return;
-        try {
-          await addOpportunityTag(oppId, title);
-          if (!currentTags.some((ct) => tagsEqual(ct, title))) currentTags.push(title);
-          renderTagChips();
-          addEventLogEntry("update", oppId, opp.title || opp.Title || "", `Tag added: ${title}`, true);
-        } catch (err) {
-          showToast("Failed to add tag: " + (err.message || err), true);
+      addWrap.style.position = "relative";
+
+      const addBtn = document.createElement("button");
+      addBtn.type = "button";
+      addBtn.className = "btn btn-ghost tile-btn tile-btn-icon btn-tag-add";
+      addBtn.title = "Add tag";
+      addBtn.setAttribute("aria-label", "Add tag");
+      addBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M6.5 7.5a1 1 0 1 0 2 0a1 1 0 1 0 -2 0"/><path d="M21.002 13c0 -.617 -.235 -1.233 -.706 -1.704l-7.71 -7.71c-.375 -.375 -.884 -.586 -1.414 -.586h-5.172c-1.657 0 -3 1.343 -3 3v5.172c0 .53 .211 1.039 .586 1.414l7.71 7.71c.471 .47 1.087 .706 1.704 .706"/><path d="M16 19h6"/><path d="M19 16v6"/></svg>`;
+
+      const addDropdown = document.createElement("div");
+      addDropdown.className = "template-dropdown hidden";
+      addDropdown.style.minWidth = "160px";
+
+      const renderAddTagDropdown = () => {
+        addDropdown.innerHTML = "";
+        const usedLower = new Set(currentTags.map((t) => normalizeTagTitle(t).toLowerCase()));
+        const available = (state.allTags || []).filter((tag) => {
+          const title = normalizeTagTitle(tag.title ?? tag);
+          return title && !usedLower.has(title.toLowerCase());
+        });
+        if (!available.length) {
+          const empty = document.createElement("div");
+          empty.className = "template-dropdown-item";
+          empty.style.color = "var(--muted)";
+          empty.textContent = "No tags available";
+          addDropdown.appendChild(empty);
+        } else {
+          for (const tag of available) {
+            const title = normalizeTagTitle(tag.title ?? tag);
+            const item = document.createElement("button");
+            item.type = "button";
+            item.className = "template-dropdown-item";
+            item.textContent = title;
+            if (tag.color) item.style.color = tag.color;
+            item.addEventListener("click", async (e) => {
+              e.stopPropagation();
+              addDropdown.classList.add("hidden");
+              try {
+                await addOpportunityTag(oppId, title);
+                if (!currentTags.some((ct) => tagsEqual(ct, title))) currentTags.push(title);
+                renderTagChips();
+                addEventLogEntry("update", oppId, opp.title || opp.Title || "", `Tag added: ${title}`, true);
+              } catch (err) {
+                showToast("Failed to add tag: " + (err.message || err), true);
+              }
+            });
+            addDropdown.appendChild(item);
+          }
         }
-        addSel.value = "";
+      };
+
+      addBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        renderAddTagDropdown();
+        addDropdown.classList.toggle("hidden");
+        if (!addDropdown.classList.contains("hidden")) {
+          const close = (ev) => {
+            if (!addDropdown.contains(ev.target) && ev.target !== addBtn) {
+              addDropdown.classList.add("hidden");
+              document.removeEventListener("click", close);
+            }
+          };
+          setTimeout(() => document.addEventListener("click", close), 0);
+        }
       });
-      addWrap.appendChild(addSel);
+
+      addWrap.appendChild(addBtn);
+      addWrap.appendChild(addDropdown);
       tagList.appendChild(addWrap);
     }
 
