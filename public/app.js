@@ -811,17 +811,6 @@ function ensureTileLayout() {
   if (!state.tileLayout.order.includes("tile-presence")) {
     state.tileLayout.order.push("tile-presence");
   }
-  // Groups never support double-height (vertical resize). Sanitize any old persisted values.
-  if (state.tileLayout.heights && typeof state.tileLayout.heights === "object") {
-    let cleaned = false;
-    for (const k of Object.keys(state.tileLayout.heights)) {
-      if (k.startsWith("group-")) {
-        delete state.tileLayout.heights[k];
-        cleaned = true;
-      }
-    }
-    if (cleaned) saveLayoutToStorage();
-  }
 }
 
 function tileWidth(tileId) {
@@ -831,7 +820,6 @@ function tileWidth(tileId) {
 }
 
 function tileHeight(tileId) {
-  if (tileId && tileId.startsWith("group-")) return "normal";
   return state.tileLayout.heights[tileId] === "double" ? "double" : "normal";
 }
 
@@ -842,12 +830,7 @@ function setTileWidth(tileId, width) {
 }
 
 function setTileHeight(tileId, height) {
-  if (tileId && tileId.startsWith("group-")) {
-    // Groups never support double height (only width resize via handles).
-    state.tileLayout.heights[tileId] = "normal";
-  } else {
-    state.tileLayout.heights[tileId] = height === "double" ? "double" : "normal";
-  }
+  state.tileLayout.heights[tileId] = height === "double" ? "double" : "normal";
   saveLayoutToStorage();
 }
 
@@ -1573,11 +1556,6 @@ function bindTileResize(tileEl, tileId, handle, corner) {
     pendingWidth = tileWidth(tileId);
     startHeightName = tileHeight(tileId);
     pendingHeight = startHeightName;
-    // Groups support width resize only (via handles); never vertical/double height.
-    if (tileId.startsWith("group-")) {
-      startHeightName = "normal";
-      pendingHeight = "normal";
-    }
     rowUnit = parseFloat(gridStyle.getPropertyValue("--tile-row-height")) || 400;
 
     ghost = document.createElement("div");
@@ -1607,9 +1585,8 @@ function bindTileResize(tileEl, tileId, handle, corner) {
     pendingWidth = widthForSpanCols(newSpan);
 
     // Vertical decision based on pointer position relative to grid rows.
-    // Groups never support vertical/double (width resize only via handles).
     // Latch decision. Skipped while collapsed.
-    if (!tileBodyCollapsed(tileId) && !tileId.startsWith("group-")) {
+    if (!tileBodyCollapsed(tileId)) {
       const pointerY = (e.clientY || 0);
       const rowBoundary = baseTop + rowUnit;
       if (pointerY > rowBoundary + rowUnit * 0.15) {
@@ -1617,8 +1594,6 @@ function bindTileResize(tileEl, tileId, handle, corner) {
       } else if (pointerY < rowBoundary - rowUnit * 0.15) {
         pendingHeight = "normal";
       }
-    } else if (tileId.startsWith("group-")) {
-      pendingHeight = "normal";
     }
     positionGhost(newSpan, pendingHeight);
   };
@@ -5795,32 +5770,26 @@ function bindNotesTileChrome(section, notes, tileId) {
     }
   });
 
-  const utils = document.createElement("div");
-  utils.className = "notes-tile-utils";
-  // Keep only menus/accent/mode in the tools container. The formatGroup (B/I/S/U/H/emoji)
-  // is appended directly after the title name so it participates in the main toolbar
-  // flex row and can stay on the title line when the tile is wide enough; on narrow
-  // the tools block wraps per existing rules while format prefers the title row.
-  utils.append(fileMenu, editMenu, accentBtn, accentDropdown, modeToggleBtn);
-
   const removeBtn = createTileRemoveButton("Remove this notes tile from the dashboard", "btn-remove-notes");
 
   const { tools, actions } = buildTileToolbarShell();
-  tools.appendChild(utils);
   actions.appendChild(removeBtn);
 
   // Row 1: title bar
-  // formatGroup (B/I/S/U/H/emoji) lives here directly (not in tools) so it can sit
-  // on the title row next to the editable name when the tile is wide enough.
   toolbar.appendChild(hint);
   toolbar.appendChild(nameDisplay);
   toolbar.appendChild(nameInput);
-  // Quick format (B/I/S/U/H/emoji) placed directly after the editable title so it
-  // participates in the title row flex layout. On wide/full tiles it stays on the
-  // same row as the title (when space allows); the .tile-toolbar-tools block can
-  // wrap to row 2 on narrow per the order/basis rules.
+  // Menus (File, Edit), accent palette, and mode/preview toggle placed directly
+  // after the editable title so they participate in the title row flex layout.
+  // On wide/full tiles they stay on the same row as the title (when space allows);
+  // on narrow they get order:1 per CSS rules. formatGroup (B/I/S/U/H/emoji)
+  // goes after these so it also rides the title row on wide tiles.
+  toolbar.appendChild(fileMenu);
+  toolbar.appendChild(editMenu);
+  toolbar.appendChild(accentBtn);
+  toolbar.appendChild(accentDropdown);
+  toolbar.appendChild(modeToggleBtn);
   toolbar.appendChild(formatGroup);
-  toolbar.appendChild(tools);
   toolbar.appendChild(actions);
 
   section.prepend(toolbar);
@@ -8263,8 +8232,8 @@ function bindContactField(group, wrap) {
 }
 
 function renderBoardGroups() {
-  // Sanitize layout first (e.g. groups must never be double-height) so that
-  // applies below see clean state and no stale "tile-double" classes get added.
+  // Sanitize layout (remove stale collapsed widths, etc.) so that
+  // applies below see clean state and correct classes get added.
   ensureTileLayout();
 
   renderFeedTile();
