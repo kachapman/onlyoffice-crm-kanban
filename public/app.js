@@ -13909,7 +13909,21 @@ function renderPresenceModal(snapshot = null, usersCache = null) {
     clearPresenceReplyTo();
     listEl.innerHTML = '';
     const recentDms = Array.isArray(snap.myRecentDms) ? snap.myRecentDms : [];
-    renderPresenceInbox(listEl, recentDms, cache, snap);
+    if (recentDms.length) {
+      renderPresenceInbox(listEl, recentDms, cache, snap);
+    } else {
+      // No conversation history yet — show the team roster so a user can be
+      // selected directly from the Messages tab instead of forcing the user
+      // to switch to Team and back.
+      const note = document.createElement('div');
+      note.className = 'presence-section-header';
+      note.textContent = 'Select a team member to start messaging';
+      note.style.padding = '0.5rem';
+      listEl.appendChild(note);
+      renderPresenceUserList(listEl, snap, cache, (id, name, p) => {
+        openPresenceDMThread(id, name);
+      });
+    }
   } else {
     // Team tab: the user roster (online/offline + last seen) — hide any open DM thread
     if (dmEl) dmEl.classList.add("hidden");

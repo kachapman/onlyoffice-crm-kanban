@@ -3267,6 +3267,7 @@ body {
 
 .presence-list {
   max-height: 480px;
+  min-height: 320px;
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: 8px;

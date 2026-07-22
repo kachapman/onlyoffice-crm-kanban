@@ -4,6 +4,11 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 ## Phase 2D-3 — Grid stability fix (ISSUE-013)
 
+### v1.95.11 (pending verification — committed, not pushed)
+- **Fixed Team popup Messages tab shrinking.** Added `min-height: 320px` to `.presence-list` so the modal content area keeps a stable height even when the inbox is empty.
+- **Fixed Messages tab empty state.** When there are no recent DMs, the Messages tab now shows the team roster with a "Select a team member to start messaging" header so users can open a DM thread directly from the Messages tab instead of switching to Team and back.
+- Cache-bust bumped to `app.js?v=1.95.8`, `styles.css?v=1.87.20`.
+
 ### v1.95.10 (pending verification — committed, not pushed)
 - **Fixed preview tag dropdown cut off when no tags.** The tag add dropdown used `.template-dropdown`'s default `right: 0` positioning, so when no tag chips were present the + button sat at the left edge of the preview modal and the menu opened to the left, extending past the modal border. Added `.opp-preview-tag-add-wrap .template-dropdown { left: 0; right: auto; }` so it always opens to the right and stays visible.
 - Cache-bust bumped to `styles.css?v=1.87.19`.
