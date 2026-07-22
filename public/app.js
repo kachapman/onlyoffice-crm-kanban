@@ -1505,6 +1505,7 @@ function bindTileResize(tileEl, tileId, handle, corner) {
   let startHeightName, pendingHeight;
   let ghost = null;
   let pendingWidth = null;
+  let singleRowH; /* actual single-row height derived from rendered tile */
 
   const spanColsForWidth = (name) => (name === "quarter" ? 1 : name === "half" ? 2 : 4);
   const widthForSpanCols = (span) => (span <= 1 ? "quarter" : span === 2 ? "half" : "full");
@@ -1521,9 +1522,11 @@ function bindTileResize(tileEl, tileId, handle, corner) {
     widthPx = Math.min(widthPx, gridContentWidth - left);
     // Height preview: always use the nominal size for the decided heightName.
     // This lets the ghost shrink when going normal from a double start (baseHeight would be tall).
+    /* Use singleRowH (actual tile height) for ghost, not rowUnit (CSS var).
+       This keeps the preview accurate when rows are taller/shorter than 400px. */
     const heightPx = heightName === "double"
-      ? rowUnit * 2 + gapWidth
-      : rowUnit;
+      ? singleRowH * 2 + gapWidth
+      : singleRowH;
     ghost.style.top = `${baseTop}px`;
     ghost.style.left = `${left}px`;
     ghost.style.width = `${widthPx}px`;
@@ -1557,6 +1560,13 @@ function bindTileResize(tileEl, tileId, handle, corner) {
     startHeightName = tileHeight(tileId);
     pendingHeight = startHeightName;
     rowUnit = parseFloat(gridStyle.getPropertyValue("--tile-row-height")) || 400;
+    /* Derive single-row height from the actual rendered tile, not the CSS
+       variable. With grid-auto-rows: auto + align-items:stretch, the tile
+       fills its row, so baseHeight IS the row height for normal tiles.
+       For double tiles, back-compute the single-row height. */
+    singleRowH = startHeightName === "double"
+      ? (baseHeight - gapWidth) / 2
+      : baseHeight;
 
     ghost = document.createElement("div");
     ghost.className = "tile-resize-ghost";
@@ -1593,10 +1603,14 @@ function bindTileResize(tileEl, tileId, handle, corner) {
       const pointerY = (e.clientY || 0);
       const dy = Math.abs(pointerY - startY);
       if (dy > 30) {
-        const rowBoundary = baseTop + rowUnit;
-        if (pointerY > rowBoundary + rowUnit * 0.15) {
+        /* Boundary: bottom of the current tile (baseTop + baseHeight).
+           Use singleRowH for hysteresis threshold — this is the actual
+           single-row height, not the CSS variable which may differ. */
+        const boundary = baseTop + baseHeight;
+        const threshold = singleRowH * 0.15;
+        if (pointerY > boundary + threshold) {
           pendingHeight = "double";
-        } else if (pointerY < rowBoundary - rowUnit * 0.15) {
+        } else if (pointerY < boundary - threshold) {
           pendingHeight = "normal";
         }
       }

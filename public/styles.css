@@ -1356,7 +1356,10 @@ body {
   grid-auto-rows: auto;
   grid-auto-flow: dense;
   gap: 1.25rem;
-  align-items: start;
+  /* Default align-items: stretch makes shorter tiles fill their grid row
+     height, eliminating visible gaps below short tiles (e.g. Tasks with
+     "No open tasks" in a row where Team is tall). Collapsed tiles override
+     with align-self: start. */
   position: relative; /* anchor for .tile-resize-ghost */
 }
 
