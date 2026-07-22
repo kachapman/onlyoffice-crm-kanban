@@ -14079,6 +14079,13 @@ function renderPresenceTileCompact(snapshot = null) {
 
   body.appendChild(list);
   syncTileStatusSelect(snap);
+
+  // If the Messages tab body is currently visible, refresh its inbox too
+  // so newly-arrived presence snapshots update the message list.
+  const msgBody = $("#presence-tile-messages-body");
+  if (msgBody && msgBody.style.display !== "none") {
+    renderPresenceTileMessages();
+  }
 }
 
 function renderPresenceTile() {
