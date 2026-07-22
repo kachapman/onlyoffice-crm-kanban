@@ -6323,19 +6323,31 @@ body {
   position: relative;
 }
 
-@media (max-width: 640px) {
+/* Tablet: move logo to top-left before it starts overlapping buttons */
+@media (max-width: 900px) {
   .hero-logo-wrap {
-    position: absolute;
     left: 0.75rem;
     top: 0.65rem;
     transform: none;
+    width: 48px;
+    height: 48px;
+  }
+  .hero-logo {
+    width: 48px;
+  }
+  .hero-inner {
+    padding-top: 3.5rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .hero-logo-wrap {
     width: 32px;
     height: 32px;
   }
 
   .hero-logo {
     width: 32px;
-    height: auto;
   }
 
   .eyebrow {
