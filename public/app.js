@@ -2732,61 +2732,81 @@ function renderCalendarMonthBody(section, cal) {
   const cells = buildCalendarMonthGrid(y, m);
 
   const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  let html = '<div class="calendar-month-grid" role="grid" aria-label="Monthly calendar">';
-  html += '<div class="calendar-weekdays" role="row">';
+  let headerHtml = '<div class="calendar-month-grid" role="grid" aria-label="Monthly calendar">';
+  headerHtml += '<div class="calendar-weekdays" role="row">';
   for (const wd of weekdays) {
-    html += `<div class="calendar-weekday" role="columnheader">${escapeHtml(wd)}</div>`;
+    headerHtml += `<div class="calendar-weekday" role="columnheader">${escapeHtml(wd)}</div>`;
   }
-  html += '</div><div class="calendar-days" role="rowgroup">';
+  headerHtml += '</div><div class="calendar-days" role="rowgroup"></div></div>';
 
-  for (const cell of cells) {
-    const isToday =
-      cell.year === today.year && cell.month === today.month && cell.day === today.day;
-    const dayEvents = eventsForCalendarDay(events, cell.year, cell.month, cell.day, tz);
-    const cls = [
-      "calendar-day",
-      cell.outside ? "calendar-day-outside" : "",
-      isToday ? "calendar-day-today" : "",
-    ]
-      .filter(Boolean)
-      .join(" ");
-    html += `<div class="${cls}" role="gridcell" data-date="${cell.year}-${String(cell.month).padStart(2, "0")}-${String(cell.day).padStart(2, "0")}">`;
-    html += `<div class="calendar-day-num">${cell.day}</div>`;
-    html += '<div class="calendar-day-events">';
-    const maxShow = 3;
-    for (let i = 0; i < Math.min(dayEvents.length, maxShow); i++) {
-      const ev = dayEvents[i];
-      const color = ev.color || "#6e4bdb";
-      const time = formatEventTimeInTimezone(ev, tz);
-      const uidAttr = escapeHtml(ev.uid || "");
-      html += `<button type="button" class="calendar-event-chip" data-event-uid="${uidAttr}" style="--event-color:${escapeHtml(color)}" title="${escapeHtml((time + ev.summary).trim())}">`;
-      html += `<span class="calendar-event-dot" aria-hidden="true"></span>`;
-      html += `<span class="calendar-event-label">${escapeHtml(time + (ev.summary || ""))}</span>`;
-      html += "</button>";
-    }
-    if (dayEvents.length > maxShow) {
-      html += `<div class="calendar-more-events">+${dayEvents.length - maxShow} more</div>`;
-    }
-    html += "</div></div>";
-  }
-  html += "</div></div>";
-  body.innerHTML = html;
+  body.innerHTML = headerHtml;
+  const daysContainer = body.querySelector(".calendar-days");
+  if (!daysContainer) return;
 
-  const monthLabel = $(".calendar-month-label", section);
-  if (monthLabel) monthLabel.textContent = calendarViewMonthLabel(cal);
-  const countEl = $(".calendar-tile-count", section);
-  if (countEl) {
-    const inMonth = events.filter((ev) => {
-      if (ev.status === "CANCELLED") return false;
-      for (const cell of cells) {
-        if (!cell.outside && eventOnCalendarDay(ev, cell.year, cell.month, cell.day, tz)) return true;
+  const weeks = [];
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+
+  const maxShow = 3;
+
+  function buildWeekHtml(week) {
+    let html = "";
+    for (const cell of week) {
+      const isToday = cell.year === today.year && cell.month === today.month && cell.day === today.day;
+      const dayEvents = eventsForCalendarDay(events, cell.year, cell.month, cell.day, tz);
+      const cls = [
+        "calendar-day",
+        cell.outside ? "calendar-day-outside" : "",
+        isToday ? "calendar-day-today" : "",
+      ].filter(Boolean).join(" ");
+      html += `<div class="${cls}" role="gridcell" data-date="${cell.year}-${String(cell.month).padStart(2, "0")}-${String(cell.day).padStart(2, "0")}">`;
+      html += `<div class="calendar-day-num">${cell.day}</div>`;
+      html += '<div class="calendar-day-events">';
+      for (let i = 0; i < Math.min(dayEvents.length, maxShow); i++) {
+        const ev = dayEvents[i];
+        const color = ev.color || "#6e4bdb";
+        const time = formatEventTimeInTimezone(ev, tz);
+        const uidAttr = escapeHtml(ev.uid || "");
+        html += `<button type="button" class="calendar-event-chip" data-event-uid="${uidAttr}" style="--event-color:${escapeHtml(color)}" title="${escapeHtml((time + ev.summary).trim())}">`;
+        html += `<span class="calendar-event-dot" aria-hidden="true"></span>`;
+        html += `<span class="calendar-event-label">${escapeHtml(time + (ev.summary || ""))}</span>`;
+        html += "</button>";
       }
-      return false;
-    }).length;
-    countEl.textContent = `${inMonth} events`;
+      if (dayEvents.length > maxShow) {
+        html += `<div class="calendar-more-events">+${dayEvents.length - maxShow} more</div>`;
+      }
+      html += "</div></div>";
+    }
+    return html;
   }
 
-  bindCalendarEventClicks(section, cal);
+  let weekIdx = 0;
+  function renderNextWeek() {
+    if (weekIdx >= weeks.length) {
+      const monthLabel = $(".calendar-month-label", section);
+      if (monthLabel) monthLabel.textContent = calendarViewMonthLabel(cal);
+      const countEl = $(".calendar-tile-count", section);
+      if (countEl) {
+        const inMonth = events.filter((ev) => {
+          if (ev.status === "CANCELLED") return false;
+          for (const cell of cells) {
+            if (!cell.outside && eventOnCalendarDay(ev, cell.year, cell.month, cell.day, tz)) return true;
+          }
+          return false;
+        }).length;
+        countEl.textContent = `${inMonth} events`;
+      }
+      bindCalendarEventClicks(section, cal);
+      return;
+    }
+    daysContainer.insertAdjacentHTML("beforeend", buildWeekHtml(weeks[weekIdx]));
+    weekIdx++;
+    if (typeof requestIdleCallback === "function") {
+      requestIdleCallback(renderNextWeek, { timeout: 50 });
+    } else {
+      setTimeout(renderNextWeek, 0);
+    }
+  }
+  renderNextWeek();
 }
 
 function findCalendarEventByUid(cal, uid) {
@@ -4346,7 +4366,7 @@ async function loadCalendarForTile(cal, { quiet = false } = {}) {
     if (tzSelect) {
       populateCalendarTimezoneSelect(tzSelect, resolveCalendarTimezone(cal));
     }
-    if (section) renderCalendarMonthBody(section, cal);
+    if (section) requestAnimationFrame(() => renderCalendarMonthBody(section, cal));
   } catch (err) {
     if (!quiet) showToast(err.message, true);
     const body = section?.querySelector(".calendar-month-body");
