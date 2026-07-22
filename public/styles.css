@@ -1379,6 +1379,7 @@ body {
   overflow: visible;
   display: flex;
   flex-direction: column;
+  container-type: inline-size;
   /* No transform transition / will-change here — animating transform on every
      tile makes grid reflows look like jumping and wastes GPU (ISSUE-013). */
   transition: box-shadow 0.2s ease, border-color 0.2s ease;
@@ -1598,96 +1599,33 @@ body {
   flex-wrap: nowrap;
 }
 
-/* Narrow tiles: keep title on top row, pin actions (refresh/min/close) top-right,
-   push tools (filter/template/format/etc) to second row. */
-.dashboard-tile.tile-quarter .tile-toolbar-title,
-.dashboard-tile.tile-half .tile-toolbar-title,
-.dashboard-tile.tile-quarter .group-tile-name-display,
-.dashboard-tile.tile-half .group-tile-name-display,
-.dashboard-tile.tile-quarter .group-tile-name-input,
-.dashboard-tile.tile-half .group-tile-name-input,
-.dashboard-tile.tile-quarter .tile-toolbar-count,
-.dashboard-tile.tile-half .tile-toolbar-count,
-.dashboard-tile.tile-quarter .group-tile-count,
-.dashboard-tile.tile-half .group-tile-count,
-.dashboard-tile.tile-quarter .group-filter-summary-compact,
-.dashboard-tile.tile-half .group-filter-summary-compact {
-  order: 1;
-}
-/* Group tiles: deal count + filter summary go to row 2 (with filter/template buttons),
-   NOT row 1 with the title. Only the title + actions stay on row 1.
-   Tools should NOT have flex-basis:100% so they share row 2 with count/summary. */
-.dashboard-tile.board-group-tile.tile-quarter .tile-toolbar-count,
-.dashboard-tile.board-group-tile.tile-half .tile-toolbar-count,
-.dashboard-tile.board-group-tile.tile-quarter .group-tile-count,
-.dashboard-tile.board-group-tile.tile-half .group-tile-count,
-.dashboard-tile.board-group-tile.tile-quarter .group-filter-summary-compact,
-.dashboard-tile.board-group-tile.tile-half .group-filter-summary-compact {
-  order: 3;
-}
-.dashboard-tile.board-group-tile.tile-quarter .tile-toolbar-tools,
-.dashboard-tile.board-group-tile.tile-half .tile-toolbar-tools {
-  order: 3;
-  flex-basis: auto;
-}
-/* Notes menus/accent/mode: order 1 on narrow so they stay on title row with the name */
-.dashboard-tile.notes-tile.tile-quarter .btn-notes-file-menu,
-.dashboard-tile.notes-tile.tile-half .btn-notes-file-menu,
-.dashboard-tile.notes-tile.tile-quarter .btn-notes-edit-menu,
-.dashboard-tile.notes-tile.tile-half .btn-notes-edit-menu,
-.dashboard-tile.notes-tile.tile-quarter .tile-menu-wrap,
-.dashboard-tile.notes-tile.tile-half .tile-menu-wrap,
-.dashboard-tile.notes-tile.tile-quarter .btn-notes-mode,
-.dashboard-tile.notes-tile.tile-half .btn-notes-mode {
-  order: 1;
-}
-/* Notes formatting (B/I/S/U/H/emoji): drops to row 2 on narrow tiles */
-.dashboard-tile.notes-tile.tile-quarter .notes-quick-format-group,
-.dashboard-tile.notes-tile.tile-half .notes-quick-format-group {
-  order: 3;
-  flex-basis: 100%;
-}
-.dashboard-tile.tile-quarter .tile-toolbar-actions,
-.dashboard-tile.tile-half .tile-toolbar-actions {
-  order: 2;
-}
-.dashboard-tile.tile-quarter .tile-toolbar-tools,
-.dashboard-tile.tile-half .tile-toolbar-tools {
-  order: 3;
-  flex-basis: 100%;
-}
+/* ── Toolbar adaptive layout via container queries ─────────────────────────
+   The tile is a container (container-type: inline-size), so @container
+   queries respond to the tile's ACTUAL rendered width — no hardcoded
+   .tile-quarter / .tile-half / @media breakpoints needed.
 
-/* Mobile: same two-row behavior for all tiles (buttons to second row, min/close top-right of title bar) */
-@media (max-width: 600px) {
-  .tile-toolbar-title,
-  .group-tile-name-display,
-  .group-tile-name-input,
-  .tile-toolbar-count,
-  .group-tile-count,
-  .group-filter-summary-compact,
-  .notes-tile .btn-notes-file-menu,
-  .notes-tile .btn-notes-edit-menu,
-  .notes-tile .tile-menu-wrap,
-  .notes-tile .btn-notes-mode {
-    order: 1;
+   Rules:
+   - Actions (minimize/close) ALWAYS far right via margin-left:auto.
+   - When the tile is narrow (< ~550px), formatting + tools wrap to row 2.
+   - When wide, everything rides the title row automatically.
+────────────────────────────────────────────────────────────────────────── */
+
+/* Narrow: formatting drops to row 2 */
+@container (max-width: 550px) {
+  .notes-quick-format-group {
+    order: 10;
+    flex-basis: 100%;
   }
-  .tile-toolbar-actions {
-    order: 2;
-  }
-  /* Group tiles: deal count + filter summary go to row 2 (with filter/template).
-     Tools should NOT have flex-basis:100% so they share row 2 with count/summary. */
+  /* Group tiles: deal count + filter summary + tools (filter/template) row 2 */
   .board-group-tile .tile-toolbar-count,
   .board-group-tile .group-tile-count,
-  .board-group-tile .group-filter-summary-compact {
-    order: 3;
-  }
+  .board-group-tile .group-filter-summary-compact,
   .board-group-tile .tile-toolbar-tools {
-    order: 3;
-    flex-basis: auto;
+    order: 10;
   }
-  /* Formatting drops to row 2 on mobile */
-  .notes-tile .notes-quick-format-group {
-    order: 3;
+  /* Generic tiles: tools row 2 */
+  .tile-toolbar-tools {
+    order: 10;
     flex-basis: 100%;
   }
 }
@@ -5817,13 +5755,11 @@ body {
   min-height: calc(var(--tile-row-height) * 2 - 100px);
 }
 
-.dashboard-tile.notes-tile.tile-quarter .notes-tile-name {
-  max-width: 5.5rem;
-}
-
-/* Hide mode toggle on very narrow notes tiles to save title-row space */
-.dashboard-tile.notes-tile.tile-quarter .btn-notes-mode {
-  display: none;
+/* Narrow: constrain notes title width */
+@container (max-width: 400px) {
+  .notes-tile-name {
+    max-width: 5.5rem;
+  }
 }
 
 /* Ensure notes and calendar tiles actually shrink when collapsed (their specific min-height
