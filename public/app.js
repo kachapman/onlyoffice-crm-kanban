@@ -5749,6 +5749,7 @@ function bindNotesTileChrome(section, notes, tileId) {
         accentDropdown.classList.add("hidden");
         notes.accent = opt.value;
         accentBtn.style.color = opt.value || "";
+        applyNotesTileAccent(section, notes);
         saveNotesTilesToStorage();
         syncNotesTileBody(section, notes);
       });

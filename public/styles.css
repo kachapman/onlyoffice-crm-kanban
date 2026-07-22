@@ -1598,7 +1598,7 @@ body {
   flex-wrap: nowrap;
 }
 
-/* Narrow tiles: keep title+count on top row, pin actions (refresh/min/close) top-right,
+/* Narrow tiles: keep title on top row, pin actions (refresh/min/close) top-right,
    push tools (filter/template/format/etc) to second row. */
 .dashboard-tile.tile-quarter .tile-toolbar-title,
 .dashboard-tile.tile-half .tile-toolbar-title,
@@ -1613,6 +1613,22 @@ body {
 .dashboard-tile.tile-quarter .group-filter-summary-compact,
 .dashboard-tile.tile-half .group-filter-summary-compact {
   order: 1;
+}
+/* Group tiles: deal count + filter summary go to row 2 (with filter/template buttons),
+   NOT row 1 with the title. Only the title + actions stay on row 1.
+   Tools should NOT have flex-basis:100% so they share row 2 with count/summary. */
+.dashboard-tile.board-group-tile.tile-quarter .tile-toolbar-count,
+.dashboard-tile.board-group-tile.tile-half .tile-toolbar-count,
+.dashboard-tile.board-group-tile.tile-quarter .group-tile-count,
+.dashboard-tile.board-group-tile.tile-half .group-tile-count,
+.dashboard-tile.board-group-tile.tile-quarter .group-filter-summary-compact,
+.dashboard-tile.board-group-tile.tile-half .group-filter-summary-compact {
+  order: 3;
+}
+.dashboard-tile.board-group-tile.tile-quarter .tile-toolbar-tools,
+.dashboard-tile.board-group-tile.tile-half .tile-toolbar-tools {
+  order: 3;
+  flex-basis: auto;
 }
 /* Notes menus/accent/mode: order 1 on narrow so they stay on title row with the name */
 .dashboard-tile.notes-tile.tile-quarter .btn-notes-file-menu,
@@ -1657,6 +1673,17 @@ body {
   }
   .tile-toolbar-actions {
     order: 2;
+  }
+  /* Group tiles: deal count + filter summary go to row 2 (with filter/template).
+     Tools should NOT have flex-basis:100% so they share row 2 with count/summary. */
+  .board-group-tile .tile-toolbar-count,
+  .board-group-tile .group-tile-count,
+  .board-group-tile .group-filter-summary-compact {
+    order: 3;
+  }
+  .board-group-tile .tile-toolbar-tools {
+    order: 3;
+    flex-basis: auto;
   }
   /* Formatting drops to row 2 on mobile */
   .notes-tile .notes-quick-format-group {
