@@ -16,9 +16,10 @@ Target release v2.2.4 on `new-crm` branch.
 - **"+ Tab" button adds preview in background.** Clicking a project row still opens and switches to the preview tab; the "+ Tab" button adds a preview tab without leaving the search list.
 - **Removed "Open in CRM" links from search results and header search dropdown.** The dashboard is independent of OnlyOffice, so deep-linking to the old CRM is no longer needed.
 - **Reduced contrast on search result title and checkbox.** Title now uses `font-weight: 500` and a softer `#b8c0d0` color; checkbox is scaled down and muted.
+- **Inline project-fields editor in opportunity preview modal.** Added an edit button next to the "Project fields" title. Clicking it switches the section into an editable form with stage, contact, responsible, value, follow-up due date, private, and all custom/user fields. Uses the same input types as the create-project modal (e.g., date picker for Date of Loss). Check / X buttons save or cancel.
 - **Backend:** extended `GET /api/v2/projects` with `customFieldFilters`, `tagId`, `sort_by=stage`, and full-text `filterValue`; added `GET /api/v2/projects/count`; added trigram (GIN) indexes for fast `ILIKE` on text fields.
 - **Files:** `server.py`, `init.sql`, `public/index.html`, `public/app.js`, `public/styles.css`.
-- Cache-bust bumped to `app.js?v=1.95.14`, `styles.css?v=1.87.27`.
+- Cache-bust bumped to `app.js?v=1.95.15`, `styles.css?v=1.87.28`.
 
 ### v1.95.13
 - **Moved Tasks tile user filter into the title bar.** The `<select id="tasks-user-filter">` was previously in a separate `.panel-header` row below the toolbar with a "User" label. Removed the label and the panel-header row; the select now lives in `.tile-toolbar-tools` via a new `ensureTasksUserFilter()` helper. Added compact styling (`.tasks-user-filter-select`) so it matches toolbar height and does not thicken the title bar.

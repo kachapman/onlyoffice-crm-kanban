@@ -7052,6 +7052,10 @@ function buildOpportunityPutBody(opp, overrides = {}) {
   if (overrides.stageId !== undefined) body.stageId = overrides.stageId;
   if (overrides.probability !== undefined) body.probability = overrides.probability;
   if (overrides.title !== undefined) body.title = overrides.title;
+  if (overrides.contactId !== undefined) body.contactId = Number(overrides.contactId) || 0;
+  if (overrides.responsibleUserId !== undefined) body.responsibleUserId = String(overrides.responsibleUserId);
+  if (overrides.bidValue !== undefined) body.bidValue = Number(overrides.bidValue) || 0;
+  if (overrides.isPrivate !== undefined) body.isPrivate = !!overrides.isPrivate;
   return body;
 }
 
@@ -7111,7 +7115,7 @@ async function updateOpportunityStage(oppId, stageId) {
   if (res && res.queued) return;
 }
 
-async function updateOpportunityBulk(oppId, { dueDate, stageId, customFieldValues, title }) {
+async function updateOpportunityBulk(oppId, { dueDate, stageId, customFieldValues, title, contactId, responsibleUserId, bidValue, isPrivate }) {
   const opp = await fetchOpportunityForUpdate(oppId);
   const overrides = {};
   if (dueDate !== undefined) overrides.expectedCloseDate = dueDate || null;
@@ -7123,6 +7127,10 @@ async function updateOpportunityBulk(oppId, { dueDate, stageId, customFieldValue
     if (sp != null && !Number.isNaN(Number(sp))) overrides.probability = Number(sp);
   }
   if (title !== undefined) overrides.title = title;
+  if (contactId !== undefined) overrides.contactId = contactId;
+  if (responsibleUserId !== undefined) overrides.responsibleUserId = responsibleUserId;
+  if (bidValue !== undefined) overrides.bidValue = bidValue;
+  if (isPrivate !== undefined) overrides.isPrivate = isPrivate;
   const body = buildOpportunityPutBody(opp, overrides);
   if (customFieldValues?.length) {
     const existing = extractOpportunityCustomFieldList(opp);
@@ -17108,6 +17116,115 @@ function buildOpportunityPreviewUserFields(opp, customFieldValues) {
   return rows;
 }
 
+function createPreviewContactPicker(initialContactId, initialContactLabel) {
+  const wrap = document.createElement("div");
+  wrap.className = "preview-contact-picker";
+  const input = document.createElement("input");
+  input.type = "search";
+  input.className = "preview-contact-search";
+  input.placeholder = "Search contact…";
+  const results = document.createElement("div");
+  results.className = "contact-results hidden";
+  const selected = document.createElement("div");
+  selected.className = "contact-selected";
+
+  let contactId = initialContactId ? Number(initialContactId) : null;
+  let contactLabel = initialContactLabel || "";
+
+  function updateSelectedUi() {
+    if (contactId) {
+      selected.innerHTML = `${escapeHtml(contactLabel || `Contact #${contactId}`)} <span class="contact-clear" role="button" tabindex="0">clear</span>`;
+      const clearBtn = selected.querySelector(".contact-clear");
+      if (clearBtn) {
+        clearBtn.addEventListener("click", () => {
+          contactId = null;
+          contactLabel = "";
+          input.value = "";
+          updateSelectedUi();
+        });
+      }
+    } else {
+      selected.innerHTML = "";
+    }
+  }
+
+  updateSelectedUi();
+
+  let debounce;
+  input.addEventListener("input", () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(async () => {
+      const q = input.value.trim();
+      results.innerHTML = "";
+      if (q.length < 2) {
+        results.classList.add("hidden");
+        return;
+      }
+      try {
+        const contacts = await searchContacts(q);
+        results.classList.remove("hidden");
+        if (!contacts.length) {
+          results.innerHTML = '<button type="button" disabled>No matches</button>';
+          return;
+        }
+        for (const c of contacts) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = c.displayName || c.title || `Contact #${c.id}`;
+          btn.addEventListener("click", () => {
+            contactId = Number(c.id ?? c.ID);
+            contactLabel = btn.textContent;
+            input.value = "";
+            results.classList.add("hidden");
+            updateSelectedUi();
+          });
+          results.appendChild(btn);
+        }
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    }, 350);
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!wrap.contains(e.target)) results.classList.add("hidden");
+  });
+
+  wrap.appendChild(input);
+  wrap.appendChild(results);
+  wrap.appendChild(selected);
+  wrap.getContactId = () => contactId;
+  return wrap;
+}
+
+function collectPreviewCustomFieldValues(container) {
+  const values = [];
+  if (!state.customFieldDefs) return values;
+  for (const def of state.customFieldDefs) {
+    const fieldId = customFieldDefinitionId(def);
+    if (fieldId == null) continue;
+    if (isCreateOppExcludedUserField(def)) continue;
+    if (createOppCustomFieldInputKind(def) === "heading") continue;
+
+    const fieldEl = container.querySelector(`[data-custom-field-id="${String(fieldId)}"]`);
+    if (!fieldEl) continue;
+
+    const input = fieldEl.querySelector("input, select, textarea");
+    if (!input) continue;
+
+    let raw;
+    if (input.type === "checkbox") {
+      if (!input.checked) continue;
+      raw = "true";
+    } else {
+      raw = String(input.value ?? "").trim();
+      if (!raw) continue;
+    }
+    values.push({ fieldId, value: formatCustomFieldValueForApi(def, raw), def });
+  }
+  return values;
+}
+
 async function fetchAllOpportunityHistory(oppId, maxPages) {
   const all = [];
   let startIndex = 0;
@@ -17121,7 +17238,7 @@ async function fetchAllOpportunityHistory(oppId, maxPages) {
       entityType: "opportunity",
       entityId: String(oppId),
     });
-  const path = `/api/v2/projects/${oppId}/history?${params}`;
+    const path = `/api/v2/projects/${oppId}/history?${params}`;
     const data = await api(path);
     const page = unwrapHistoryEvents(data);
     if (!page.length) break;
@@ -20898,7 +21015,29 @@ function renderOpportunityPreviewContent(container, data) {
   });
 
   // 4. Project Fields — standard (non-stage) + user fields, 2-column grid
-  appendPreviewSection(detailsContent, "Project fields", (section) => {
+  const pfSection = document.createElement("section");
+  pfSection.className = "opp-preview-section";
+  const pfHead = document.createElement("div");
+  pfHead.className = "opp-preview-section-head";
+  const pfTitle = document.createElement("h3");
+  pfTitle.className = "opp-preview-section-title";
+  pfTitle.textContent = "Project fields";
+  pfHead.appendChild(pfTitle);
+  const pfEditBtn = document.createElement("button");
+  pfEditBtn.type = "button";
+  pfEditBtn.className = "opp-preview-section-edit";
+  pfEditBtn.setAttribute("aria-label", "Edit project fields");
+  pfEditBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10.5-10.5a2 2 0 0 0-2.83-2.83L6 16v4"/><path d="M13.5 6.5l4 4"/></svg>`;
+  pfHead.appendChild(pfEditBtn);
+  pfSection.appendChild(pfHead);
+
+  const pfBody = document.createElement("div");
+  pfBody.className = "opp-preview-section-body";
+  pfSection.appendChild(pfBody);
+  detailsContent.appendChild(pfSection);
+
+  function renderProjectFieldsDisplay() {
+    pfBody.innerHTML = "";
     const allRows = supplementRequestRow
       ? [supplementRequestRow, ...nonStageStandardRows, ...userRows]
       : [...nonStageStandardRows, ...userRows];
@@ -20906,7 +21045,7 @@ function renderOpportunityPreviewContent(container, data) {
       const p = document.createElement("p");
       p.className = "opp-preview-empty";
       p.textContent = "None";
-      section.appendChild(p);
+      pfBody.appendChild(p);
       return;
     }
     const dl = document.createElement("dl");
@@ -20953,9 +21092,8 @@ function renderOpportunityPreviewContent(container, data) {
       field.appendChild(dd);
       dl.appendChild(field);
     }
-    section.appendChild(dl);
+    pfBody.appendChild(dl);
 
-    // Checklist items as 3-column field cards (same styling, no section title)
     if (checklistRows.length) {
       const dl2 = document.createElement("dl");
       dl2.className = "opp-preview-fields opp-preview-fields-3col";
@@ -20973,9 +21111,180 @@ function renderOpportunityPreviewContent(container, data) {
         field.appendChild(lbl);
         dl2.appendChild(field);
       }
-      section.appendChild(dl2);
+      pfBody.appendChild(dl2);
     }
-  });
+  }
+
+  async function renderProjectFieldsEdit() {
+    pfBody.innerHTML = '<p class="opp-preview-loading">Loading edit form…</p>';
+    const oppForUpdate = await fetchOpportunityForUpdate(oppId);
+    const currentCfValues = await fetchOpportunityCustomFieldValues(oppId).catch(() => []);
+    pfBody.innerHTML = "";
+
+    const form = document.createElement("div");
+    form.className = "opp-preview-fields-edit";
+
+    function addRow(label, control) {
+      const row = document.createElement("div");
+      row.className = "opp-preview-fields-edit-row";
+      const lbl = document.createElement("label");
+      lbl.textContent = label;
+      row.appendChild(lbl);
+      const wrap = document.createElement("div");
+      wrap.className = "opp-preview-fields-edit-control";
+      wrap.appendChild(control);
+      row.appendChild(wrap);
+      form.appendChild(row);
+      return row;
+    }
+
+    const stageSelect = document.createElement("select");
+    stageSelect.innerHTML = '<option value="">—</option>';
+    for (const s of state.stages || []) {
+      const opt = document.createElement("option");
+      opt.value = String(s.id ?? s.ID);
+      opt.textContent = s.title || s.Title || `Stage ${s.id ?? s.ID}`;
+      stageSelect.appendChild(opt);
+    }
+    stageSelect.value = String(resolveOppStageId(oppForUpdate) || "");
+    addRow("Stage", stageSelect);
+
+    const contactPicker = createPreviewContactPicker(
+      oppForUpdate.contactId,
+      oppForUpdate.contact?.displayName || getOpportunityContactLabel(oppForUpdate)
+    );
+    addRow("Contact", contactPicker);
+
+    const responsibleSelect = document.createElement("select");
+    responsibleSelect.innerHTML = '<option value="">—</option>';
+    const users = new Map();
+    if (state.currentUserId != null) {
+      users.set(String(state.currentUserId), String(state.currentUserName || state.currentUserId));
+    }
+    for (const u of state.portalUsers || []) {
+      if (u.id != null) users.set(String(u.id), String(u.displayName || u.id));
+    }
+    for (const [uid, name] of [...users.entries()].sort((a, b) => String(a[1] || "").localeCompare(String(b[1] || "")))) {
+      const opt = document.createElement("option");
+      opt.value = uid;
+      opt.textContent = name;
+      responsibleSelect.appendChild(opt);
+    }
+    responsibleSelect.value = String(oppForUpdate.responsibleUserId || oppForUpdate.responsible?.id || oppForUpdate.responsible?.ID || "");
+    addRow("Responsible", responsibleSelect);
+
+    const valueInput = document.createElement("input");
+    valueInput.type = "number";
+    valueInput.step = "0.01";
+    valueInput.value = oppForUpdate.bidValue ?? oppForUpdate.BidValue ?? "";
+    addRow("Value", valueInput);
+
+    const dueInput = document.createElement("input");
+    dueInput.type = "date";
+    dueInput.value = dueDateToInputValue(opportunityDueDateRaw(oppForUpdate));
+    addRow("Follow-up Due Date", dueInput);
+
+    const privateSelect = document.createElement("select");
+    privateSelect.innerHTML = '<option value="false">No</option><option value="true">Yes</option>';
+    privateSelect.value = String(!!(oppForUpdate.isPrivate ?? oppForUpdate.IsPrivate));
+    addRow("Private", privateSelect);
+
+    const cfWrap = document.createElement("div");
+    cfWrap.className = "opp-preview-fields-edit-custom";
+    for (const def of state.customFieldDefs || []) {
+      const fieldId = customFieldDefinitionId(def);
+      if (fieldId == null) continue;
+      if (isCreateOppExcludedUserField(def)) continue;
+      const kind = createOppCustomFieldInputKind(def);
+      if (kind === "heading") continue;
+
+      const savedItem = currentCfValues.find((item) => Number(item.id ?? item.ID ?? item.fieldId ?? item.FieldId) === Number(fieldId));
+      const savedRaw = savedItem ? readSavedCustomFieldValue(savedItem) : "";
+      const label = customFieldLabel(def) || `Field ${fieldId}`;
+      let overriddenKind = kind;
+      if (fieldNameMatches(label, ["Date of Loss"])) overriddenKind = "date";
+      if (fieldNameMatches(label, ["Measurement Report", "Insurance Documents", "Inspection Photos", "PA CONTRACT"])) overriddenKind = "checkbox";
+
+      const field = document.createElement("div");
+      field.className = "field";
+      field.dataset.customFieldId = String(fieldId);
+
+      const input = buildCreateOppCustomFieldInput(def, fieldId, overriddenKind);
+      const inputId = `preview-edit-cf-${fieldId}`;
+      input.id = inputId;
+      if (input.dataset) input.dataset.customFieldId = String(fieldId);
+
+      if (overriddenKind === "checkbox") {
+        if (savedRaw === "true" || savedRaw === "1" || savedRaw.toLowerCase() === "yes") input.checked = true;
+        const lbl = document.createElement("label");
+        lbl.className = "checkbox-filter";
+        lbl.appendChild(input);
+        lbl.appendChild(document.createTextNode(` ${label}`));
+        field.appendChild(lbl);
+      } else {
+        input.value = savedRaw;
+        const lbl = document.createElement("label");
+        lbl.setAttribute("for", inputId);
+        lbl.textContent = label;
+        field.appendChild(lbl);
+        field.appendChild(input);
+      }
+      cfWrap.appendChild(field);
+    }
+    if (cfWrap.children.length) {
+      const cfLegend = document.createElement("div");
+      cfLegend.className = "opp-preview-fields-edit-legend";
+      cfLegend.textContent = "Custom fields";
+      form.appendChild(cfLegend);
+      form.appendChild(cfWrap);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "opp-preview-fields-edit-actions";
+    const saveBtn = document.createElement("button");
+    saveBtn.type = "button";
+    saveBtn.className = "btn btn-primary btn-small";
+    saveBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+    saveBtn.setAttribute("aria-label", "Save project fields");
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "btn btn-ghost btn-small";
+    cancelBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+    cancelBtn.setAttribute("aria-label", "Cancel");
+    actions.appendChild(saveBtn);
+    actions.appendChild(cancelBtn);
+    form.appendChild(actions);
+    pfBody.appendChild(form);
+
+    cancelBtn.addEventListener("click", renderProjectFieldsDisplay);
+
+    saveBtn.addEventListener("click", async () => {
+      saveBtn.disabled = true;
+      cancelBtn.disabled = true;
+      try {
+        await updateOpportunityBulk(oppId, {
+          stageId: stageSelect.value ? Number(stageSelect.value) : undefined,
+          responsibleUserId: responsibleSelect.value || undefined,
+          bidValue: valueInput.value !== "" ? Number(valueInput.value) : undefined,
+          expectedCloseDate: dueInput.value || null,
+          isPrivate: privateSelect.value === "true",
+          contactId: contactPicker.getContactId() || undefined,
+          customFieldValues: collectPreviewCustomFieldValues(cfWrap) || undefined,
+        });
+        state.oppCustomFieldCache?.invalidate(oppId);
+        showToast("Project fields updated");
+        const newData = await fetchOpportunityPreviewData(oppId, true);
+        renderOpportunityPreviewContent(container, newData);
+      } catch (err) {
+        showToast(err.message, true);
+        saveBtn.disabled = false;
+        cancelBtn.disabled = false;
+      }
+    });
+  }
+
+  pfEditBtn.addEventListener("click", renderProjectFieldsEdit);
+  renderProjectFieldsDisplay();
 
   appendPreviewSection(detailsContent, "History & notes", (section) => {
     if (!history.length) {

@@ -103,7 +103,7 @@ Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local 
 | 2F: Notification drawer | 🔲 | Feed tile + keyword filter exists; no slide-out drawer with inline replies. |
 | 2G: User profile/account modal | 🔲 | /api/user-profile exists for sync; no dedicated modal for edit (name/email/pw/prefs/pic). |
 | 2H: Documents modal | ✅ | Full file manager: three scopes (project/personal/company), nested folders in personal/company, breadcrumb navigation, New button (Word/Excel/Folder), folder context menu (rename/delete with recursive CTE), inline rename, move/copy popup, batch ops, search, icon-only toolbar, sidebar toggle, drag-drop upload. Document Server used as editor with title-bar rename sync. |
-| 2I: Preview modal + tile revamp | 🔵 | Code complete: Description→top, "Project Fields" merged, Stage dropdown, "Follow-up Due Date", interactive Tags (add/remove), Checklist 3-col checkboxes, kanban created date + native tooltip. Needs LAN server testing. |
+| 2I: Preview modal + tile revamp | ✅ | Description→top, "Project Fields" merged, Stage dropdown, "Follow-up Due Date", interactive Tags (add/remove), Checklist 3-col checkboxes, kanban created date + native tooltip. Inline project-fields editor added. Browser verified. |
 | 2J: Re-import CRM data | 🔲 | Re-run `migrate_from_onlyoffice.py` export script (with tasks and user/custom fields fixed) then import into new CRM to verify all data displays correctly in preview modals, deal tiles, kanban stages, tags, and custom fields. |
 
 ### Phase 2A Details: Search Modal Expansion (FEAT-007 Phase D)

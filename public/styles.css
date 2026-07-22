@@ -2652,6 +2652,21 @@ body {
   text-decoration: underline;
 }
 
+.preview-contact-picker {
+  position: relative;
+}
+
+.preview-contact-search {
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-family: var(--font);
+}
+
 .board-group .board {
   padding: 1rem 1.25rem;
   max-width: none;
@@ -4969,6 +4984,112 @@ body {
 .opp-preview-field-overdue {
   border-color: rgba(220, 38, 38, 0.45);
   background: rgba(220, 38, 38, 0.06);
+}
+
+/* Inline project-fields edit mode in preview modal */
+.opp-preview-fields-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.opp-preview-fields-edit-row {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.opp-preview-fields-edit-row > label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-align: right;
+}
+
+.opp-preview-fields-edit-control input,
+.opp-preview-fields-edit-control select,
+.opp-preview-fields-edit-control textarea {
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-family: var(--font);
+}
+
+.opp-preview-fields-edit-control input:focus,
+.opp-preview-fields-edit-control select:focus,
+.opp-preview-fields-edit-control textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+.opp-preview-fields-edit-legend {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: 0.5rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.opp-preview-fields-edit-custom .field {
+  margin-bottom: 0.5rem;
+}
+
+.opp-preview-fields-edit-custom .field label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 0.25rem;
+}
+
+.opp-preview-fields-edit-custom .field input,
+.opp-preview-fields-edit-custom .field select,
+.opp-preview-fields-edit-custom .field textarea {
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-family: var(--font);
+}
+
+.opp-preview-fields-edit-custom .checkbox-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.opp-preview-fields-edit-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 0.5rem;
+}
+
+.opp-preview-fields-edit-actions .btn-small {
+  padding: 0.35rem 0.6rem;
+}
+
+@media (max-width: 600px) {
+  .opp-preview-fields-edit-row {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
+  }
+  .opp-preview-fields-edit-row > label {
+    text-align: left;
+  }
 }
 
 .opp-preview-description {
