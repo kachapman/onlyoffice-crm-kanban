@@ -8552,6 +8552,40 @@ body {
   .admin-main {
     max-height: 60vh;
   }
+  #admin-console-modal .admin-tabs-toggle {
+    display: flex;
+    flex: 0 0 auto;
+    align-self: stretch;
+    width: 18px;
+    min-width: 18px;
+    padding: 0;
+    border: none;
+    border-right: 1px solid var(--border);
+    background: var(--surface-2);
+    cursor: pointer;
+    font-size: 10px;
+    color: var(--muted);
+    align-items: center;
+    justify-content: center;
+    writing-mode: vertical-lr;
+    text-orientation: mixed;
+    user-select: none;
+    transition: background 0.15s, color 0.15s;
+  }
+  #admin-console-modal .admin-tabs-toggle:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+  #admin-console-modal .admin-tabs.admin-tabs-collapsed {
+    width: 0 !important;
+    flex: 0 0 0 !important;
+    padding: 0 !important;
+    overflow: hidden;
+    border-right: none;
+  }
+  #admin-console-modal .admin-tabs.admin-tabs-collapsed + .admin-tabs-toggle {
+    border-right: 1px solid var(--border);
+  }
 }
 
 /* ── Documents Modal ──────────────────────────────────────── */
