@@ -1749,6 +1749,16 @@ body {
   height: auto;
 }
 
+/* Double-height panels: fill the 2-row grid area */
+.dashboard-tile.tile-double.feed-panel,
+.dashboard-tile.tile-double.tasks-panel,
+.dashboard-tile.tile-double.presence-panel {
+  min-height: calc(var(--tile-row-height) * 2 + 1.25rem);
+}
+.dashboard-tile.tile-double.presence-panel .presence-tile-body {
+  max-height: none;
+}
+
 /* Team tile body fills available height with scroll constraint */
 .dashboard-tile.presence-panel .presence-tile-body {
   flex: 1;
@@ -1846,17 +1856,23 @@ body {
   border-top: none;
 }
 
+/* All board-group-tiles: remove the global .board min-height (420px) that exceeds
+   --tile-row-height (400px) and causes resize jump + overflow past footer.
+   Double-mode gets the proper taller min-height. */
 .dashboard-tile.board-group-tile .board {
+  min-height: 0;
   padding-bottom: 1rem;
 }
+.dashboard-tile.tile-double.board-group-tile .board {
+  min-height: calc(var(--tile-row-height) * 2 - 80px);
+}
 
-/* Local kanban: remove the global .board min-height (420px) that exceeds
-   --tile-row-height (400px) and causes resize jump + overflow past footer. */
+/* Local kanban: also remove bottom padding 'chin' */
 .dashboard-tile.local-kanban-tile .board {
-  min-height: 0;
+  padding-bottom: 0;
 }
 .dashboard-tile.local-kanban-tile.tile-double .board {
-  min-height: calc(var(--tile-row-height) * 2 - 80px);
+  padding-bottom: 0;
 }
 
 /* Top panels */

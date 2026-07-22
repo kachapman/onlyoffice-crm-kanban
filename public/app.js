@@ -1586,13 +1586,19 @@ function bindTileResize(tileEl, tileId, handle, corner) {
 
     // Vertical decision based on pointer position relative to grid rows.
     // Latch decision. Skipped while collapsed.
+    // Require minimum 30px vertical drag before deciding height — prevents
+    // accidental double-height when clicking resize handle on a tall tile
+    // (e.g., group tiles with 420px .board min-height + toolbar).
     if (!tileBodyCollapsed(tileId)) {
       const pointerY = (e.clientY || 0);
-      const rowBoundary = baseTop + rowUnit;
-      if (pointerY > rowBoundary + rowUnit * 0.15) {
-        pendingHeight = "double";
-      } else if (pointerY < rowBoundary - rowUnit * 0.15) {
-        pendingHeight = "normal";
+      const dy = Math.abs(pointerY - startY);
+      if (dy > 30) {
+        const rowBoundary = baseTop + rowUnit;
+        if (pointerY > rowBoundary + rowUnit * 0.15) {
+          pendingHeight = "double";
+        } else if (pointerY < rowBoundary - rowUnit * 0.15) {
+          pendingHeight = "normal";
+        }
       }
     }
     positionGhost(newSpan, pendingHeight);
@@ -4497,7 +4503,8 @@ function renderCalendarTiles(dash) {
           '<p class="tile-collapsed-hint">Minimized — expand to load calendar</p>';
       }
     } else if (state.calendarCache[tid]) {
-      renderCalendarMonthBody(section, cal);
+      // Defer heavy calendar month rendering to avoid blocking dashboard paint.
+      requestAnimationFrame(() => renderCalendarMonthBody(section, cal));
     } else {
       const body = section.querySelector(".calendar-month-body");
       if (body) body.innerHTML = '<p class="calendar-loading-hint">Loading calendar…</p>';
@@ -14079,6 +14086,7 @@ function renderPresenceTile() {
     `;
     $("#dashboard-tiles")?.appendChild(tile);
     bindTileChrome(tile, tileId);
+    applyTileLayoutClasses(tile, tileId);
     bindPresenceTileControls(tile);
   }
   renderPresenceTileCompact();
