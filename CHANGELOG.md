@@ -2,37 +2,39 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
-## Phase 2D-3 — Grid stability fix (ISSUE-013)
+## Phase 2D-3 — Grid stability fix (ISSUE-013) ✅ COMPLETE
 
-### v1.95.13 (pending verification — committed, not pushed)
+Released 2026-07-22 as v2.2.3. Pushed to `new-crm` branch.
+
+### v1.95.13
 - **Moved Tasks tile user filter into the title bar.** The `<select id="tasks-user-filter">` was previously in a separate `.panel-header` row below the toolbar with a "User" label. Removed the label and the panel-header row; the select now lives in `.tile-toolbar-tools` via a new `ensureTasksUserFilter()` helper. Added compact styling (`.tasks-user-filter-select`) so it matches toolbar height and does not thicken the title bar.
 - **Fixed Team/Tasks tile toolbars wrapping on narrow/mobile widths.** The `@container (max-width: 550px)` rule forced `.tile-toolbar-tools` to a second row for all tiles, which pushed the Team status dropdown and Tasks user selector below the title bar on mobile. Added overrides to keep those tools on the title row, set `flex-wrap: nowrap` on the Team/Tasks toolbars, and reduced select max-width/padding in the mobile breakpoint.
 - Cache-bust bumped to `app.js?v=1.95.11`, `styles.css?v=1.87.23`.
 
-### v1.95.12 (pending verification — committed, not pushed)
+### v1.95.12
 - **Fixed Team tile Messages tab showing "No messages yet" when messages exist.** Two-part root cause: (1) the `/api/presence` endpoint did not include `myRecentDms` or `lastReadDms` in its response, so both the tile and popup Messages tabs had no inbox data; (2) `renderPresenceTileCompact` only re-rendered the Team tab body when fresh snapshots arrived, so the Messages tab never updated even after the server started returning data. Updated `server.py` `_handle_presence_get` to return `myRecentDms` and `lastReadDms`, and updated `renderPresenceTileCompact` to refresh `#presence-tile-messages-body` when it is visible.
 - **Fixed Team tile Messages tab shrinking.** Removed `max-height: 280px` from `.dashboard-tile.presence-panel .presence-tile-body` and set `min-height: 240px` so the body fills the tile height instead of collapsing when the inbox is empty.
 - Cache-bust bumped to `app.js?v=1.95.10`, `styles.css?v=1.87.21`.
 
-### v1.95.11 (pending verification — committed, not pushed)
+### v1.95.11
 - **Fixed Team popup Messages tab shrinking.** Added `min-height: 320px` to `.presence-list` so the modal content area keeps a stable height even when the inbox is empty.
 - **Fixed Messages tab empty state.** When there are no recent DMs, the Messages tab now shows the team roster with a "Select a team member to start messaging" header so users can open a DM thread directly from the Messages tab instead of switching to Team and back.
 - Cache-bust bumped to `app.js?v=1.95.8`, `styles.css?v=1.87.20`.
 
-### v1.95.10 (pending verification — committed, not pushed)
+### v1.95.10
 - **Fixed preview tag dropdown cut off when no tags.** The tag add dropdown used `.template-dropdown`'s default `right: 0` positioning, so when no tag chips were present the + button sat at the left edge of the preview modal and the menu opened to the left, extending past the modal border. Added `.opp-preview-tag-add-wrap .template-dropdown { left: 0; right: auto; }` so it always opens to the right and stays visible.
 - Cache-bust bumped to `styles.css?v=1.87.19`.
 
-### v1.95.9 (pending verification — committed, not pushed)
+### v1.95.9
 - **Fixed spikey tile corner artifacts (root cause).** Commit `fe4ccf8` removed `.dashboard-tile.board-group-tile { overflow: hidden; }` to avoid clipping the kanban horizontal scrollbar, but that exposed square-corner artifacts at tile corners. Reverted that removal: `.board-group-tile` once again has `overflow: hidden` so children clip to the tile's `border-radius`. To keep the horizontal scrollbar visible, restored `padding-bottom: 1rem` on `.dashboard-tile.board-group-tile .board` (and `.local-kanban-tile .board`) so the scrollbar sits above the rounded bottom corners instead of being clipped.
 - Cache-bust bumped to `styles.css?v=1.87.18`.
 
-### v1.95.8 (pending verification — committed, not pushed)
+### v1.95.8
 - **Fixed squared-off artifacts on tile corners (follow-up).** Shrunk resize handles from 22x22px to 12x12px and moved them 6px inward from corners so they sit entirely within the tile's border-radius zone. Added `pointer-events: none` so handles are truly non-interactive at all times. Mobile handles now 18x18px (was 28x28px).
 - **Minimized tiles now uniform height (follow-up).** Team/Presence tile: KEEP status dropdown visible when collapsed, hide tabs (`presence-tile-tabs-inline`). Override `.panel-header` padding from `0.65rem 1rem 0` + `margin-bottom: 0.5rem` to `0.45rem 0.65rem` + `margin-bottom: 0` to match standard `.tile-toolbar`. Open Pipeline: hide filter summary (`.group-filter-summary-compact`) when collapsed. Notes tiles: explicit `padding: 0.45rem 0.65rem` on `.notes-tile-bar` when collapsed to ensure uniform toolbar height matching Tasks tile reference.
 - Cache-bust bumped to `styles.css?v=1.87.17`.
 
-### v1.95.7 (pending verification — committed, not pushed)
+### v1.95.7
 - **Fixed grid gaps and erratic resize on all tile types.** Root cause of gaps: grid had `align-items:start` which prevented shorter tiles from stretching to fill their row height. When one tile in a row was tall (e.g. Team), shorter tiles (Tasks, Notifications) left visible empty gaps below them. Removed `align-items:start` so tiles use the default `stretch`, filling the entire grid row. Collapsed tiles already override with `align-self:start`.
 - **Fixed erratic resize on all tile types.** Root cause: `bindTileResize` used the CSS variable `--tile-row-height` (400px) as the reference for the height decision boundary and ghost preview. With `grid-auto-rows: auto`, actual row heights vary. When a tile sat in a row taller than 400px, the boundary was wrong — the ghost showed incorrect dimensions and the normal/double toggle triggered at wrong positions. Fix: compute `singleRowH` from the actual rendered tile height at pointerdown. For normal tiles, `singleRowH = baseHeight` (tile stretches to row height). For double tiles, back-compute `(baseHeight - gapWidth) / 2`. Ghost preview and height boundary now use `singleRowH` and `baseHeight` instead of the CSS variable.
 - **Calendar rendering chunked into async batches.** `renderCalendarMonthBody` now renders 1 week per `requestIdleCallback` (with `setTimeout` fallback) so the main thread stays responsive during calendar paint. The grid header + weekday row render immediately; each of the 6 week rows is appended via `insertAdjacentHTML` in its own idle callback. Month label, event count, and click handlers are bound after the final week renders. Also deferred the `loadCalendarForTile` render call via `requestAnimationFrame` so ICS fetch completion doesn't block the initial dashboard paint.
@@ -44,7 +46,7 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - **Group tile grid fix.** Removed `overflow:hidden` from board-group-tile — it was clipping the board's horizontal scrollbar needed for kanban column navigation. Board handles its own overflow via `overflow-x:auto; overflow-y:auto`.
 - Cache-bust bumped to `app.js?v=1.95.7`, `styles.css?v=1.87.15`.
 
-### v1.95.5 (pending verification — committed, not pushed)
+### v1.95.5
 - **Fixed gaps between tiles (follow-up).** Restored `grid-auto-flow: dense` so later tiles backfill holes — tight masonry-style packing is the expected tiling behavior. Safe now that resize commits once per gesture and the other jumpiness causes are gone. Also root-caused thin dead strips around feed/tasks/presence tiles: the legacy `.panel` class carried `margin: 0 auto 1.25rem` (full-width top-panel era), which shrank + centered those tiles inside their grid areas — added `.dashboard-tile.panel { margin: 0; max-width: none; }` so they stretch to fill their cells.
 - **Fixed erratic tile jumping during resize and drag.** Root causes: resize committed span classes + localStorage on every mousemove; the snap threshold was re-measured from the just-reflowed grid each event; SortableJS `forceFallback` floated a detached clone over the grid-locked real tile; every tile animated `transform` with `will-change`. See ISSUES.md ISSUE-013.
 - **Resize is now ghost-preview + commit-on-release.** Dragging a corner handle moves only a dashed accent outline (clamped inside the grid); the tile's span class and storage save apply exactly once on pointerup, only if the span changed. Unified mouse/touch via pointer events.
@@ -55,7 +57,7 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - Cache-bust bumped to `app.js?v=1.95.5`, `styles.css?v=1.87.13`.
 - Known follow-up: `renderBoardGroups()` still rebuilds every group tile on data refresh (loses scroll/filter DOM state) — deferred, see ISSUE-013.
 
-### v1.95.6 (pending verification — committed, not pushed)
+### v1.95.6
 - **Height resize added to corner handles.** Drag vertically to toggle normal/double height (grid-row span). Ghost preview shows target height; commits on pointerup only (single save).
 - **Click-to-edit titles, no more pencils.** All tiles (groups, notes, calendars, local kanban) now enter edit mode by clicking the title text directly. Enter or blur saves; Escape reverts. The edit input only exists while editing and sizes itself dynamically to the text (ch units) so it never pushes buttons to another row.
 - **Uniform toolbar layout across all tiles.** New containers: `.tile-toolbar-tools` (tile-specific buttons: filter, template, format, new-task, eye, calendar nav, etc.) and `.tile-toolbar-actions` (Refresh, Minimize, Close). Actions are always last with `margin-left:auto`.

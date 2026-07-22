@@ -1,7 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** 2026-07-22 session 11: Team/Tasks tile toolbars no longer wrap on mobile. The `@container (max-width: 550px)` rule was pushing `.tile-toolbar-tools` to a second row for all tiles, which put the Team status dropdown and Tasks user selector on a second row on narrow screens. Added overrides to keep those tools on the title row, set `flex-wrap: nowrap` on Team/Tasks toolbars, and tightened select max-width/padding on mobile. Also retains session 10 (Tasks user filter in title bar), session 9 (Team Messages tab fixes), and earlier fixes. Cache-bust: app.js?v=1.95.11, styles.css?v=1.87.23. Committed but NOT pushed — DO NOT PUSH until user verifies in browser.
+**Last session summary (for next resume):** 2026-07-22 session 11: Phase 2D-3 marked complete and pushed to GitHub `new-crm` branch. Final fixes: Team/Tasks tile toolbars no longer wrap on mobile (container-query override + flex-wrap:nowrap + compact selects). Session 10 (Tasks user filter in title bar), session 9 (Team Messages tab fixes), and earlier 2D-3 grid stability fixes all shipped. Cache-bust: app.js?v=1.95.11, styles.css?v=1.87.23. PUSHED.
 
 - Known issue: server process dies when backgrounded from opencode shell (use `setsid` to detach — see ISSUE-012).
 - Known issue: server must be killed and restarted after opencode session exits (use `setsid` to detach — see ISSUE-012).
