@@ -1863,11 +1863,9 @@ body {
   border-top: none;
 }
 
-/* Board-group-tiles: clip board overflow so unbounded column growth
-   doesn't push the tile past its max-height. */
-.dashboard-tile.board-group-tile {
-  overflow: hidden;
-}
+/* Board-group-tiles: let the board handle its own overflow scrolling.
+   Do NOT set overflow:hidden on the tile — it would clip the board's
+   horizontal scrollbar needed for kanban column navigation. */
 
 /* All board-group-tiles: cap board height to tile size, scroll vertically
    when columns overflow. Without this, tall columns push the tile to
@@ -3970,6 +3968,21 @@ body {
   background: var(--surface);
 }
 
+/* Inline tabs in tile toolbar — no border, no background, compact padding */
+.presence-tile-tabs-inline {
+  border-bottom: none;
+  padding: 0;
+  background: transparent;
+  gap: 0;
+  flex-shrink: 0;
+}
+.presence-tile-tabs-inline .presence-tile-tab {
+  padding: 0.15rem 0.5rem;
+  font-size: 0.72rem;
+  border-bottom-width: 1px;
+  margin-bottom: 0;
+}
+
 .presence-tile-tab {
   background: transparent;
   border: none;
@@ -4059,15 +4072,15 @@ body {
 }
 
 .presence-status-select-tile {
-  padding: 0.2rem 0.4rem;
+  padding: 0.15rem 0.35rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface-2);
   color: var(--text);
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   font-family: var(--font);
   cursor: pointer;
-  max-width: 160px;
+  max-width: 140px;
 }
 
 .presence-status-select-tile:focus {

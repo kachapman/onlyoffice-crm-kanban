@@ -14076,29 +14076,6 @@ function renderPresenceTile() {
     tile.dataset.tileId = tileId;
     tile.dataset.tileLabel = "Team";
     tile.innerHTML = `
-      <div class="panel-header panel-header-presence">
-        <div class="presence-tile-toolbar">
-          <select id="presence-tile-status" class="presence-status-select-tile" title="Set your status">
-            <option value="Online">Online</option>
-            <option value="DND - Estimating">DND - Estimating</option>
-            <option value="AFK - Lunch">AFK - Lunch</option>
-            <option value="AFK - Other">AFK - Other</option>
-            <option value="__custom__">Custom...</option>
-          </select>
-          <div id="presence-tile-custom-wrap" class="presence-custom-wrap" style="display:none;">
-            <input type="text" id="presence-tile-custom-input" class="presence-custom-input" placeholder="Custom status…" maxlength="120" />
-            <button type="button" id="presence-tile-custom-ok" class="presence-custom-ok">✓</button>
-            <button type="button" id="presence-tile-custom-cancel" class="presence-custom-cancel">✕</button>
-          </div>
-          <button type="button" id="presence-tile-admin-btn" class="presence-admin-toggle-tile hidden" title="Admin view">Admin</button>
-        </div>
-        <span id="presence-tile-unread-flash" class="presence-unread-flash hidden" title="Unread messages">✉</span>
-        <button type="button" id="presence-tile-popup-btn" class="presence-popup-btn" title="Open team viewer in popup">⤢</button>
-      </div>
-      <div class="presence-tile-tabs">
-        <button type="button" class="presence-tile-tab active" data-tab="team">Team</button>
-        <button type="button" class="presence-tile-tab" data-tab="messages">Messages<span id="presence-tile-msg-badge" class="msg-badge hidden">0</span></button>
-      </div>
       <div id="presence-tile-team-body" class="presence-tile-body presence-tile-tab-content active"></div>
       <div id="presence-tile-messages-body" class="presence-tile-body presence-tile-tab-content" style="display:none;"></div>
       <div id="presence-tile-dm-inline" class="presence-tile-body" style="display:none;">
@@ -14121,6 +14098,66 @@ function renderPresenceTile() {
     $("#dashboard-tiles")?.appendChild(tile);
     bindTileChrome(tile, tileId);
     applyTileLayoutClasses(tile, tileId);
+    /* Move status dropdown, tabs, and popup button into the tile toolbar
+       so the header area matches the compact height of tasks/notifications. */
+    const toolbar = tile.querySelector(":scope > .tile-toolbar");
+    if (toolbar) {
+      const tools = toolbar.querySelector(":scope > .tile-toolbar-tools");
+      if (tools) {
+        const statusSel = document.createElement("select");
+        statusSel.id = "presence-tile-status";
+        statusSel.className = "presence-status-select-tile";
+        statusSel.title = "Set your status";
+        statusSel.innerHTML = `
+          <option value="Online">Online</option>
+          <option value="DND - Estimating">DND - Estimating</option>
+          <option value="AFK - Lunch">AFK - Lunch</option>
+          <option value="AFK - Other">AFK - Other</option>
+          <option value="__custom__">Custom...</option>
+        `;
+        const customWrap = document.createElement("div");
+        customWrap.id = "presence-tile-custom-wrap";
+        customWrap.className = "presence-custom-wrap";
+        customWrap.style.display = "none";
+        customWrap.innerHTML = `
+          <input type="text" id="presence-tile-custom-input" class="presence-custom-input" placeholder="Custom status…" maxlength="120" />
+          <button type="button" id="presence-tile-custom-ok" class="presence-custom-ok">✓</button>
+          <button type="button" id="presence-tile-custom-cancel" class="presence-custom-cancel">✕</button>
+        `;
+        const adminBtn = document.createElement("button");
+        adminBtn.type = "button";
+        adminBtn.id = "presence-tile-admin-btn";
+        adminBtn.className = "presence-admin-toggle-tile hidden";
+        adminBtn.title = "Admin view";
+        adminBtn.textContent = "Admin";
+        tools.appendChild(statusSel);
+        tools.appendChild(customWrap);
+        tools.appendChild(adminBtn);
+      }
+      const actions = toolbar.querySelector(":scope > .tile-toolbar-actions");
+      if (actions) {
+        const unreadFlash = document.createElement("span");
+        unreadFlash.id = "presence-tile-unread-flash";
+        unreadFlash.className = "presence-unread-flash hidden";
+        unreadFlash.title = "Unread messages";
+        unreadFlash.textContent = "✉";
+        const popupBtn = document.createElement("button");
+        popupBtn.type = "button";
+        popupBtn.id = "presence-tile-popup-btn";
+        popupBtn.className = "presence-popup-btn";
+        popupBtn.title = "Open team viewer in popup";
+        popupBtn.textContent = "⤢";
+        actions.insertBefore(popupBtn, actions.firstChild);
+        actions.insertBefore(unreadFlash, popupBtn);
+      }
+      const tabs = document.createElement("div");
+      tabs.className = "presence-tile-tabs presence-tile-tabs-inline";
+      tabs.innerHTML = `
+        <button type="button" class="presence-tile-tab active" data-tab="team">Team</button>
+        <button type="button" class="presence-tile-tab" data-tab="messages">Messages<span id="presence-tile-msg-badge" class="msg-badge hidden">0</span></button>
+      `;
+      tools.appendChild(tabs);
+    }
     bindPresenceTileControls(tile);
   }
   renderPresenceTileCompact();

@@ -12,6 +12,8 @@ All notable changes to the Sietch CRM dashboard are documented here.
 - **Local kanban horizontal scroll restored.** Reverted `overflow-x: hidden` — columns can now be scrolled horizontally. Board height is capped by the tile's grid row (same as group tiles).
 - **Panel tile content fills tile height.** Feed (notifications) and Tasks tiles now have their content list (`feed-list` / `tasks-by-user`) set to `flex:1` inside a flex-column `.tile-body-content` override, so "No open tasks" or "Loading notifications" fills the tile instead of leaving empty space below the bordered box. Overflow scrolls when content exceeds tile height.
 - **Reverted `align-items: start` on grid.** Tiles keep their natural height; double-height group tiles no longer pull neighbors up to match. Gaps between rows are acceptable when no tile fits.
+- **Team tile toolbar consolidated.** Moved status dropdown, tabs, admin button, unread flash, and popup button from the `panel-header` into the tile-toolbar (tools/actions sections). The Team tile now has one toolbar row matching the compact height of Tasks and Notifications. Tabs are inline in the toolbar via `.presence-tile-tabs-inline`.
+- **Group tile grid fix.** Removed `overflow:hidden` from board-group-tile — it was clipping the board's horizontal scrollbar needed for kanban column navigation. Board handles its own overflow via `overflow-x:auto; overflow-y:auto`.
 - Cache-bust bumped to `app.js?v=1.95.7`, `styles.css?v=1.87.15`.
 
 ### v1.95.5 (pending verification — committed, not pushed)
