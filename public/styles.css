@@ -1356,10 +1356,7 @@ body {
   grid-auto-rows: auto;
   grid-auto-flow: dense;
   gap: 1.25rem;
-  /* Default align-items: stretch makes shorter tiles fill their grid row
-     height, eliminating visible gaps below short tiles (e.g. Tasks with
-     "No open tasks" in a row where Team is tall). Collapsed tiles override
-     with align-self: start. */
+  align-items: start;
   position: relative; /* anchor for .tile-resize-ghost */
 }
 
@@ -1795,15 +1792,24 @@ body {
   margin-left: 0;
 }
 
+/* Panel tiles: override .tile-body-content grid → flex column so
+   the content child (feed-list / tasks-by-user) can flex:1 to fill
+   the tile without empty space below. */
+.dashboard-tile.feed-panel > .tile-body-content,
+.dashboard-tile.tasks-panel > .tile-body-content,
+.dashboard-tile.presence-panel > .tile-body-content {
+  display: flex;
+  flex-direction: column;
+}
+
 .dashboard-tile.feed-panel .feed-list,
 .dashboard-tile.tasks-panel .tasks-by-user {
   list-style: none;
   margin: 0 1rem 1rem;
   padding: 0;
-  flex: 0 1 auto;
+  flex: 1;
   min-height: 0;
-  max-height: none;
-  overflow-y: visible;
+  overflow-y: auto;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1811,13 +1817,11 @@ body {
 }
 
 .dashboard-tile.feed-panel .feed-list {
-  max-height: 280px;
-  overflow-y: auto;
+  /* flex:1 + overflow-y:auto fills tile and scrolls when needed */
 }
 
 .dashboard-tile.tasks-panel .tasks-by-user:not(.tasks-by-user-columns) {
-  max-height: 280px;
-  overflow-y: auto;
+  /* flex:1 + overflow-y:auto fills tile and scrolls when needed */
 }
 
 .dashboard-tile.tasks-panel.tasks-tile-full .tasks-by-user.tasks-by-user-columns {
@@ -1870,12 +1874,15 @@ body {
   min-height: calc(var(--tile-row-height) * 2 - 80px);
 }
 
-/* Local kanban: also remove bottom padding 'chin' */
+/* Local kanban: remove bottom padding 'chin' and hide horizontal scrollbar
+   track that creates visible empty space at the bottom of the tile. */
 .dashboard-tile.local-kanban-tile .board {
   padding-bottom: 0;
+  overflow-x: hidden;
 }
 .dashboard-tile.local-kanban-tile.tile-double .board {
   padding-bottom: 0;
+  overflow-x: auto;
 }
 
 /* Top panels */
