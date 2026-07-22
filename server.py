@@ -3660,10 +3660,14 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             })
 
         my_presence = load_user_presence(portal, str(user["id"]))
+        recent_dms = get_recent_dms_for_user(portal, str(user["id"]))
+        last_read_dms = load_user_last_read_dms(portal, str(user["id"]))
         _json_response(self, 200, {
             "users": out_users,
             "me": {"id": user["id"], "email": user["email"], "status": my_presence.get("status", ""), "inferred": bool(my_presence.get("inferred"))},
             "isAdmin": user.get("is_admin", False),
+            "myRecentDms": recent_dms,
+            "lastReadDms": last_read_dms,
         })
 
     def _handle_presence_heartbeat(self) -> None:

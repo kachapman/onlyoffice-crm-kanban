@@ -4,6 +4,11 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 ## Phase 2D-3 — Grid stability fix (ISSUE-013)
 
+### v1.95.12 (pending verification — committed, not pushed)
+- **Fixed Team tile Messages tab showing "No messages yet" when messages exist.** Root cause: the `/api/presence` endpoint did not include `myRecentDms` or `lastReadDms` in its response, so both the tile and popup Messages tabs had no inbox data. Updated `server.py` `_handle_presence_get` to return `myRecentDms` (from `get_recent_dms_for_user`) and `lastReadDms` (from `load_user_last_read_dms`) alongside users/me/isAdmin.
+- **Fixed Team tile Messages tab shrinking.** Removed `max-height: 280px` from `.dashboard-tile.presence-panel .presence-tile-body` and set `min-height: 240px` so the body fills the tile height instead of collapsing when the inbox is empty.
+- Cache-bust bumped to `app.js?v=1.95.9`, `styles.css?v=1.87.21`.
+
 ### v1.95.11 (pending verification — committed, not pushed)
 - **Fixed Team popup Messages tab shrinking.** Added `min-height: 320px` to `.presence-list` so the modal content area keeps a stable height even when the inbox is empty.
 - **Fixed Messages tab empty state.** When there are no recent DMs, the Messages tab now shows the team roster with a "Select a team member to start messaging" header so users can open a DM thread directly from the Messages tab instead of switching to Team and back.

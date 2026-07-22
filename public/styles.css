@@ -1762,8 +1762,7 @@ body {
 /* Team tile body fills available height with scroll constraint */
 .dashboard-tile.presence-panel .presence-tile-body {
   flex: 1;
-  min-height: 0;
-  max-height: 280px;
+  min-height: 240px;
   overflow-y: auto;
 }
 
