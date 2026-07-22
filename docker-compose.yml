@@ -57,7 +57,7 @@ services:
 
   docserver:
     image: docker.io/onlyoffice/documentserver:latest
-    container_name: sietch-docserver
+    container_name: onlyoffice-docserver
     restart: unless-stopped
     environment:
       - JWT_SECRET=${DOCS_JWT_SECRET:-change_me_in_production}
@@ -68,6 +68,8 @@ services:
     volumes:
       - docserver-data:/var/www/onlyoffice/Data
       - docserver-logs:/var/log/onlyoffice
+    ports:
+      - "0.0.0.0:9443:443"
     networks:
       - vanguard-internal
 

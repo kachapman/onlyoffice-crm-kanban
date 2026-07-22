@@ -102,11 +102,12 @@ PART B — ON THE SERVER (DigitalOcean droplet)
 
    DOCS_JWT_SECRET=change_me_in_production
    DOCS_PUBLIC_URL=https://docs.publicadjustermidwest.com
-   # When Document Server is on a separate droplet, set DOCS_INTERNAL_URL to the
-   # same public URL. When co-located in Docker, set the container hostname/port
-   # (e.g. https://onlyoffice-docserver:443). Never use the legacy placeholder
-   # http://docserver:8080 in production.
-   DOCS_INTERNAL_URL=https://docs.publicadjustermidwest.com
+   # In production the Document Server is co-located in Docker on the dashboard
+   # droplet. Use the container hostname/port, NOT the legacy placeholder
+   # http://docserver:8080. Examples:
+   #   http://onlyoffice-docserver:80
+   #   https://onlyoffice-docserver:443
+   DOCS_INTERNAL_URL=http://onlyoffice-docserver:80
    CRM_PUBLIC_URL=https://dashboard.publicadjustermidwest.com
    DOCSERVER_CONTAINER_NAME=onlyoffice-docserver
 
@@ -253,8 +254,8 @@ TROUBLESHOOTING
 | Bot 503 "TELEGRAM_BOT_TOKEN not configured" | Dashboard container doesn't have the env var. Add to .env, then `docker compose up -d` (re-reads .env). No rebuild needed. |
 | Dockerfile missing .py          | If server.py imports a new module, add it to the Dockerfile COPY line. Missing modules cause container crash → nginx 502. |
 | Document editor won't open / "auth missing document.key" | OnlyOffice 7.1+ requires a plain-string document.key. Ensure code is current (v1.95.17+) and DOCS_JWT_SECRET matches the Document Server's JWT_SECRET. |
-| "Document Server connection lost" | Check DOCS_INTERNAL_URL and CRM_PUBLIC_URL in .env. CRM_PUBLIC_URL must be reachable from the Document Server for downloads/callbacks. |
-| Restart Document Server button fails | If Document Server runs on a separate droplet, the container won't exist on the dashboard host; restart it on its own host instead. |
+| "Document Server connection lost" | Check DOCS_INTERNAL_URL and CRM_PUBLIC_URL in .env. CRM_PUBLIC_URL must be reachable from the Document Server container for downloads/callbacks. |
+| Restart Document Server button fails | Check DOCSERVER_CONTAINER_NAME in .env matches the actual container name. If the container is on a different host, restart it there instead. |
 
 
 --------------------------------------------------------------------------------

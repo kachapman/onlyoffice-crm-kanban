@@ -300,26 +300,28 @@ Before making any nginx/compose change on this server:
 
 ---
 
+
+
 ## Document Server (OnlyOffice)
 
-The dashboard embeds OnlyOffice for editing Word/Excel/PowerPoint files. The Document Server can be:
+The dashboard embeds OnlyOffice for editing Word/Excel/PowerPoint files. In production, the Document Server runs **co-located in Docker on the same droplet** as the dashboard and PostgreSQL. The dashboard container reaches it via the Docker network (`DOCS_INTERNAL_URL`), while end users reach it via the public URL (`DOCS_PUBLIC_URL`).
 
-1. **On a separate droplet** (production as of 2026-07): set `.env` `DOCS_INTERNAL_URL` to the same public URL as `DOCS_PUBLIC_URL`.
-2. **Co-located in Docker on the dashboard host**: set `.env` `DOCS_INTERNAL_URL` to the container hostname/port (e.g. `https://onlyoffice-docserver:443`) and `DOCSERVER_CONTAINER_NAME` to the actual container name.
-
-See `AGENTS.md` → "Document Server (OnlyOffice) deployment notes" for the full variable table and production rules. The admin "Restart Document Server" button only works when the Document Server container exists on the same host; on a separate droplet it will report that the container is not found locally.
+See `AGENTS.md` → "Document Server (OnlyOffice) deployment notes" for the full variable table and production rules.
 
 ### Document Server verification
 
 ```bash
-# Healthcheck from dashboard host
+# Healthcheck from inside the dashboard container
+docker exec vanguard-crm-dashboard /bin/sh -c 'python3 -c "import urllib.request; print(urllib.request.urlopen(\"http://onlyoffice-docserver:80/healthcheck\", timeout=5).status)"'
+
+# Healthcheck from the host (via public URL / mapped port)
 curl -s -k -o /dev/null -w "%{http_code}\n" https://docs.publicadjustermidwest.com/healthcheck
 
 # Editor config contains a plain-string document.key (requires authenticated session)
 # curl -s -b "vanguard_session=..." https://dashboard.publicadjustermidwest.com/api/v2/documents/1/editor-config | python3 -m json.tool
 
-# CRM must be reachable from Document Server for downloads/callbacks
-curl -s -o /dev/null -w "%{http_code}\n" https://dashboard.publicadjustermidwest.com/api/config
+# CRM must be reachable from Document Server container for downloads/callbacks
+docker exec onlyoffice-docserver /bin/sh -c 'curl -s -o /dev/null -w "%{http_code}\n" https://dashboard.publicadjustermidwest.com/api/config'
 ```
 
 ## Verification commands (see also the 2026-07 section above)
