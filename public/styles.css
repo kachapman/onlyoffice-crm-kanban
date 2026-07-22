@@ -2475,6 +2475,11 @@ body {
   color: var(--muted);
 }
 
+/* Collapsed group tiles: hide filter summary so toolbar height is uniform. */
+.dashboard-tile.board-group-tile.tile-body-collapsed .group-filter-summary-compact {
+  display: none !important;
+}
+
 .group-filters-panel {
   margin-top: 0.35rem;
 }
@@ -5601,11 +5606,26 @@ body {
   display: none !important;
 }
 
+/* Collapsed notes tiles: ensure uniform toolbar padding matching .tile-toolbar (0.45rem 0.65rem). */
+.dashboard-tile.notes-tile.tile-body-collapsed .notes-tile-bar {
+  padding: 0.45rem 0.65rem;
+}
+
 /* Collapsed calendar tiles: hide month nav and timezone so minimized height is uniform. */
 .dashboard-tile.calendar-tile.tile-body-collapsed .calendar-month-nav,
 .dashboard-tile.calendar-tile.tile-body-collapsed .calendar-tz-label,
 .dashboard-tile.calendar-tile.tile-body-collapsed .calendar-tz-select {
   display: none !important;
+}
+
+/* Collapsed Team/Presence tile: hide tabs to match uniform toolbar height;
+   override panel-header padding to match .tile-toolbar (0.45rem 0.65rem). */
+.dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-tabs-inline {
+  display: none !important;
+}
+.dashboard-tile.presence-panel.tile-body-collapsed .panel-header {
+  padding: 0.45rem 0.65rem;
+  margin-bottom: 0;
 }
 
 .calendar-tile-bar .calendar-month-nav {
@@ -5855,11 +5875,26 @@ body {
   display: none !important;
 }
 
+/* Collapsed notes tiles: ensure uniform toolbar padding matching .tile-toolbar (0.45rem 0.65rem). */
+.dashboard-tile.notes-tile.tile-body-collapsed .notes-tile-bar {
+  padding: 0.45rem 0.65rem;
+}
+
 /* Collapsed calendar tiles: hide month nav and timezone so minimized height is uniform. */
 .dashboard-tile.calendar-tile.tile-body-collapsed .calendar-month-nav,
 .dashboard-tile.calendar-tile.tile-body-collapsed .calendar-tz-label,
 .dashboard-tile.calendar-tile.tile-body-collapsed .calendar-tz-select {
   display: none !important;
+}
+
+/* Collapsed Team/Presence tile: hide tabs to match uniform toolbar height;
+   override panel-header padding to match .tile-toolbar (0.45rem 0.65rem). */
+.dashboard-tile.presence-panel.tile-body-collapsed .presence-tile-tabs-inline {
+  display: none !important;
+}
+.dashboard-tile.presence-panel.tile-body-collapsed .panel-header {
+  padding: 0.45rem 0.65rem;
+  margin-bottom: 0;
 }
 
 .notes-editor {
@@ -9302,13 +9337,14 @@ body {
 
 .tile-resize-handle {
   position: absolute;
-  width: 22px;
-  height: 22px;
+  width: 12px;
+  height: 12px;
   z-index: 10;
   opacity: 0;
   transition: opacity 0.15s ease;
   touch-action: none; /* let pointer events drive the resize on touch */
   overflow: hidden;
+  pointer-events: none;
 }
 
 .dashboard-tile:hover .tile-resize-handle {
@@ -9324,16 +9360,16 @@ body {
 }
 
 .tile-resize-se {
-  bottom: 0;
-  right: 0;
+  bottom: 6px;
+  right: 6px;
   cursor: nwse-resize;
   border-radius: 0 0 var(--radius) 0;
   background: linear-gradient(135deg, transparent 55%, var(--muted) 55%, var(--muted) 62%, transparent 62%, transparent 75%, var(--muted) 75%, var(--muted) 82%, transparent 82%);
 }
 
 .tile-resize-sw {
-  bottom: 0;
-  left: 0;
+  bottom: 6px;
+  left: 6px;
   cursor: nesw-resize;
   border-radius: 0 0 0 var(--radius);
   background: linear-gradient(225deg, transparent 55%, var(--muted) 55%, var(--muted) 62%, transparent 62%, transparent 75%, var(--muted) 75%, var(--muted) 82%, transparent 82%);
@@ -9353,8 +9389,8 @@ body {
 
 @media (max-width: 600px) {
   .tile-resize-handle {
-    width: 28px;
-    height: 28px;
+    width: 18px;
+    height: 18px;
   }
 }
 
