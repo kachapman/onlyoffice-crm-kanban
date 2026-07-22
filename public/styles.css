@@ -1850,6 +1850,15 @@ body {
   padding-bottom: 1rem;
 }
 
+/* Local kanban: remove the global .board min-height (420px) that exceeds
+   --tile-row-height (400px) and causes resize jump + overflow past footer. */
+.dashboard-tile.local-kanban-tile .board {
+  min-height: 0;
+}
+.dashboard-tile.local-kanban-tile.tile-double .board {
+  min-height: calc(var(--tile-row-height) * 2 - 80px);
+}
+
 /* Top panels */
 .panel {
   max-width: 1820px;
@@ -6324,7 +6333,7 @@ body {
 }
 
 /* Tablet: move logo to top-left before it starts overlapping buttons */
-@media (max-width: 900px) {
+@media (max-width: 1050px) {
   .hero-logo-wrap {
     left: 0.75rem;
     top: 0.65rem;
@@ -6337,6 +6346,18 @@ body {
   }
   .hero-inner {
     padding-top: 3.5rem;
+  }
+}
+
+/* Narrow tablet: actions drop below title before they overlap "dashboard" */
+@media (max-width: 840px) {
+  .hero-inner {
+    flex-wrap: wrap;
+  }
+  .hero-actions {
+    flex-wrap: wrap;
+    width: 100%;
+    justify-content: flex-end;
   }
 }
 
