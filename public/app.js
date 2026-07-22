@@ -19907,11 +19907,26 @@ async function populateAdminInfra() {
   if (restartContainerBtn && !restartContainerBtn.dataset.bound) {
     restartContainerBtn.dataset.bound = "1";
     restartContainerBtn.addEventListener("click", async () => {
-      if (!confirm("Restart the Docker container? This will interrupt all active connections.")) return;
+      if (!confirm("Restart the dashboard Docker container? This will interrupt all active connections.")) return;
       const statusEl = $("#infra-restart-status");
       try {
         await api("/api/v2/admin/restart-container", { method: "POST" });
         if (statusEl) { statusEl.textContent = "Container restarting…"; statusEl.className = "event-log-health-status ok"; }
+        setTimeout(() => location.reload(), 5000);
+      } catch (e) {
+        if (statusEl) { statusEl.textContent = e.message; statusEl.className = "event-log-health-status fail"; }
+      }
+    });
+  }
+  const restartDocserverBtn = $("#infra-restart-docserver");
+  if (restartDocserverBtn && !restartDocserverBtn.dataset.bound) {
+    restartDocserverBtn.dataset.bound = "1";
+    restartDocserverBtn.addEventListener("click", async () => {
+      if (!confirm("Restart the OnlyOffice Document Server container? Document editing will be unavailable for ~30s.")) return;
+      const statusEl = $("#infra-restart-status");
+      try {
+        await api("/api/v2/admin/restart-docserver", { method: "POST" });
+        if (statusEl) { statusEl.textContent = "Document Server restarting…"; statusEl.className = "event-log-health-status ok"; }
         setTimeout(() => location.reload(), 5000);
       } catch (e) {
         if (statusEl) { statusEl.textContent = e.message; statusEl.className = "event-log-health-status fail"; }

@@ -19,7 +19,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=1.87.29" />
+  <link rel="stylesheet" href="styles.css?v=1.87.30" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css" />
 </head>
 <body>
@@ -1469,7 +1469,8 @@
           <h4>Restart Controls</h4>
           <p style="font-size:0.82rem; color:var(--muted); margin:0 0 0.5rem;">Max 5 automatic restarts on failure (Docker policy). Use manual restart to recover.</p>
           <button type="button" id="infra-restart-server" class="btn btn-secondary btn-sm">Restart server process</button>
-          <button type="button" id="infra-restart-container" class="btn btn-danger btn-sm" style="margin-left:0.5rem;">Restart Docker container</button>
+          <button type="button" id="infra-restart-container" class="btn btn-danger btn-sm" style="margin-left:0.5rem;">Restart dashboard container</button>
+          <button type="button" id="infra-restart-docserver" class="btn btn-danger btn-sm" style="margin-left:0.5rem;">Restart Document Server</button>
           <span id="infra-restart-status" class="event-log-health-status" style="margin-left:0.5rem;"></span>
         </div>
       </div>
@@ -1482,6 +1483,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
-  <script src="app.js?v=1.95.16" type="module"></script>
+  <script src="app.js?v=1.95.17" type="module"></script>
 </body>
 </html>

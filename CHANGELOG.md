@@ -6,6 +6,13 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 Target release v2.2.5 on `new-crm` branch.
 
+### v1.95.17
+- **Fixed OnlyOffice Document Server editor config for 7.1+.** `document.key` is now a plain unique string (`sietch-doc-{id}-{ts}`) instead of a JWT. OnlyOffice 7.1+ requires `document.key` as a plain string inside the signed editor-config token; the previous JWT value caused "auth missing required parameter document.key" errors and prevented documents from opening.
+- **Fixed internal Document Server URL for standalone dev.** Added `_is_running_in_docker()` and `_effective_docs_internal_url()` helpers so `_proxy_document_server` falls back to `DOCS_PUBLIC_URL` when the CRM is running outside Docker (the `docserver` hostname is not resolvable from the host).
+- **Added Document Server restart control to admin Infrastructure tab.** New `POST /api/v2/admin/restart-docserver` endpoint and "Restart Document Server" button restart the `onlyoffice-docserver` container. Renamed the existing button to "Restart dashboard container" for clarity.
+- **Files:** `server.py`, `public/index.html`, `public/app.js`.
+- Cache-bust bumped to `app.js?v=1.95.17`, `styles.css?v=1.87.30`.
+
 ### v1.95.16
 - **Added Photos tab to opportunity preview modal.** New "Photos" tab alongside Details/Documents with an image grid, upload button, per-project quota display, thumbnail generation, and delete-on-hover.
 - **Photo upload endpoint implemented.** `POST /api/v2/projects/{id}/photos` accepts multipart/form-data image uploads, persists to `data/photos/{oppId}/`, generates a 400px JPEG thumbnail with Pillow, extracts EXIF metadata, and enforces the 150MB per-project quota trigger.

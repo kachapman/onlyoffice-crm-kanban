@@ -223,11 +223,33 @@ def _verify_jwt(token: str, secret: str) -> dict | None:
         return None
 
 
+def _is_running_in_docker() -> bool:
+    """Best-effort detection of whether we are inside a Docker container."""
+    try:
+        with open("/proc/1/cgroup", "r") as f:
+            return "docker" in f.read() or "kubepods" in f.read()
+    except Exception:
+        return False
+
+
+def _effective_docs_internal_url() -> str:
+    """Return the URL the CRM should use to reach the Document Server.
+
+    When running inside Docker the configured DOCS_INTERNAL_URL (Docker-network
+    hostname) is correct. When running standalone on the host, the internal
+    hostname is not resolvable, so fall back to the public HTTPS URL.
+    """
+    if _is_running_in_docker():
+        return DOCS_INTERNAL_URL
+    return DOCS_PUBLIC_URL or DOCS_INTERNAL_URL
+
+
 def _proxy_document_server(method: str, ds_path: str, body: bytes | None = None, headers: dict | None = None, timeout: int = 30) -> tuple:
     """Forward a request to the internal OnlyOffice Document Server. Returns (status, body, content_type)."""
-    if not DOCS_INTERNAL_URL:
+    ds_url = _effective_docs_internal_url()
+    if not ds_url:
         return 503, b'{"error": "Document Server not configured"}', "application/json"
-    url = f"{DOCS_INTERNAL_URL}{ds_path}"
+    url = f"{ds_url}{ds_path}"
     req_headers = {"Accept": "application/json"}
     if headers:
         req_headers.update(headers)
@@ -1007,6 +1029,37 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             except Exception as exc:
                 logger.exception("Docker restart failed")
                 log_infra_event("error", f"Docker restart exception: {exc}")
+                _json_response(self, 500, {"error": str(exc)})
+            return
+        if api_path == "/api/v2/admin/restart-docserver" and method == "POST":
+            user = _require_admin(self)
+            if not user:
+                return
+            log_infra_event("info", f"Document Server restart requested by {user.get('email', 'unknown')}")
+            try:
+                import subprocess
+                # Prefer the configured public host if it looks like a local address,
+                # otherwise fall back to the legacy onlyoffice-docserver container name.
+                ds_host = None
+                if DOCS_PUBLIC_URL:
+                    try:
+                        host = urlparse(DOCS_PUBLIC_URL).hostname or ""
+                        if host.startswith("192.168.") or host.startswith("10.") or host.startswith("172.") or host == "localhost" or host == "127.0.0.1":
+                            ds_host = "onlyoffice-docserver"
+                    except Exception:
+                        pass
+                if not ds_host:
+                    ds_host = "onlyoffice-docserver"
+                result = subprocess.run(["docker", "restart", ds_host], capture_output=True, text=True, timeout=30)
+                if result.returncode == 0:
+                    _json_response(self, 200, {"ok": True, "message": "Document Server restart triggered"})
+                else:
+                    err = result.stderr.strip() or result.stdout.strip() or "docker restart returned non-zero"
+                    log_infra_event("error", f"Document Server restart failed: {err}")
+                    _json_response(self, 500, {"error": f"Document Server restart failed: {err}"})
+            except Exception as exc:
+                logger.exception("Document Server restart failed")
+                log_infra_event("error", f"Document Server restart exception: {exc}")
                 _json_response(self, 500, {"error": str(exc)})
             return
 
@@ -2407,14 +2460,18 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         file_ext = Path(title).suffix.lstrip(".").lower() or "docx"
         doc_type = _document_type_from_ext(file_ext)
-        key = _sign_jwt({"id": doc_id, "path": file_path, "ts": int(time.time())}, DOCS_JWT_SECRET)
+        # document.key must be a plain unique string (OnlyOffice 7.1+ requirement).
+        # Use a separate JWT for the CRM download endpoint so auth stays stateless.
+        ts = int(time.time())
+        doc_key = f"sietch-doc-{doc_id}-{ts}"
+        download_token = _sign_jwt({"id": doc_id, "path": file_path, "ts": ts}, DOCS_JWT_SECRET)
         # Public URL that Document Server will use to download the file
-        download_url = f"{CRM_PUBLIC_URL}/api/v2/documents/{doc_id}?token={key}"
+        download_url = f"{CRM_PUBLIC_URL}/api/v2/documents/{doc_id}?token={download_token}"
         editor_mode = "view" if doc_type == "pdf" else "edit"
         config = {
             "document": {
                 "fileType": file_ext,
-                "key": key,
+                "key": doc_key,
                 "title": title,
                 "url": download_url,
                 "permissions": {"download": True, "edit": editor_mode == "edit"},
