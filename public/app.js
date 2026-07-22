@@ -811,7 +811,17 @@ function ensureTileLayout() {
   if (!state.tileLayout.order.includes("tile-presence")) {
     state.tileLayout.order.push("tile-presence");
   }
-  saveLayoutToStorage();
+  // Groups never support double-height (vertical resize). Sanitize any old persisted values.
+  if (state.tileLayout.heights && typeof state.tileLayout.heights === "object") {
+    let cleaned = false;
+    for (const k of Object.keys(state.tileLayout.heights)) {
+      if (k.startsWith("group-")) {
+        delete state.tileLayout.heights[k];
+        cleaned = true;
+      }
+    }
+    if (cleaned) saveLayoutToStorage();
+  }
 }
 
 function tileWidth(tileId) {
@@ -821,6 +831,7 @@ function tileWidth(tileId) {
 }
 
 function tileHeight(tileId) {
+  if (tileId && tileId.startsWith("group-")) return "normal";
   return state.tileLayout.heights[tileId] === "double" ? "double" : "normal";
 }
 
@@ -831,7 +842,12 @@ function setTileWidth(tileId, width) {
 }
 
 function setTileHeight(tileId, height) {
-  state.tileLayout.heights[tileId] = height === "double" ? "double" : "normal";
+  if (tileId && tileId.startsWith("group-")) {
+    // Groups never support double height (only width resize via handles).
+    state.tileLayout.heights[tileId] = "normal";
+  } else {
+    state.tileLayout.heights[tileId] = height === "double" ? "double" : "normal";
+  }
   saveLayoutToStorage();
 }
 
@@ -1076,9 +1092,9 @@ function createCollapseTileButton(tileEl, tileId) {
     sync();
     if (wasCollapsed && isCrmDataTileId(tileId)) {
       loadTileCrmData(tileId).catch((err) => showToast(err.message, true));
-    } else if (!wasCollapsed && isCrmDataTileId(tileId)) {
-      showTileCollapsedHint(tileId, "Minimized — expand to load");
     }
+    // Do not inject "Minimized — expand to load" hint here.
+    // Hint is only shown on initial load for tiles that were *already* collapsed in persisted state.
   });
   sync();
   return btn;
@@ -1520,11 +1536,11 @@ function bindTileResize(tileEl, tileId, handle, corner) {
     // could force a horizontal page scrollbar mid-drag.
     left = Math.max(0, Math.min(left, gridContentWidth));
     widthPx = Math.min(widthPx, gridContentWidth - left);
-    // Height preview: double = two rows + the row gap; normal = current height
-    // (or the nominal single-row height when shrinking back from double).
+    // Height preview: always use the nominal size for the decided heightName.
+    // This lets the ghost shrink when going normal from a double start (baseHeight would be tall).
     const heightPx = heightName === "double"
       ? rowUnit * 2 + gapWidth
-      : (startHeightName === "double" ? rowUnit : baseHeight);
+      : rowUnit;
     ghost.style.top = `${baseTop}px`;
     ghost.style.left = `${left}px`;
     ghost.style.width = `${widthPx}px`;
@@ -1557,6 +1573,11 @@ function bindTileResize(tileEl, tileId, handle, corner) {
     pendingWidth = tileWidth(tileId);
     startHeightName = tileHeight(tileId);
     pendingHeight = startHeightName;
+    // Groups support width resize only (via handles); never vertical/double height.
+    if (tileId.startsWith("group-")) {
+      startHeightName = "normal";
+      pendingHeight = "normal";
+    }
     rowUnit = parseFloat(gridStyle.getPropertyValue("--tile-row-height")) || 400;
 
     ghost = document.createElement("div");
@@ -1585,13 +1606,19 @@ function bindTileResize(tileEl, tileId, handle, corner) {
 
     pendingWidth = widthForSpanCols(newSpan);
 
-    // Vertical drag toggles normal ↔ double height once the pointer crosses
-    // 40% of a row. Skipped while collapsed (collapsed tiles are flat bars).
-    if (!tileBodyCollapsed(tileId)) {
-      const dy = (e.clientY || 0) - startY;
-      if (dy > rowUnit * 0.4) pendingHeight = "double";
-      else if (dy < -rowUnit * 0.4) pendingHeight = "normal";
-      else pendingHeight = startHeightName;
+    // Vertical decision based on pointer position relative to grid rows.
+    // Groups never support vertical/double (width resize only via handles).
+    // Latch decision. Skipped while collapsed.
+    if (!tileBodyCollapsed(tileId) && !tileId.startsWith("group-")) {
+      const pointerY = (e.clientY || 0);
+      const rowBoundary = baseTop + rowUnit;
+      if (pointerY > rowBoundary + rowUnit * 0.15) {
+        pendingHeight = "double";
+      } else if (pointerY < rowBoundary - rowUnit * 0.15) {
+        pendingHeight = "normal";
+      }
+    } else if (tileId.startsWith("group-")) {
+      pendingHeight = "normal";
     }
     positionGhost(newSpan, pendingHeight);
   };
@@ -5479,7 +5506,10 @@ async function openQuickNoteModalFromNotes(notes) {
   await openQuickNoteModal();
   const bodyEl = $("#quick-note-note-body");
   if (bodyEl && notes.content) {
-    bodyEl.innerHTML = renderBasicMarkdown(notes.content);
+    // Fill the *plain text* note field (contenteditable div) with raw text
+    // so the user can edit before saving. Use the original markdown/plain text.
+    const text = String(notes.content || "");
+    bodyEl.textContent = text;
   }
   renderSelectedAttachments("quickNote");
 }
@@ -5656,7 +5686,6 @@ function bindNotesTileChrome(section, notes, tileId) {
     "Insert date and time at cursor",
     "btn-notes-date"
   );
-  const printBtn = createTileIconActionButton(TILE_ICON_PRINT, "Print preview", "btn-notes-print");
   const crmBtn = createTileIconActionButton(
     TILE_ICON_NOTE,
     "Open quick note with this text",
@@ -5679,7 +5708,6 @@ function bindNotesTileChrome(section, notes, tileId) {
       { label: "Numbered list",   onSelect: () => numberedBtn.click() },
       { label: "Quote block",     onSelect: () => quoteBtn.click() },
       { label: "Inline code",     onSelect: () => codeBtn.click() },
-      { label: "Print preview",   onSelect: () => printBtn.click() },
       { label: "Quick note",      onSelect: () => crmBtn.click() },
     ],
   });
@@ -5769,7 +5797,11 @@ function bindNotesTileChrome(section, notes, tileId) {
 
   const utils = document.createElement("div");
   utils.className = "notes-tile-utils";
-  utils.append(fileMenu, editMenu, formatGroup, accentBtn, accentDropdown, modeToggleBtn);
+  // Keep only menus/accent/mode in the tools container. The formatGroup (B/I/S/U/H/emoji)
+  // is appended directly after the title name so it participates in the main toolbar
+  // flex row and can stay on the title line when the tile is wide enough; on narrow
+  // the tools block wraps per existing rules while format prefers the title row.
+  utils.append(fileMenu, editMenu, accentBtn, accentDropdown, modeToggleBtn);
 
   const removeBtn = createTileRemoveButton("Remove this notes tile from the dashboard", "btn-remove-notes");
 
@@ -5778,9 +5810,16 @@ function bindNotesTileChrome(section, notes, tileId) {
   actions.appendChild(removeBtn);
 
   // Row 1: title bar
+  // formatGroup (B/I/S/U/H/emoji) lives here directly (not in tools) so it can sit
+  // on the title row next to the editable name when the tile is wide enough.
   toolbar.appendChild(hint);
   toolbar.appendChild(nameDisplay);
   toolbar.appendChild(nameInput);
+  // Quick format (B/I/S/U/H/emoji) placed directly after the editable title so it
+  // participates in the title row flex layout. On wide/full tiles it stays on the
+  // same row as the title (when space allows); the .tile-toolbar-tools block can
+  // wrap to row 2 on narrow per the order/basis rules.
+  toolbar.appendChild(formatGroup);
   toolbar.appendChild(tools);
   toolbar.appendChild(actions);
 
@@ -5921,16 +5960,6 @@ function bindNotesTileChrome(section, notes, tileId) {
     }
   });
 
-  printBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    if (notes.viewMode !== "preview") {
-      notes.viewMode = "preview";
-      saveNotesTilesToStorage();
-      syncModeButtons();
-    }
-    printNotesPreview(section, notes);
-  });
-
   crmBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     openQuickNoteModalFromNotes(notes).catch((err) => showToast(err.message, true));
@@ -5940,43 +5969,6 @@ function bindNotesTileChrome(section, notes, tileId) {
     e.stopPropagation();
     removeNotesTile(notes);
   });
-
-  defaultPreviewBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    notes.defaultViewMode = notes.defaultViewMode === "preview" ? null : "preview";
-    if (notes.defaultViewMode === "preview") notes.viewMode = "preview";
-    scheduleNotesTileSave(notes);
-    syncModeButtons();
-    showToast(
-      notes.defaultViewMode === "preview"
-        ? "Will open in preview on load"
-        : "Default preview on load off"
-    );
-  });
-
-  accentSel.addEventListener("click", (e) => e.stopPropagation());
-  accentSel.addEventListener("change", (e) => {
-    e.stopPropagation();
-    notes.accent = accentSel.value;
-    applyNotesTileAccent(section, notes);
-    scheduleNotesTileSave(notes);
-  });
-
-  editBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    notes.viewMode = "edit";
-    saveNotesTilesToStorage();
-    syncModeButtons();
-    $(".notes-editor", section)?.focus();
-  });
-
-  previewBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    notes.viewMode = "preview";
-    saveNotesTilesToStorage();
-    syncModeButtons();
-  });
-
 
   const editor = $(".notes-editor", section);
   editor?.addEventListener("input", () => {
@@ -6099,16 +6091,27 @@ function bindLocalKanbanTileChrome(section, kanban, tileId) {
     tb.querySelectorAll('.btn-archive-kanban, .btn-remove-kanban').forEach(b => b.remove());
   }
 
-  // Archive button (file cabinet icon) — tile-specific, goes in tools
+  // Archive button placed directly after the title/count on the title bar row
+  // (like feed/tasks special buttons) so it is "up" in the title bar, not inside tools.
   const archiveBtn = createTileIconActionButton(
     TILE_ICON_ARCHIVE,
     "Archive this local kanban board",
     "btn-archive-kanban"
   );
-  const tools = tb?.querySelector(':scope > .tile-toolbar-tools');
   const actions = tb?.querySelector(':scope > .tile-toolbar-actions');
-  if (tools) tools.appendChild(archiveBtn);
-  else if (tb) tb.appendChild(archiveBtn);
+  const tools = tb?.querySelector(':scope > .tile-toolbar-tools');
+  const count = tb?.querySelector('.tile-toolbar-count');
+  const titleEl = tb?.querySelector('.tile-toolbar-title');
+  const insertAfter = count || titleEl;
+  if (insertAfter && insertAfter.nextSibling) {
+    tb.insertBefore(archiveBtn, insertAfter.nextSibling);
+  } else if (insertAfter) {
+    insertAfter.after(archiveBtn);
+  } else if (tools) {
+    tools.appendChild(archiveBtn);
+  } else if (tb) {
+    tb.appendChild(archiveBtn);
+  }
   archiveBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     openLocalKanbanArchiveModal(kanban);
@@ -8260,14 +8263,17 @@ function bindContactField(group, wrap) {
 }
 
 function renderBoardGroups() {
+  // Sanitize layout first (e.g. groups must never be double-height) so that
+  // applies below see clean state and no stale "tile-double" classes get added.
+  ensureTileLayout();
+
   renderFeedTile();
   renderTasksTile();
   renderPresenceTile();
   const dash = $("#dashboard-tiles");
   if (!dash) return;
 
-  // Only remove actual group tiles here. Local kanban tiles (which share the board-group-tile
-  // class for styling) are managed by their own render and would be duplicated or lost otherwise.
+  // Only remove actual group tiles here. Local kanban tiles (which share the board-group styling) are managed by their own render and would be duplicated or lost otherwise.
   dash.querySelectorAll(".board-group-tile:not(.local-kanban-tile)").forEach((el) => el.remove());
 
   for (const group of state.groups) {
@@ -9579,16 +9585,25 @@ function ensureFeedHiddenToolbarButton(tileEl) {
     openFeedHiddenModal();
   });
 
-  const tools = toolbar.querySelector(":scope > .tile-toolbar-tools");
-  if (tools) {
-    tools.appendChild(btn);
+  // Place directly on the title line, immediately to the right of the notifications counter.
+  const count = toolbar.querySelector(".tile-toolbar-count");
+  if (count && count.parentNode === toolbar) {
+    const ref = count.nextSibling;
+    if (ref) {
+      toolbar.insertBefore(btn, ref);
+    } else {
+      toolbar.appendChild(btn);
+    }
   } else {
-    const refreshBtn = toolbar.querySelector(".btn-tile-refresh");
-    if (refreshBtn) toolbar.insertBefore(btn, refreshBtn);
-    else {
-      const layoutBtns = toolbar.querySelector(".tile-layout-btns");
-      if (layoutBtns) toolbar.insertBefore(btn, layoutBtns);
-      else toolbar.appendChild(btn);
+    // Fallback after title
+    const title = toolbar.querySelector(".tile-toolbar-title");
+    const ref = title ? title.nextSibling : null;
+    if (ref) {
+      toolbar.insertBefore(btn, ref);
+    } else if (title) {
+      title.after(btn);
+    } else {
+      toolbar.appendChild(btn);
     }
   }
   updateFeedHiddenToolbarButton();
@@ -9842,9 +9857,9 @@ function ensureTasksNewTaskButton(tileEl) {
   const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
   if (!toolbar) return;
 
-  // Buttons live in the tools container (right after the title/count).
-  const tools = toolbar.querySelector(":scope > .tile-toolbar-tools");
-  const host = tools || toolbar;
+  // Place directly on the title line, right after the task counter (like feed hidden button).
+  const count = toolbar.querySelector(".tile-toolbar-count");
+  const insertAfter = count || toolbar.querySelector(".tile-toolbar-title");
 
   let archiveBtn = toolbar.querySelector("#tasks-list-btn");
   if (!archiveBtn) {
@@ -9854,7 +9869,13 @@ function ensureTasksNewTaskButton(tileEl) {
     archiveBtn.className = "btn btn-ghost btn-tasks-list";
     archiveBtn.title = "View all tasks (open + completed)";
     archiveBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="1"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><rect x="6" y="5" width="3" height="2" rx="0.5"/><rect x="15" y="5" width="3" height="2" rx="0.5"/><rect x="6" y="11" width="3" height="2" rx="0.5"/><rect x="15" y="11" width="3" height="2" rx="0.5"/></svg>`;
-    host.appendChild(archiveBtn);
+    if (insertAfter && insertAfter.nextSibling) {
+      toolbar.insertBefore(archiveBtn, insertAfter.nextSibling);
+    } else if (insertAfter) {
+      insertAfter.after(archiveBtn);
+    } else {
+      toolbar.appendChild(archiveBtn);
+    }
     archiveBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       openTasksListModal().catch((err) => showToast(err.message, true));
@@ -9870,7 +9891,17 @@ function ensureTasksNewTaskButton(tileEl) {
     e.stopPropagation();
     openNewTaskModal().catch((err) => showToast(err.message, true));
   });
-  host.appendChild(btn);
+  if (archiveBtn && archiveBtn.nextSibling) {
+    toolbar.insertBefore(btn, archiveBtn.nextSibling);
+  } else if (insertAfter && insertAfter.nextSibling) {
+    toolbar.insertBefore(btn, insertAfter.nextSibling);
+  } else if (archiveBtn) {
+    archiveBtn.after(btn);
+  } else if (insertAfter) {
+    insertAfter.after(btn);
+  } else {
+    toolbar.appendChild(btn);
+  }
 }
 
 function setDealEditError(message) {
@@ -12663,36 +12694,6 @@ function formatMessageTime(iso) {
 function isGuid(value) {
   if (value == null) return false;
   return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(String(value).trim());
-}
-
-function ensureNotesToolbarRows(section) {
-  if (!section || !section.classList.contains('notes-tile')) return;
-  const bar = section.querySelector(':scope > .notes-tile-bar') || section.querySelector('.notes-tile-bar');
-  if (!bar) return;
-  const isNarrow = section.classList.contains('tile-quarter') || section.classList.contains('tile-half');
-  let topRow = bar.querySelector('.notes-layout-top-row');
-  const layouts = bar.querySelector('.tile-layout-btns');
-  const removeB = bar.querySelector('.btn-remove-notes');
-  const nameInput = bar.querySelector('.notes-tile-name');
-  if (isNarrow) {
-    if (!topRow) {
-      topRow = document.createElement('div');
-      topRow.className = 'notes-layout-top-row';
-      bar.insertBefore(topRow, bar.firstChild);
-    }
-    // Keep the note name in the top row of the title bar even at quarter/half size
-    // (layout buttons + remove also live here for narrow; other toolbar buttons stay below).
-    if (nameInput && nameInput.parentNode !== topRow) {
-      topRow.insertBefore(nameInput, topRow.firstChild);
-    }
-    if (layouts && layouts.parentNode !== topRow) topRow.appendChild(layouts);
-    if (removeB && removeB.parentNode !== topRow) topRow.appendChild(removeB);
-  } else if (topRow) {
-    if (nameInput && nameInput.parentNode !== bar) bar.insertBefore(nameInput, bar.querySelector('.notes-tile-utils') || bar.firstChild);
-    if (layouts) bar.appendChild(layouts);
-    if (removeB) bar.appendChild(removeB);
-    topRow.remove();
-  }
 }
 
 function renderPresenceStatusPicker(container, currentStatus = "", onChange, inferred = false) {

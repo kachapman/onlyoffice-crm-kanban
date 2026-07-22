@@ -1614,6 +1614,11 @@ body {
 .dashboard-tile.tile-half .group-filter-summary-compact {
   order: 1;
 }
+/* Notes quick-format (B/I/S/U/H/emoji): order 1 on narrow so it stays on title row with the name */
+.dashboard-tile.notes-tile.tile-quarter .notes-quick-format-group,
+.dashboard-tile.notes-tile.tile-half .notes-quick-format-group {
+  order: 1;
+}
 .dashboard-tile.tile-quarter .tile-toolbar-actions,
 .dashboard-tile.tile-half .tile-toolbar-actions {
   order: 2;
@@ -1631,7 +1636,8 @@ body {
   .group-tile-name-input,
   .tile-toolbar-count,
   .group-tile-count,
-  .group-filter-summary-compact {
+  .group-filter-summary-compact,
+  .notes-tile .notes-quick-format-group {
     order: 1;
   }
   .tile-toolbar-actions {
@@ -3985,8 +3991,8 @@ body {
   padding: 0.25rem 0.5rem;
 }
 
-/* Messages tab / DM inline — body constrained with scroll instead of unbounded expansion */
-.presence-tile-expanded .presence-tile-body {
+/* All presence bodies (team/messages/dm) constrained uniformly */
+.presence-tile-body {
   max-height: 280px;
   overflow-y: auto;
 }
@@ -4395,28 +4401,6 @@ body {
 .messages-popup-list .presence-recent-row {
   cursor: pointer;
 }
-
-/* Notes tile narrow (quarter/half) toolbar restructure:
-   resizing buttons (layouts + remove) on top row,
-   file/copy/date/lists/edit etc on bottom "toolbar" row.
-*/
-.dashboard-tile.notes-tile.tile-quarter .notes-tile-bar,
-.dashboard-tile.notes-tile.tile-half .notes-tile-bar {
-  flex-wrap: wrap;
-  align-items: flex-start;
-}
-.dashboard-tile.notes-tile.tile-quarter .notes-tile-bar .notes-layout-top-row,
-.dashboard-tile.notes-tile.tile-half .notes-tile-bar .notes-layout-top-row {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.2rem;
-  width: 100%;
-  padding-bottom: 0.15rem;
-  margin-bottom: 0.15rem;
-  border-bottom: 1px solid var(--border);
-}
-/* Dead: ensureNotesToolbarRows and notes-layout-top-row removed (unified toolbar handles narrow rows) */
 
 .deal-edit-modal-head {
   display: flex;
@@ -5955,6 +5939,7 @@ body {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.25rem;
+  position: relative; /* anchor for accent dropdown */
 }
 
 .notes-tile-utils .btn-notes-mode {
