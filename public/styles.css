@@ -1863,18 +1863,23 @@ body {
   border-top: none;
 }
 
-/* Board-group-tiles: let the board handle its own overflow scrolling.
-   Do NOT set overflow:hidden on the tile — it would clip the board's
-   horizontal scrollbar needed for kanban column navigation. */
+/* Board-group-tiles: clip board overflow so unbounded column growth
+   doesn't push the tile past its max-height. Also clips children to the
+   tile's border-radius, eliminating square-corner "spikey" artifacts. */
+.dashboard-tile.board-group-tile {
+  overflow: hidden;
+}
 
 /* All board-group-tiles: cap board height to tile size, scroll vertically
    when columns overflow. Without this, tall columns push the tile to
-   unbounded height and it can't shrink back. */
+   unbounded height and it can't shrink back.
+   padding-bottom keeps the horizontal scrollbar above the tile's rounded
+   bottom corners so overflow:hidden doesn't clip it. */
 .dashboard-tile.board-group-tile .board {
   min-height: 0;
   max-height: var(--tile-row-height);
   overflow-y: auto;
-  padding-bottom: 0;
+  padding-bottom: 1rem;
 }
 .dashboard-tile.tile-double.board-group-tile .board {
   min-height: calc(var(--tile-row-height) * 2 - 80px);
@@ -1882,13 +1887,14 @@ body {
 }
 
 /* Local kanban: cap board height, scroll vertically when columns overflow.
-   Keep horizontal scroll for column navigation. */
+   Keep horizontal scroll for column navigation. Padding-bottom keeps the
+   horizontal scrollbar above the tile's rounded bottom corners. */
 .dashboard-tile.local-kanban-tile .board {
-  padding-bottom: 0;
+  padding-bottom: 1rem;
   overflow-x: auto;
 }
 .dashboard-tile.local-kanban-tile.tile-double .board {
-  padding-bottom: 0;
+  padding-bottom: 1rem;
   overflow-x: auto;
 }
 

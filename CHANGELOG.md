@@ -4,6 +4,10 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 ## Phase 2D-3 — Grid stability fix (ISSUE-013)
 
+### v1.95.9 (pending verification — committed, not pushed)
+- **Fixed spikey tile corner artifacts (root cause).** Commit `fe4ccf8` removed `.dashboard-tile.board-group-tile { overflow: hidden; }` to avoid clipping the kanban horizontal scrollbar, but that exposed square-corner artifacts at tile corners. Reverted that removal: `.board-group-tile` once again has `overflow: hidden` so children clip to the tile's `border-radius`. To keep the horizontal scrollbar visible, restored `padding-bottom: 1rem` on `.dashboard-tile.board-group-tile .board` (and `.local-kanban-tile .board`) so the scrollbar sits above the rounded bottom corners instead of being clipped.
+- Cache-bust bumped to `styles.css?v=1.87.18`.
+
 ### v1.95.8 (pending verification — committed, not pushed)
 - **Fixed squared-off artifacts on tile corners (follow-up).** Shrunk resize handles from 22x22px to 12x12px and moved them 6px inward from corners so they sit entirely within the tile's border-radius zone. Added `pointer-events: none` so handles are truly non-interactive at all times. Mobile handles now 18x18px (was 28x28px).
 - **Minimized tiles now uniform height (follow-up).** Team/Presence tile: KEEP status dropdown visible when collapsed, hide tabs (`presence-tile-tabs-inline`). Override `.panel-header` padding from `0.65rem 1rem 0` + `margin-bottom: 0.5rem` to `0.45rem 0.65rem` + `margin-bottom: 0` to match standard `.tile-toolbar`. Open Pipeline: hide filter summary (`.group-filter-summary-compact`) when collapsed. Notes tiles: explicit `padding: 0.45rem 0.65rem` on `.notes-tile-bar` when collapsed to ensure uniform toolbar height matching Tasks tile reference.
