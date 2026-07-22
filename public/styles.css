@@ -1614,21 +1614,22 @@ body {
 .dashboard-tile.tile-half .group-filter-summary-compact {
   order: 1;
 }
-/* Notes quick-format (B/I/S/U/H/emoji): order 1 on narrow so it stays on title row with the name */
-.dashboard-tile.notes-tile.tile-quarter .notes-quick-format-group,
-.dashboard-tile.notes-tile.tile-half .notes-quick-format-group {
-  order: 1;
-}
 /* Notes menus/accent/mode: order 1 on narrow so they stay on title row with the name */
 .dashboard-tile.notes-tile.tile-quarter .btn-notes-file-menu,
 .dashboard-tile.notes-tile.tile-half .btn-notes-file-menu,
 .dashboard-tile.notes-tile.tile-quarter .btn-notes-edit-menu,
 .dashboard-tile.notes-tile.tile-half .btn-notes-edit-menu,
-.dashboard-tile.notes-tile.tile-quarter .btn-notes-accent-select,
-.dashboard-tile.notes-tile.tile-half .btn-notes-accent-select,
+.dashboard-tile.notes-tile.tile-quarter .tile-menu-wrap,
+.dashboard-tile.notes-tile.tile-half .tile-menu-wrap,
 .dashboard-tile.notes-tile.tile-quarter .btn-notes-mode,
 .dashboard-tile.notes-tile.tile-half .btn-notes-mode {
   order: 1;
+}
+/* Notes formatting (B/I/S/U/H/emoji): drops to row 2 on narrow tiles */
+.dashboard-tile.notes-tile.tile-quarter .notes-quick-format-group,
+.dashboard-tile.notes-tile.tile-half .notes-quick-format-group {
+  order: 3;
+  flex-basis: 100%;
 }
 .dashboard-tile.tile-quarter .tile-toolbar-actions,
 .dashboard-tile.tile-half .tile-toolbar-actions {
@@ -1648,17 +1649,17 @@ body {
   .tile-toolbar-count,
   .group-tile-count,
   .group-filter-summary-compact,
-  .notes-tile .notes-quick-format-group,
   .notes-tile .btn-notes-file-menu,
   .notes-tile .btn-notes-edit-menu,
-  .notes-tile .btn-notes-accent-select,
+  .notes-tile .tile-menu-wrap,
   .notes-tile .btn-notes-mode {
     order: 1;
   }
   .tile-toolbar-actions {
     order: 2;
   }
-  .tile-toolbar-tools {
+  /* Formatting drops to row 2 on mobile */
+  .notes-tile .notes-quick-format-group {
     order: 3;
     flex-basis: 100%;
   }
@@ -5793,8 +5794,7 @@ body {
   max-width: 5.5rem;
 }
 
-/* Hide accent/mode on very narrow notes tiles to save title-row space */
-.dashboard-tile.notes-tile.tile-quarter .btn-notes-accent-select,
+/* Hide mode toggle on very narrow notes tiles to save title-row space */
 .dashboard-tile.notes-tile.tile-quarter .btn-notes-mode {
   display: none;
 }

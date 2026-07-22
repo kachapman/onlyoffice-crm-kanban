@@ -5786,8 +5786,12 @@ function bindNotesTileChrome(section, notes, tileId) {
   // goes after these so it also rides the title row on wide tiles.
   toolbar.appendChild(fileMenu);
   toolbar.appendChild(editMenu);
-  toolbar.appendChild(accentBtn);
-  toolbar.appendChild(accentDropdown);
+  // Accent button + dropdown in a positioned wrapper so the absolute dropdown
+  // anchors correctly (especially on mobile where the toolbar wraps).
+  const accentWrap = document.createElement("span");
+  accentWrap.className = "tile-menu-wrap";
+  accentWrap.append(accentBtn, accentDropdown);
+  toolbar.appendChild(accentWrap);
   toolbar.appendChild(modeToggleBtn);
   toolbar.appendChild(formatGroup);
   toolbar.appendChild(actions);
