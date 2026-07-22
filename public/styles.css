@@ -2213,6 +2213,22 @@ body {
   color: var(--text);
 }
 
+/* Tasks tile user filter lives in the toolbar; keep it compact so it doesn't
+   thicken the title bar. */
+.tasks-user-filter-select {
+  font: inherit;
+  font-size: 0.72rem;
+  padding: 0.15rem 0.35rem;
+  height: auto;
+  line-height: 1.2;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  max-width: 9rem;
+  min-width: 4rem;
+}
+
 .task-row label a:first-of-type,
 .tasks-list-row label a:first-of-type {
   color: #d4942b;

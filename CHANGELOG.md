@@ -4,6 +4,10 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 ## Phase 2D-3 — Grid stability fix (ISSUE-013)
 
+### v1.95.13 (pending verification — committed, not pushed)
+- **Moved Tasks tile user filter into the title bar.** The `<select id="tasks-user-filter">` was previously in a separate `.panel-header` row below the toolbar with a "User" label. Removed the label and the panel-header row; the select now lives in `.tile-toolbar-tools` via a new `ensureTasksUserFilter()` helper. Added compact styling (`.tasks-user-filter-select`) so it matches toolbar height and does not thicken the title bar.
+- Cache-bust bumped to `app.js?v=1.95.11`, `styles.css?v=1.87.22`.
+
 ### v1.95.12 (pending verification — committed, not pushed)
 - **Fixed Team tile Messages tab showing "No messages yet" when messages exist.** Two-part root cause: (1) the `/api/presence` endpoint did not include `myRecentDms` or `lastReadDms` in its response, so both the tile and popup Messages tabs had no inbox data; (2) `renderPresenceTileCompact` only re-rendered the Team tab body when fresh snapshots arrived, so the Messages tab never updated even after the server started returning data. Updated `server.py` `_handle_presence_get` to return `myRecentDms` and `lastReadDms`, and updated `renderPresenceTileCompact` to refresh `#presence-tile-messages-body` when it is visible.
 - **Fixed Team tile Messages tab shrinking.** Removed `max-height: 280px` from `.dashboard-tile.presence-panel .presence-tile-body` and set `min-height: 240px` so the body fills the tile height instead of collapsing when the inbox is empty.

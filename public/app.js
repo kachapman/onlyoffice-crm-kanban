@@ -2059,12 +2059,6 @@ function renderTasksTile() {
     tile.dataset.tileId = tileId;
     tile.dataset.tileLabel = "Tasks";
     tile.innerHTML = `
-      <div class="panel-header panel-header-tasks">
-        <label class="tasks-filter-label panel-sub">
-          User
-          <select id="tasks-user-filter"></select>
-        </label>
-      </div>
       <div id="tasks-by-user" class="tasks-by-user"></div>
     `;
     $("#dashboard-tiles")?.appendChild(tile);
@@ -2073,6 +2067,7 @@ function renderTasksTile() {
   applyTileLayoutClasses(tile, tileId);
   ensureTileAutoRefreshButton(tile, tileId);
   ensureTasksNewTaskButton(tile);
+  ensureTasksUserFilter(tile);
   if (tile && !tile.dataset.tasksFilterBound) {
     tile.dataset.tasksFilterBound = "1";
     $("#tasks-user-filter", tile)?.addEventListener("change", () => {
@@ -9916,6 +9911,34 @@ function ensureTasksNewTaskButton(tileEl) {
     insertAfter.after(btn);
   } else {
     toolbar.appendChild(btn);
+  }
+}
+
+function ensureTasksUserFilter(tileEl) {
+  if (!tileEl || tileEl.dataset.tileId !== "tile-tasks") return;
+  const toolbar = tileEl.querySelector(":scope > .tile-toolbar");
+  if (!toolbar) return;
+  let sel = toolbar.querySelector("#tasks-user-filter");
+  if (sel) return;
+  sel = document.createElement("select");
+  sel.id = "tasks-user-filter";
+  sel.className = "tasks-user-filter-select";
+  sel.title = "Filter tasks by user";
+  // Insert into the tools area after the title/count cluster
+  const tools = toolbar.querySelector(":scope > .tile-toolbar-tools");
+  if (tools) {
+    tools.appendChild(sel);
+  } else {
+    const title = toolbar.querySelector(".tile-toolbar-title");
+    const count = toolbar.querySelector(".tile-toolbar-count");
+    const insertAfter = count || title;
+    if (insertAfter && insertAfter.nextSibling) {
+      toolbar.insertBefore(sel, insertAfter.nextSibling);
+    } else if (insertAfter) {
+      insertAfter.after(sel);
+    } else {
+      toolbar.appendChild(sel);
+    }
   }
 }
 
