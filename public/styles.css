@@ -5593,6 +5593,21 @@ body {
   height: auto;
 }
 
+/* Collapsed notes tiles: hide formatting toolbar, menus, accent picker, mode toggle
+   so minimized height matches every other tile type. */
+.dashboard-tile.notes-tile.tile-body-collapsed .notes-quick-format-group,
+.dashboard-tile.notes-tile.tile-body-collapsed .tile-menu-wrap,
+.dashboard-tile.notes-tile.tile-body-collapsed .btn-notes-mode-toggle {
+  display: none !important;
+}
+
+/* Collapsed calendar tiles: hide month nav and timezone so minimized height is uniform. */
+.dashboard-tile.calendar-tile.tile-body-collapsed .calendar-month-nav,
+.dashboard-tile.calendar-tile.tile-body-collapsed .calendar-tz-label,
+.dashboard-tile.calendar-tile.tile-body-collapsed .calendar-tz-select {
+  display: none !important;
+}
+
 .calendar-tile-bar .calendar-month-nav {
   display: inline-flex;
   align-items: center;
@@ -5830,6 +5845,21 @@ body {
 .dashboard-tile.notes-tile.tile-body-collapsed {
   min-height: 0 !important;
   height: auto;
+}
+
+/* Collapsed notes tiles: hide formatting toolbar, menus, accent picker, mode toggle
+   so minimized height matches every other tile type. */
+.dashboard-tile.notes-tile.tile-body-collapsed .notes-quick-format-group,
+.dashboard-tile.notes-tile.tile-body-collapsed .tile-menu-wrap,
+.dashboard-tile.notes-tile.tile-body-collapsed .btn-notes-mode-toggle {
+  display: none !important;
+}
+
+/* Collapsed calendar tiles: hide month nav and timezone so minimized height is uniform. */
+.dashboard-tile.calendar-tile.tile-body-collapsed .calendar-month-nav,
+.dashboard-tile.calendar-tile.tile-body-collapsed .calendar-tz-label,
+.dashboard-tile.calendar-tile.tile-body-collapsed .calendar-tz-select {
+  display: none !important;
 }
 
 .notes-editor {
@@ -9278,6 +9308,7 @@ body {
   opacity: 0;
   transition: opacity 0.15s ease;
   touch-action: none; /* let pointer events drive the resize on touch */
+  overflow: hidden;
 }
 
 .dashboard-tile:hover .tile-resize-handle {
@@ -9296,6 +9327,7 @@ body {
   bottom: 0;
   right: 0;
   cursor: nwse-resize;
+  border-radius: 0 0 var(--radius) 0;
   background: linear-gradient(135deg, transparent 55%, var(--muted) 55%, var(--muted) 62%, transparent 62%, transparent 75%, var(--muted) 75%, var(--muted) 82%, transparent 82%);
 }
 
@@ -9303,6 +9335,7 @@ body {
   bottom: 0;
   left: 0;
   cursor: nesw-resize;
+  border-radius: 0 0 0 var(--radius);
   background: linear-gradient(225deg, transparent 55%, var(--muted) 55%, var(--muted) 62%, transparent 62%, transparent 75%, var(--muted) 75%, var(--muted) 82%, transparent 82%);
 }
 
