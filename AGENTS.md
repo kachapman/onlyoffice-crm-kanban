@@ -1,7 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** 2026-07-22 session 11: Phase 2D-3 marked complete and pushed to GitHub `new-crm` branch. Final fixes: Team/Tasks tile toolbars no longer wrap on mobile (container-query override + flex-wrap:nowrap + compact selects). Session 10 (Tasks user filter in title bar), session 9 (Team Messages tab fixes), and earlier 2D-3 grid stability fixes all shipped. Cache-bust: app.js?v=1.95.11, styles.css?v=1.87.23. PUSHED.
+**Last session summary (for next resume):** 2026-07-22 session 11: Phase 2D-3 marked complete and pushed to GitHub `new-crm` branch. Final fixes: Team/Tasks tile toolbars no longer wrap on mobile (container-query override + flex-wrap:nowrap + compact selects). Session 10 (Tasks user filter in title bar), session 9 (Team Messages tab fixes), and earlier 2D-3 grid stability fixes all shipped. Cache-bust: app.js?v=1.95.11, styles.css?v=1.87.23. PUSHED. Next: FEAT-007 Phase D search modal expansion (custom/user field filtering); FEAT-022 re-scoped to an in-modal document editor tab and deferred until Document Server features are fully unlocked.
 
 - Known issue: server process dies when backgrounded from opencode shell (use `setsid` to detach — see ISSUE-012).
 - Known issue: server must be killed and restarted after opencode session exits (use `setsid` to detach — see ISSUE-012).
@@ -108,7 +108,7 @@ See CHANGELOG.md and docs/RELEASE_v1.2.md. AccuLynx research stays in FUTURE_FEA
 
 For the previous post-v1.1 list and implementation notes, consult the git history / session artifacts around the v1.2 commits.
 
-Legacy open items (lower priority unless asked): FEAT-003 attachments, new toasters (stale deals, closing this week, etc.), FEAT-022 docs tile.
+Legacy open items (lower priority unless asked): FEAT-003 attachments, new toasters (stale deals, closing this week, etc.), FEAT-022 in-modal document editor tab.
 
 ## Architecture & Deployment Context
 - The **dashboard** (this entire project) runs on its own DigitalOcean Ubuntu droplet (production: https://dashboard.publicadjustermidwest.com, currently 159.89.229.126). It serves the vanilla JS UI from `public/` and acts as an API proxy (`server.py`) that forwards CRM calls to the OnlyOffice server while handling user profiles, notes, calendars, and auth.

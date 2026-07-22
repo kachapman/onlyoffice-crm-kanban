@@ -173,100 +173,48 @@ If the portal API only allows attachments through the full CRM UI (undocumented)
 
 ---
 
-## FEAT-022 — OnlyOffice document / spreadsheet tile (explore — not scheduled)
+## FEAT-022 — In-modal document editor tab (deferred)
 
-**Status:** Backlog for research only. No implementation planned yet.
+**Status:** Deferred. Not scheduled until the Document Server integration is fully unlocked and stable.
 
 ### Goal
 
-Add a new **Add tile** type that lets users work with an OnlyOffice **Word** or **Excel** file from the dashboard — ideally an **editable embed** inside the tile; optionally a lighter **open in portal** link first.
+Instead of opening documents in a separate browser tab, add an **in-modal editor tab** inside the existing Documents modal. A selected document opens in a new tab within the modal where the user can view/edit it via the Document Server, without leaving the dashboard.
 
-### Why this is different from current tiles
+This is intentionally **not** a dashboard tile. It reuses the existing Documents modal chrome (scopes, folders, toolbar) and simply keeps editing inside the same context.
 
-Existing tiles (kanban, ICS calendar, markdown notes) only read CRM/static data. An editable document tile needs:
+### Why deferred
 
-| Piece | Role |
-|-------|------|
-| **Document Server** | Hosts `DocsAPI.DocEditor` (editor UI + `api.js`). May already run behind `office.vanguardadj.com`; URL and JWT must be confirmed. |
-| **File source** | Workspace **Files API** (or CRM-linked file ids). Dashboard already builds download URLs via `filehandler.ashx?fileid=…`. |
-| **Backend broker** | `server.py` (or similar) to sign config, **download** file for DS, handle **save callback** from DS back to portal. |
-| **Auth** | User’s portal token (`oo_token`); every `fileId` must be validated via portal API — never trust client-supplied ids alone. |
+The Documents modal already uses the Document Server for editing by opening the editor in a separate tab/window. Before embedding it inside the modal we need:
 
-Docs: [DocEditor](https://api.onlyoffice.com/docs/docs-api/usage-api/doceditor/), [config](https://api.onlyoffice.com/docs/docs-api/usage-api/config/), [embedding FAQ](https://api.onlyoffice.com/docs/docs-api/more-information/faq/embedding/).
+1. Document Server JWT and callback wiring proven stable in production.
+2. Save callbacks, title sync, and permissions working reliably.
+3. CSP / iframe rules confirmed for the dashboard origin.
+4. Any other Document Server features (co-edit, comments, versions, etc.) unlocked and understood.
 
-### CRM tie-in
+Until then, documents continue to open in a separate tab/window as they do today.
 
-Opportunities already use a **Shared Spreadsheet** user field (hidden on create-opportunity modal). Tile designs to explore:
+### Implementation outline (for later)
 
-- **Personal tile** — user picks one file when adding the tile (stored in profile).
-- **Group tile** — file id/link from opportunity custom field for deals on that board (needs consistent field format: URL vs raw `fileid`).
+**Frontend**
 
-### Implementation phases (pick after spike)
+1. In the Documents modal, add a tab bar for open documents (`<editor-tab>`).
+2. When the user opens a document, create an inline tab containing an iframe or `DocsAPI.DocEditor` instance.
+3. Track open tabs in docs modal state; close tab removes the editor instance.
+4. Keep the file list/folder sidebar visible so users can switch documents without closing the modal.
 
-#### Phase A — Link-out tile (~1–3 days)
+**Backend**
 
-- New tile type in Add Tile modal; persist `documentTiles[]` in user profile (like `notesTiles` / `calendarTiles`).
-- Config: tile name + `fileId` or portal document URL (paste or file picker later).
-- **Open in OnlyOffice** opens native portal editor in a new tab.
-- **Pros:** No Document Server wiring on dashboard. **Cons:** Not embedded in tile.
-
-#### Phase B — Integration spike (~1–2 days)
-
-On `office.vanguardadj.com`, open a spreadsheet in the browser and capture Network:
-
-- Document Server hostname
-- File download request shape
-- Save callback URL and payload
-- Whether JWT is required on editor config
-
-Decide if iframe-to-portal is viable (often blocked by SSO / `X-Frame-Options` / third-party cookies).
-
-#### Phase C — Full Docs API embed (~2–4+ weeks)
-
-**Frontend** (same checklist as [Toaster_Features](./Toaster_Features) “new tile type”):
-
-1. Add tile type in `public/index.html` + `public/app.js`
-2. `documentTiles[]` in `user_profile_store.py`; tile id `document-{uuid}`
-3. Tall/double tile height; load DS `api.js`; `new DocsAPI.DocEditor(placeholder, config)`
-4. Destroy editor on tile remove/collapse (avoid leaks)
-
-**Backend** (`server.py`):
-
-1. `GET /api/document-editor/config?fileId=…` — build signed config, correct `documentType` (`cell` / `word` / `slide`), `document.key` versioning
-2. `GET /api/document-editor/file?fileId=…` — stream file from portal with user token
-3. `POST /api/document-editor/callback` — OnlyOffice save handler; upload back via Files API
-4. Authorization: verify file access through portal API for current user
-
-**Infra**
-
-- JWT secret aligned with Document Server
-- Callback URL reachable **from Document Server** (not only browser) — e.g. `https://dashboard.vanguardadj.com/api/...`
-- Nginx/CSP: `frame-src` for editor origin; proxy timeouts for large saves (may exceed 120s)
-- Licensing / connection limits on Document Server
-
-### Risks
-
-1. Callback not reachable from DS container → saves fail silently or error in editor
-2. Wrong `document.key` → corruption or “file locked” errors
-3. JWT mismatch → editor does not load
-4. iframe-to-portal embed without Docs API → auth/CSP failures
-
-### Acceptance criteria (when pursued)
-
-1. User can add a document/spreadsheet tile and bind a file (id or picker).
-2. **Phase A:** Open in portal edits the real file; reopen shows changes.
-3. **Phase C:** Edit inside tile; save via callback; same file opens in portal with updates.
-4. User cannot open arbitrary files by guessing `fileId` (portal denies unauthorized ids).
+- Reuse existing editor-config endpoint; no new endpoints required for Phase 1.
+- If save callbacks need to target the modal instead of the separate tab, surface callback status via the existing `/api/v2/documents/{id}/editor-config` or a lightweight status poll.
 
 ### Files (when implemented)
 
 | File | Role |
 |------|------|
-| `public/index.html`, `public/app.js` | Add tile UI, tile render, DocsAPI lifecycle |
-| `public/styles.css` | Tile chrome, editor container height |
-| `user_profile_store.py` | `documentTiles[]` persistence |
-| `server.py` | Config signing, file proxy, callback |
-| `deploy/nginx-dashboard*.conf` | Callback routes, body size, CSP/frame-src |
+| `public/index.html`, `public/app.js` | Documents modal tab bar, editor lifecycle |
+| `public/styles.css` | Modal tab bar, editor iframe sizing |
+| `server.py` | Existing editor-config/callback reused |
 | `Toaster_Features` | Cross-reference |
 
 ---
@@ -358,7 +306,7 @@ See **[Toaster_Features](./Toaster_Features)** for dashboard tile/widget ideas (
 | FEAT-005 | Custom fields on **edit** deal (not only create) | Medium |
 | FEAT-006 | Export group/opportunities to CSV | Medium |
 | FEAT-007 | **Advanced Opportunity Search** — filter by stage, user, tags, custom fields, date range (see detailed section below) | High |
-| FEAT-022 | OnlyOffice document / spreadsheet tile (explore) | High — see above |
+| FEAT-022 | **In-modal document editor tab** — open documents inside the existing Documents modal instead of a separate page/tab. Deferred until Document Server features are fully unlocked. | Deferred |
 | FEAT-023 | **Documents: Save-as conversion** — export doc to PDF/ODT/Markdown from the documents modal context menu or toolbar. OnlyOffice Document Server supports format conversion via callback, but a simpler approach is server-side conversion using LibreOffice headless (`soffice --convert-to pdf`). Needs Docker container with LibreOffice or a dedicated conversion API. | Medium |
 
 ### FEAT-008 — AccuLynx API research (post-v1.1, from user list)
@@ -455,5 +403,5 @@ A separate **nginx proxy subdomain** — no URL rewriting, no Python overhead, e
 2. **FEAT-002** — Custom fields on create (unblock ISSUE-001).
 3. **FEAT-003** — Note attachments (needs API research).
 4. Pick items from **Toaster_Features** by priority.
-5. **FEAT-022** — Document/spreadsheet tile: run Phase B spike before committing to Phase C; Phase A if embed is blocked or deferred.
+5. **FEAT-022** — In-modal document editor tab: implement after Document Server features (JWT, callbacks, co-edit) are fully unlocked and stable.
 6. **FEAT-024** — Native CRM iframe embed (investigated, not implemented — see above).
