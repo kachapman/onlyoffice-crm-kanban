@@ -122,6 +122,43 @@ Legacy open items (lower priority unless asked): FEAT-003 attachments, new toast
 - **Critical separation rule:** This project is a **standalone dashboard**. It is deliberately kept completely separate from OnlyOffice so there is zero risk of it affecting or breaking the OnlyOffice Community Server installation. The `onlyoffice-module/` directory (if present) is legacy/separate and not used for the main dashboard. Local test servers exist solely to allow safe iteration on the JS + proxy code before deploying the standalone dashboard.
 - **Production shared-hosting note:** The dashboard droplet also runs other web apps. As of 2026-07, public traffic for `dashboard.publicadjustermidwest.com` is handled by the **host's nginx** (systemd service at `/etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com`), **not** the Docker `estimate-nginx` container. The dashboard container binds to `127.0.0.1:8765`. The dashboard is in a separate Compose project but joins `estimate-enhancer_estimate-network` (harmless). **Required for uploads:** `client_max_body_size 100m; proxy_request_buffering off; proxy_read_timeout 120s;` in the host site file. Always read `docs/DASHBOARD_INFRASTRUCTURE.md` (especially the 2026-07 section) before touching nginx on the host. The old `/opt/estimate-enhancer/nginx.conf` is historical for this domain.
 
+## Document Server (OnlyOffice) deployment notes
+
+The dashboard uses an OnlyOffice Document Server for editing Word/Excel/PowerPoint files. This can be either a **co-located Docker container** on the dashboard droplet or a **separate droplet** reachable over HTTPS. The correct `.env` values depend on the architecture.
+
+### Required `.env` variables
+
+| Variable | Purpose | Production example (separate droplet) | Local dev (co-located) |
+|----------|---------|--------------------------------------|------------------------|
+| `DOCS_JWT_SECRET` | Shared secret for signing OnlyOffice JWT tokens. Must match `JWT_SECRET` configured on the Document Server. | `change_me_in_production` | `local_docs_secret_not_for_production` |
+| `DOCS_PUBLIC_URL` | URL the **user's browser** uses to load the OnlyOffice editor. | `https://docs.publicadjustermidwest.com` | `https://192.168.1.68:9443` |
+| `DOCS_INTERNAL_URL` | URL the **CRM server** uses to reach the Document Server internally. | Set to the same public URL when Document Server is on a separate droplet: `https://docs.publicadjustermidwest.com` | Set to the LAN URL or leave empty; standalone dev falls back to `DOCS_PUBLIC_URL` |
+| `CRM_PUBLIC_URL` | URL the Document Server uses to download files and send callbacks. Must be reachable from the Document Server. | `https://dashboard.publicadjustermidwest.com` | `http://192.168.1.68:8766` |
+| `DOCSERVER_CONTAINER_NAME` | Docker container name used by the admin "Restart Document Server" button. Only relevant when co-located. | `onlyoffice-docserver` | `onlyoffice-docserver` |
+
+### Production rules
+
+1. **When Document Server is on a separate droplet:** set `DOCS_INTERNAL_URL` to the same value as `DOCS_PUBLIC_URL`. The dashboard container will use it directly. The admin "Restart Document Server" button will report that the container is not found locally, which is expected.
+2. **When Document Server is co-located in Docker:** set `DOCS_INTERNAL_URL` to the container hostname/port, e.g. `https://onlyoffice-docserver:443` or `http://onlyoffice-docserver:80`. Update `DOCSERVER_CONTAINER_NAME` to match the actual container name.
+3. **Never leave `DOCS_INTERNAL_URL=http://docserver:8080` in production.** That value was a broken placeholder and has been removed from `docker-compose.yml`. It only worked in a specific legacy local setup.
+4. **Ensure `CRM_PUBLIC_URL` is reachable from the Document Server.** OnlyOffice downloads files and sends save callbacks to this URL. If the Document Server cannot reach it, edits will fail silently or show "Document Server connection lost".
+5. **OnlyOffice 7.1+ requires `document.key` to be a plain string.** The dashboard now generates `document.key` as `sietch-doc-{doc_id}-{timestamp}` inside the signed editor config. Do not change it back to a JWT.
+
+### Verification
+
+```bash
+# From the dashboard container/host
+# Editor config should have a plain-string document.key
+# For a real document id, replace 1
+# curl -s -b "vanguard_session=..." https://dashboard.publicadjustermidwest.com/api/v2/documents/1/editor-config | python3 -m json.tool
+
+# Document Server healthcheck (from dashboard host)
+curl -s -k -o /dev/null -w "%{http_code}\n" https://docs.publicadjustermidwest.com/healthcheck
+
+# CRM reachable from Document Server (if on separate droplet)
+curl -s -o /dev/null -w "%{http_code}\n" https://dashboard.publicadjustermidwest.com/api/config
+```
+
 ## How to Run / Test / Deploy
 - **Dev (normal):** `cd ~/new-crm && cp -n config.example.env .env && ./start.sh` (or `DB_HOST=127.0.0.1 ./.venv/bin/python3 server.py` if needed). Server prints LAN URLs on start (binds 0.0.0.0). Login with your credentials (session-cookie auth). **Requires a real PostgreSQL database.**
 - **Chaos testing only:** `python test-server.py` — this is **not** a development server. Only for simulating failures via `/api/test/chaos`. All functional development requires the real server with a real DB (or LAN server).

@@ -300,6 +300,28 @@ Before making any nginx/compose change on this server:
 
 ---
 
+## Document Server (OnlyOffice)
+
+The dashboard embeds OnlyOffice for editing Word/Excel/PowerPoint files. The Document Server can be:
+
+1. **On a separate droplet** (production as of 2026-07): set `.env` `DOCS_INTERNAL_URL` to the same public URL as `DOCS_PUBLIC_URL`.
+2. **Co-located in Docker on the dashboard host**: set `.env` `DOCS_INTERNAL_URL` to the container hostname/port (e.g. `https://onlyoffice-docserver:443`) and `DOCSERVER_CONTAINER_NAME` to the actual container name.
+
+See `AGENTS.md` → "Document Server (OnlyOffice) deployment notes" for the full variable table and production rules. The admin "Restart Document Server" button only works when the Document Server container exists on the same host; on a separate droplet it will report that the container is not found locally.
+
+### Document Server verification
+
+```bash
+# Healthcheck from dashboard host
+curl -s -k -o /dev/null -w "%{http_code}\n" https://docs.publicadjustermidwest.com/healthcheck
+
+# Editor config contains a plain-string document.key (requires authenticated session)
+# curl -s -b "vanguard_session=..." https://dashboard.publicadjustermidwest.com/api/v2/documents/1/editor-config | python3 -m json.tool
+
+# CRM must be reachable from Document Server for downloads/callbacks
+curl -s -o /dev/null -w "%{http_code}\n" https://dashboard.publicadjustermidwest.com/api/config
+```
+
 ## Verification commands (see also the 2026-07 section above)
 
 ```bash

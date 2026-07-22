@@ -98,6 +98,20 @@ PART B — ON THE SERVER (DigitalOcean droplet)
 
    nano /opt/vanguard/onlyoffice-crm-kanban/.env
 
+   Document Server (OnlyOffice) — REQUIRED for document editing to work:
+
+   DOCS_JWT_SECRET=change_me_in_production
+   DOCS_PUBLIC_URL=https://docs.publicadjustermidwest.com
+   # When Document Server is on a separate droplet, set DOCS_INTERNAL_URL to the
+   # same public URL. When co-located in Docker, set the container hostname/port
+   # (e.g. https://onlyoffice-docserver:443). Never use the legacy placeholder
+   # http://docserver:8080 in production.
+   DOCS_INTERNAL_URL=https://docs.publicadjustermidwest.com
+   CRM_PUBLIC_URL=https://dashboard.publicadjustermidwest.com
+   DOCSERVER_CONTAINER_NAME=onlyoffice-docserver
+
+   VERIFY: grep -E "DOCS_JWT_SECRET|DOCS_PUBLIC_URL|DOCS_INTERNAL_URL|CRM_PUBLIC_URL|DOCSERVER_CONTAINER_NAME" .env
+
    If deploying the Telegram bot for the first time, ensure these lines exist
    (ask the developer for the actual values):
 
@@ -238,6 +252,9 @@ TROUBLESHOOTING
 | Bot fails to start              | Check .env has TELEGRAM_BOT_TOKEN, BOT_CRM_EMAIL, BOT_CRM_PASSWORD. Run manually first: `/tmp/botenv/bin/python3 telegram_bot.py` |
 | Bot 503 "TELEGRAM_BOT_TOKEN not configured" | Dashboard container doesn't have the env var. Add to .env, then `docker compose up -d` (re-reads .env). No rebuild needed. |
 | Dockerfile missing .py          | If server.py imports a new module, add it to the Dockerfile COPY line. Missing modules cause container crash → nginx 502. |
+| Document editor won't open / "auth missing document.key" | OnlyOffice 7.1+ requires a plain-string document.key. Ensure code is current (v1.95.17+) and DOCS_JWT_SECRET matches the Document Server's JWT_SECRET. |
+| "Document Server connection lost" | Check DOCS_INTERNAL_URL and CRM_PUBLIC_URL in .env. CRM_PUBLIC_URL must be reachable from the Document Server for downloads/callbacks. |
+| Restart Document Server button fails | If Document Server runs on a separate droplet, the container won't exist on the dashboard host; restart it on its own host instead. |
 
 
 --------------------------------------------------------------------------------
