@@ -8551,6 +8551,7 @@ body {
   }
   .admin-main {
     max-height: 60vh;
+    overflow: auto;
   }
   #admin-console-modal .admin-tabs-toggle {
     display: flex;
