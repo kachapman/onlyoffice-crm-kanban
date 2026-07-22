@@ -1863,22 +1863,31 @@ body {
   border-top: none;
 }
 
-/* All board-group-tiles: remove the global .board min-height (420px) that exceeds
-   --tile-row-height (400px) and causes resize jump + overflow past footer.
-   Double-mode gets the proper taller min-height. */
+/* Board-group-tiles: clip board overflow so unbounded column growth
+   doesn't push the tile past its max-height. */
+.dashboard-tile.board-group-tile {
+  overflow: hidden;
+}
+
+/* All board-group-tiles: cap board height to tile size, scroll vertically
+   when columns overflow. Without this, tall columns push the tile to
+   unbounded height and it can't shrink back. */
 .dashboard-tile.board-group-tile .board {
   min-height: 0;
-  padding-bottom: 1rem;
+  max-height: var(--tile-row-height);
+  overflow-y: auto;
+  padding-bottom: 0;
 }
 .dashboard-tile.tile-double.board-group-tile .board {
   min-height: calc(var(--tile-row-height) * 2 - 80px);
+  max-height: calc(var(--tile-row-height) * 2 + 1.25rem);
 }
 
-/* Local kanban: remove bottom padding 'chin' and hide horizontal scrollbar
-   track that creates visible empty space at the bottom of the tile. */
+/* Local kanban: cap board height, scroll vertically when columns overflow.
+   Keep horizontal scroll for column navigation. */
 .dashboard-tile.local-kanban-tile .board {
   padding-bottom: 0;
-  overflow-x: hidden;
+  overflow-x: auto;
 }
 .dashboard-tile.local-kanban-tile.tile-double .board {
   padding-bottom: 0;
