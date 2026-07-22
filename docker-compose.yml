@@ -16,7 +16,10 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       DB_HOST: db
       DB_PORT: "5432"
-      DOCS_INTERNAL_URL: http://docserver:8080
+      # DOCS_INTERNAL_URL is intentionally omitted here; set it in .env.
+      # When the Document Server is on a separate droplet, set it to the public
+      # URL (same as DOCS_PUBLIC_URL). When co-located in Docker, set the
+      # container hostname/port (e.g., https://onlyoffice-docserver:443).
       CONTAINER_NAME: "sietch-crm"
     depends_on:
       db:

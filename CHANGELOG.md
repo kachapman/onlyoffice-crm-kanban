@@ -8,9 +8,10 @@ Target release v2.2.5 on `new-crm` branch.
 
 ### v1.95.17
 - **Fixed OnlyOffice Document Server editor config for 7.1+.** `document.key` is now a plain unique string (`sietch-doc-{id}-{ts}`) instead of a JWT. OnlyOffice 7.1+ requires `document.key` as a plain string inside the signed editor-config token; the previous JWT value caused "auth missing required parameter document.key" errors and prevented documents from opening.
-- **Fixed internal Document Server URL for standalone dev.** Added `_is_running_in_docker()` and `_effective_docs_internal_url()` helpers so `_proxy_document_server` falls back to `DOCS_PUBLIC_URL` when the CRM is running outside Docker (the `docserver` hostname is not resolvable from the host).
-- **Added Document Server restart control to admin Infrastructure tab.** New `POST /api/v2/admin/restart-docserver` endpoint and "Restart Document Server" button restart the `onlyoffice-docserver` container. Renamed the existing button to "Restart dashboard container" for clarity.
-- **Files:** `server.py`, `public/index.html`, `public/app.js`.
+- **Made Document Server internal URL production-safe.** `_effective_docs_internal_url()` uses `DOCS_INTERNAL_URL` when it looks intentionally configured (not the placeholder `http://docserver:8080`), and falls back to `DOCS_PUBLIC_URL` in standalone dev or when the internal URL is empty/placeholder. This supports both co-located Docker setups and production deployments where Document Server lives on a separate droplet.
+- **Removed hardcoded `DOCS_INTERNAL_URL` from `docker-compose.yml`.** The value now comes from `.env`, so production can set it to the public URL (or a real internal URL) instead of the broken local-only `http://docserver:8080` placeholder.
+- **Added Document Server restart control to admin Infrastructure tab.** New `POST /api/v2/admin/restart-docserver` endpoint and "Restart Document Server" button use the configurable `DOCSERVER_CONTAINER_NAME` env var (default `onlyoffice-docserver`). Renamed the existing button to "Restart dashboard container" for clarity. On a production droplet where Document Server runs elsewhere, the restart will simply report that the container is not found locally.
+- **Files:** `server.py`, `public/index.html`, `public/app.js`, `docker-compose.yml`, `config.example.env`.
 - Cache-bust bumped to `app.js?v=1.95.17`, `styles.css?v=1.87.30`.
 
 ### v1.95.16

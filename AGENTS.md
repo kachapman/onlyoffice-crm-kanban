@@ -1,7 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** 2026-07-22 session 15: Fixed OnlyOffice Document Server integration. Changed `document.key` in editor config to a plain string (OnlyOffice 7.1+ requirement), added Docker-vs-standalone detection for `DOCS_INTERNAL_URL`, and added `POST /api/v2/admin/restart-docserver` with an Infrastructure tab button to restart the `onlyoffice-docserver` container. Verified editor config returns valid plain-key JWT and restart endpoint triggers container restart. Renamed existing restart button to "Restart dashboard container" for clarity. Cache-bust: app.js?v=1.95.17, styles.css?v=1.87.30. PUSHED.
+**Last session summary (for next resume):** 2026-07-22 session 15: Fixed OnlyOffice Document Server integration. Changed `document.key` in editor config to a plain string (OnlyOffice 7.1+ requirement); made `_effective_docs_internal_url()` production-safe (honors intentional `DOCS_INTERNAL_URL`, falls back to `DOCS_PUBLIC_URL` for standalone dev or placeholder values); removed hardcoded `DOCS_INTERNAL_URL` from `docker-compose.yml`; added configurable `DOCSERVER_CONTAINER_NAME` for `POST /api/v2/admin/restart-docserver`. Updated `config.example.env` with production guidance. Verified editor config returns valid plain-key JWT and restart endpoint triggers container restart. Cache-bust: app.js?v=1.95.17, styles.css?v=1.87.30. PUSHED.
 
 - Known issue: server process dies when backgrounded from opencode shell (use `setsid` to detach — see ISSUE-012).
 - Known issue: server must be killed and restarted after opencode session exits (use `setsid` to detach — see ISSUE-012).

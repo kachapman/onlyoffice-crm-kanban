@@ -113,6 +113,7 @@ DOCS_INTERNAL_URL = os.environ.get("DOCS_INTERNAL_URL", "").rstrip("/")
 DOCS_PUBLIC_URL = os.environ.get("DOCS_PUBLIC_URL", "").rstrip("/")
 CRM_PUBLIC_URL = os.environ.get("CRM_PUBLIC_URL", "").rstrip("/") or DOCS_PUBLIC_URL
 CONTAINER_NAME = os.environ.get("CONTAINER_NAME", "sietch-crm")
+DOCSERVER_CONTAINER_NAME = os.environ.get("DOCSERVER_CONTAINER_NAME", "onlyoffice-docserver")
 
 # ── DB init ────────────────────────────────────────────────────────────────────
 import db
@@ -235,11 +236,18 @@ def _is_running_in_docker() -> bool:
 def _effective_docs_internal_url() -> str:
     """Return the URL the CRM should use to reach the Document Server.
 
-    When running inside Docker the configured DOCS_INTERNAL_URL (Docker-network
-    hostname) is correct. When running standalone on the host, the internal
-    hostname is not resolvable, so fall back to the public HTTPS URL.
+    In production the Document Server often lives on a separate droplet, so
+    DOCS_INTERNAL_URL should be set to a URL reachable from the CRM container
+    (frequently the same as DOCS_PUBLIC_URL). In local standalone dev the
+    Docker-network hostname is not resolvable from the host, so we fall back to
+    the public URL.
     """
-    if _is_running_in_docker():
+    if not _is_running_in_docker():
+        # Standalone dev: Docker hostnames like http://docserver:8080 don't resolve.
+        return DOCS_PUBLIC_URL or DOCS_INTERNAL_URL
+    # In Docker: trust an explicitly configured internal URL unless it's the
+    # placeholder local-dev hostname. Fall back to public URL otherwise.
+    if DOCS_INTERNAL_URL and not DOCS_INTERNAL_URL.startswith("http://docserver"):
         return DOCS_INTERNAL_URL
     return DOCS_PUBLIC_URL or DOCS_INTERNAL_URL
 
@@ -1038,19 +1046,11 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             log_infra_event("info", f"Document Server restart requested by {user.get('email', 'unknown')}")
             try:
                 import subprocess
-                # Prefer the configured public host if it looks like a local address,
-                # otherwise fall back to the legacy onlyoffice-docserver container name.
-                ds_host = None
-                if DOCS_PUBLIC_URL:
-                    try:
-                        host = urlparse(DOCS_PUBLIC_URL).hostname or ""
-                        if host.startswith("192.168.") or host.startswith("10.") or host.startswith("172.") or host == "localhost" or host == "127.0.0.1":
-                            ds_host = "onlyoffice-docserver"
-                    except Exception:
-                        pass
-                if not ds_host:
-                    ds_host = "onlyoffice-docserver"
-                result = subprocess.run(["docker", "restart", ds_host], capture_output=True, text=True, timeout=30)
+                # In production the Document Server may live on a separate droplet,
+                # in which case this container will not exist here and the restart
+                # will return a clear error. Set DOCSERVER_CONTAINER_NAME to match
+                # the local container name when co-located (default: onlyoffice-docserver).
+                result = subprocess.run(["docker", "restart", DOCSERVER_CONTAINER_NAME], capture_output=True, text=True, timeout=30)
                 if result.returncode == 0:
                     _json_response(self, 200, {"ok": True, "message": "Document Server restart triggered"})
                 else:
