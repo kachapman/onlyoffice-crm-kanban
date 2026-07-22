@@ -1628,6 +1628,13 @@ body {
     order: 10;
     flex-basis: 100%;
   }
+  /* Team/Tasks tiles: keep status dropdown + user selector on the title row
+     even on narrow/mobile widths; they are compact enough not to obstruct. */
+  .dashboard-tile.presence-panel .tile-toolbar-tools,
+  .dashboard-tile.tasks-panel .tile-toolbar-tools {
+    order: 0;
+    flex-basis: auto;
+  }
 }
 
 .tile-toolbar-spacer {
@@ -1757,6 +1764,11 @@ body {
 }
 .dashboard-tile.tile-double.presence-panel .presence-tile-body {
   max-height: none;
+}
+
+.dashboard-tile.presence-panel .tile-toolbar,
+.dashboard-tile.tasks-panel .tile-toolbar {
+  flex-wrap: nowrap;
 }
 
 /* Team tile body fills available height with scroll constraint */
@@ -2227,6 +2239,15 @@ body {
   color: var(--text);
   max-width: 9rem;
   min-width: 4rem;
+}
+
+@media (max-width: 600px) {
+  .presence-status-select-tile,
+  .tasks-user-filter-select {
+    max-width: 7rem;
+    padding: 0.1rem 0.25rem;
+    font-size: 0.7rem;
+  }
 }
 
 .task-row label a:first-of-type,
