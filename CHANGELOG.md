@@ -4,6 +4,10 @@ All notable changes to the Sietch CRM dashboard are documented here.
 
 ## Phase 2D-3 — Grid stability fix (ISSUE-013)
 
+### v1.95.10 (pending verification — committed, not pushed)
+- **Fixed preview tag dropdown cut off when no tags.** The tag add dropdown used `.template-dropdown`'s default `right: 0` positioning, so when no tag chips were present the + button sat at the left edge of the preview modal and the menu opened to the left, extending past the modal border. Added `.opp-preview-tag-add-wrap .template-dropdown { left: 0; right: auto; }` so it always opens to the right and stays visible.
+- Cache-bust bumped to `styles.css?v=1.87.19`.
+
 ### v1.95.9 (pending verification — committed, not pushed)
 - **Fixed spikey tile corner artifacts (root cause).** Commit `fe4ccf8` removed `.dashboard-tile.board-group-tile { overflow: hidden; }` to avoid clipping the kanban horizontal scrollbar, but that exposed square-corner artifacts at tile corners. Reverted that removal: `.board-group-tile` once again has `overflow: hidden` so children clip to the tile's `border-radius`. To keep the horizontal scrollbar visible, restored `padding-bottom: 1rem` on `.dashboard-tile.board-group-tile .board` (and `.local-kanban-tile .board`) so the scrollbar sits above the rounded bottom corners instead of being clipped.
 - Cache-bust bumped to `styles.css?v=1.87.18`.

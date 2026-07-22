@@ -5348,6 +5348,10 @@ body {
 .opp-preview-tag-add-wrap {
   display: inline-flex;
 }
+.opp-preview-tag-add-wrap .template-dropdown {
+  left: 0;
+  right: auto;
+}
 .opp-preview-tag-add {
   font: inherit;
   font-size: 0.75rem;
