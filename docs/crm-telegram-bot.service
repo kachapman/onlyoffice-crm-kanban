@@ -1,5 +1,5 @@
 [Unit]
-Description=CRM Telegram Bot (@vanguardupdates_bot)
+Description=Sietch CRM Telegram Bot (@vanguardupdates_bot)
 Documentation=https://github.com/kachapman/onlyoffice-crm-kanban
 After=network-online.target docker.service
 Wants=network-online.target

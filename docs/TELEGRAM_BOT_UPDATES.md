@@ -1,4 +1,4 @@
-# Telegram Bot Updates — @vanguardupdates_bot
+# Telegram Bot Updates — Sietch CRM (@vanguardupdates_bot)
 
 ## v2.1.0 (shipped 2026-07-07)
 
@@ -14,7 +14,7 @@
 ### Role-Aware Onboarding
 - **`/start`**: Linked employees see commands; linked customers see search prompt; unlinked users see invite code prompt.
 - **`/help`**: Three variants — customer, employee, unlinked.
-- "your agent" → "Vanguard Adjusting" in all customer-facing text.
+- "your agent" → "Sietch CRM" in all customer-facing text.
 
 ### Bug Fix
 - `allowed_updates` used plural `"messages"` (silently ignored by Telegram). Fixed to `Update.MESSAGE` / `Update.CALLBACK_QUERY`.

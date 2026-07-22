@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV = ROOT / ".env"
-PORTAL = os.environ.get("ONLYOFFICE_PORTAL_URL", "https://office.vanguardadj.com").rstrip("/")
+PORTAL = os.environ.get("ONLYOFFICE_PORTAL_URL", "https://office.publicadjustermidwest.com").rstrip("/")
 USER = os.environ.get("ONLYOFFICE_USER", "")
 PASSWORD = os.environ.get("ONLYOFFICE_PASSWORD", "")
 

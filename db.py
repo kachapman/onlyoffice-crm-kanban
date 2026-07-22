@@ -1,4 +1,4 @@
-"""PostgreSQL connection layer for Vanguard CRM v3.0."""
+"""PostgreSQL connection layer for Sietch CRM v3.0."""
 
 from __future__ import annotations
 

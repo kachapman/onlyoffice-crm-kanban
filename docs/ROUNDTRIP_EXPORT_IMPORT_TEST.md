@@ -5,7 +5,7 @@ Goal: Export live OnlyOffice CRM data via bot API → transfer portable JSON →
 This is the safe, portable path (Option A) before full cutover + hourly sync.
 
 ## Prerequisites
-- Bot credentials that work: `bot@vanguardadj.com` / `FRi3tz4yWXrMTEZ` (confirmed to generate token against https://office.publicadjustermidwest.com)
+- Bot/admin credentials that can generate an OnlyOffice auth token (set via env or ask the admin).
 - Network access from the export machine to the OnlyOffice portal (HTTPS).
 - On the import machine: Python 3 + psycopg2-binary (`pip install psycopg2-binary`), and network access to the target Postgres (usually `127.0.0.1:5432` when port is exposed for migration).
 - The new-crm branch checked out (or at least the two scripts).
@@ -55,8 +55,8 @@ cd ~/sietch-migration   # or wherever you put the scripts
 
 python3 migrate_from_onlyoffice.py \
   --portal-url https://office.publicadjustermidwest.com \
-  --email bot@vanguardadj.com \
-  --password FRi3tz4yWXrMTEZ \
+  --email admin@example.com \
+  --password 'YOUR_BOT_PASSWORD' \
   --export-only \
   --export-dir ./crm_export_$(date +%Y%m%d_%H%M)
 ```

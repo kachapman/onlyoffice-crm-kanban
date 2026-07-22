@@ -3487,7 +3487,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         import urllib.request, urllib.error
         req = urllib.request.Request(
             feed_url,
-            headers={"Accept": "text/calendar", "User-Agent": "Vanguard-CRM-Calendar/3.0"},
+            headers={"Accept": "text/calendar", "User-Agent": "Sietch-CRM-Calendar/3.0"},
             method="GET",
         )
         try:

@@ -558,7 +558,7 @@ def _format_event_body(category: str, content: str, max_len: int = 500) -> str:
 HELP_TEXT_CUSTOMER = (
     "Send a project name (or part of it) to look it up.\n"
     "If several match, tap a button — or reply with the number — to see full details.\n"
-    "Need a new invite code? Contact Vanguard Adjusting."
+    "Need a new invite code? Contact Sietch CRM."
 )
 HELP_TEXT_EMPLOYEE = (
     "Send a project name (or part of it) to search across all projects.\n"
@@ -571,7 +571,7 @@ HELP_TEXT_EMPLOYEE = (
     "  /start  — restart the bot"
 )
 HELP_TEXT_UNLINKED = (
-    "To use this bot you need an invite code from Vanguard Adjusting.\n"
+    "To use this bot you need an invite code from Sietch CRM.\n"
     "Send the code here to link your account, then you can search projects."
 )
 
@@ -849,12 +849,12 @@ def main() -> None:
                 await _reply_html(
                     update,
                     f"{greeting} Send a project name to look up your project.\n\n"
-                    "Need a new invite code? Contact Vanguard Adjusting.",
+                    "Need a new invite code? Contact Sietch CRM.",
                 )
         else:
             await _reply_html(
                 update,
-                "Welcome! To get started, you need an invite code from Vanguard Adjusting.\n\n"
+                "Welcome! To get started, you need an invite code from Sietch CRM.\n\n"
                 "Send the invite code here to link your account, then you can search projects.",
             )
 

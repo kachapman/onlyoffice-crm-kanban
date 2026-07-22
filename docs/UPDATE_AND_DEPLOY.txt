@@ -1,7 +1,7 @@
 ================================================================================
-  Vanguard CRM Dashboard — Update & deploy workflow
+  Sietch CRM Dashboard — Update & deploy workflow
   Repo: https://github.com/kachapman/onlyoffice-crm-kanban
-  Production: https://dashboard.vanguardadj.com
+  Production: https://dashboard.publicadjustermidwest.com
 ================================================================================
 
 Use this checklist every time you change the app on your desktop and publish
@@ -14,7 +14,7 @@ PART A — ON YOUR DESKTOP (development machine)
 
 1. Stop the local dev server (if it is running)
 
-   cd ~/crm-kanban
+   cd ~/new-crm
    fuser -k 8765/tcp 2>/dev/null || true
 
    (Or press Ctrl+C in the terminal that ran ./start.sh)
@@ -29,18 +29,18 @@ PART A — ON YOUR DESKTOP (development machine)
 
 3. Test locally (optional but recommended)
 
-   cd ~/crm-kanban
+   cd ~/new-crm
    cp config.example.env .env    # only first time; then edit .env
    ./start.sh
 
    Open: http://127.0.0.1:8765
-   Log in with your OnlyOffice CRM credentials.
+   Log in with your Sietch CRM credentials.
 
    When done testing, stop the server again (step 1).
 
 4. Commit and push to GitHub
 
-   cd ~/crm-kanban
+   cd ~/new-crm
    git status
    git add <files you changed>
    git commit -m "Short description of the change"
@@ -69,7 +69,7 @@ PART B — ON THE SERVER (DigitalOcean droplet)
 
 6. (Optional) DNS check — read only
 
-   dig +short dashboard.vanguardadj.com A @8.8.8.8
+    dig +short dashboard.publicadjustermidwest.com A @8.8.8.8
 
    VERIFY: 159.89.229.126 — if wrong, fix Bluehost before deploying.
 
@@ -113,14 +113,12 @@ PART B — ON THE SERVER (DigitalOcean droplet)
 
    VERIFY: grep -E "DOCS_JWT_SECRET|DOCS_PUBLIC_URL|DOCS_INTERNAL_URL|CRM_PUBLIC_URL|DOCSERVER_CONTAINER_NAME" .env
 
-   If deploying the Telegram bot for the first time, ensure these lines exist
-   (ask the developer for the actual values):
+    If deploying the Telegram bot for the first time, ensure this line exists
+    (ask the developer for the actual value):
 
-   TELEGRAM_BOT_TOKEN=your_token_here
-   BOT_CRM_EMAIL=bot@vanguardadj.com
-   BOT_CRM_PASSWORD=your_password_here
+    TELEGRAM_BOT_TOKEN=your_token_here
 
-   VERIFY: grep -E "TELEGRAM_BOT_TOKEN|BOT_CRM_EMAIL|BOT_CRM_PASSWORD" .env
+    VERIFY: grep -E "TELEGRAM_BOT_TOKEN" .env
 
 10. Rebuild and restart (CRM container only)
 
@@ -143,25 +141,25 @@ PART B — ON THE SERVER (DigitalOcean droplet)
 
 12. Docker network (nginx → dashboard)
 
-   docker exec estimate-nginx wget -qO- http://vanguard-crm-dashboard:8765/api/config
+   docker exec estimate-nginx wget -qO- http://sietch-crm:8765/api/config
 
    VERIFY: same JSON. If fail:
-   docker network connect estimate-enhancer_estimate-network vanguard-crm-dashboard
+   docker network connect estimate-enhancer_estimate-network sietch-crm
    (retry wget before editing nginx.conf)
 
 13. Public site
 
-   curl -sI https://dashboard.vanguardadj.com/ | head -5
-   curl -s https://dashboard.vanguardadj.com/api/config
+    curl -sI https://dashboard.publicadjustermidwest.com/ | head -5
+    curl -s https://dashboard.publicadjustermidwest.com/api/config
 
-   VERIFY: HTTP 200; JSON from /api/config. If 502 only here, nginx -t && reload
-   estimate-nginx (see PRODUCTION_SERVER_NOTES.txt).
+    VERIFY: HTTP 200; JSON from /api/config. If 502 only here, nginx -t && reload
+    the host nginx site (see docs/DASHBOARD_INFRASTRUCTURE.md).
 
 14. Browser
 
-   https://dashboard.vanguardadj.com — login, notifications feed, notes File menu.
+    https://dashboard.publicadjustermidwest.com — login, notifications feed, notes File menu.
 
-   VERIFY: data and tiles unchanged; v1.1 UI (feed loading, notes archive menu).
+    VERIFY: data and tiles unchanged; UI (feed loading, notes archive menu) works.
 
 15. (If deploying the Telegram bot for the first time) Set up venv & systemd
 
@@ -180,12 +178,12 @@ PART B — ON THE SERVER (DigitalOcean droplet)
           journalctl -u crm-telegram-bot -n 5 --no-pager | grep "200 OK"
           Message @vanguardupdates_bot on Telegram → expect a response.
 
-   NOTE: The bot's required env vars (TELEGRAM_BOT_TOKEN, BOT_CRM_EMAIL,
-   BOT_CRM_PASSWORD) must be in /opt/vanguard/onlyoffice-crm-kanban/.env
-   BEFORE the docker compose rebuild (step 10), because the dashboard
-   container reads .env at startup and uses TELEGRAM_BOT_TOKEN to
-   authenticate bot API requests. If you forgot, run "docker compose up -d"
-   (without --build) after adding them — Docker re-reads .env on every start.
+    NOTE: The bot's required env var (TELEGRAM_BOT_TOKEN) must be in
+    /opt/vanguard/onlyoffice-crm-kanban/.env BEFORE the docker compose rebuild
+    (step 10), because the dashboard container reads .env at startup and uses
+    TELEGRAM_BOT_TOKEN to authenticate bot API requests. If you forgot, run
+    "docker compose up -d" (without --build) after adding it — Docker re-reads
+    .env on every start.
 
 16. (After code changes that touch the bot) Restart the systemd service
 
@@ -235,7 +233,7 @@ for public routing.
 
    If other containers on the old network need to reach it:
 
-     docker network connect estimate-enhancer_estimate-network vanguard-crm-dashboard 2>/dev/null || true
+     docker network connect estimate-enhancer_estimate-network sietch-crm 2>/dev/null || true
 
 
 --------------------------------------------------------------------------------
@@ -250,7 +248,7 @@ TROUBLESHOOTING
 | Settings not saved              | docker volume dashboard-data; logs dashboard       |
 | Old code after pull             | docker compose build --no-cache && up -d           |
 | Bot 409 Conflict                | Only one bot instance per token allowed. Kill competing processes (`pkill -f telegram_bot`), then `systemctl restart crm-telegram-bot` |
-| Bot fails to start              | Check .env has TELEGRAM_BOT_TOKEN, BOT_CRM_EMAIL, BOT_CRM_PASSWORD. Run manually first: `/tmp/botenv/bin/python3 telegram_bot.py` |
+ | Bot fails to start              | Check .env has TELEGRAM_BOT_TOKEN. Run manually first: `/tmp/botenv/bin/python3 telegram_bot.py` |
 | Bot 503 "TELEGRAM_BOT_TOKEN not configured" | Dashboard container doesn't have the env var. Add to .env, then `docker compose up -d` (re-reads .env). No rebuild needed. |
 | Dockerfile missing .py          | If server.py imports a new module, add it to the Dockerfile COPY line. Missing modules cause container crash → nginx 502. |
 | Document editor won't open / "auth missing document.key" | OnlyOffice 7.1+ requires a plain-string document.key. Ensure code is current (v1.95.17+) and DOCS_JWT_SECRET matches the Document Server's JWT_SECRET. |
@@ -278,9 +276,9 @@ What is NOT rolled back by git checkout:
 
 Mark this working production baseline (do once, or after each stable release):
 
-  cd ~/crm-kanban
-  git tag -a v1.0.0-production-2026-06-05 -m "Working: dashboard.vanguardadj.com deployed"
-  git push origin v1.0.0-production-2026-06-05
+   cd ~/new-crm
+   git tag -a v1.0.0-production-2026-06-05 -m "Working: dashboard.publicadjustermidwest.com deployed"
+   git push origin v1.0.0-production-2026-06-05
 
 List tags:  git tag -l
 List history: git log --oneline -15
@@ -310,9 +308,9 @@ ROLLBACK — code on the server (to a previous commit or tag)
 
 ROLLBACK — desktop clone only
 
-  cd ~/crm-kanban
-  git fetch origin
-  git checkout v1.0.0-production-2026-06-05   # or a commit hash
+   cd ~/new-crm
+   git fetch origin
+   git checkout v1.0.0-production-2026-06-05   # or a commit hash
 
   # Return to latest:
   # git checkout main && git pull
@@ -336,11 +334,11 @@ QUICK REFERENCE (copy/paste)
 --------------------------------------------------------------------------------
 
 Desktop:
-  cd ~/crm-kanban && git add -A && git commit -m "Describe change" && git push
+  cd ~/new-crm && git add -A && git commit -m "Describe change" && git push
 
 Server (dashboard, first time with bot):
   cd /opt/vanguard/onlyoffice-crm-kanban && git pull
-  # Edit .env to add TELEGRAM_BOT_TOKEN, BOT_CRM_EMAIL, BOT_CRM_PASSWORD
+  # Edit .env to add TELEGRAM_BOT_TOKEN
   docker compose up -d --build
   # First-time bot setup:
   cp docs/crm-telegram-bot.service /etc/systemd/system/

@@ -1,6 +1,6 @@
 ================================================================================
   Toaster_Features — Dashboard tile & widget ideas
-  Vanguard CRM Dashboard (OnlyOffice CRM backend)
+  Sietch CRM Dashboard (OnlyOffice CRM backend)
 ================================================================================
 
 Naming: "Toaster" = things that pop up or surface attention on the workspace,
@@ -149,7 +149,7 @@ TIER 4 — Polish & power-user (from mature CRM home screens)
 How to prioritize (suggested)
 --------------------------------------------------------------------------------
 
-For Vanguard Adjusting workflow:
+For Sietch CRM workflow:
 
   A. FEAT-001 preview popup (reduces clicks to CRM)
   B. Stale deals + closing this week (operational)

@@ -1,4 +1,4 @@
-"""Authentication, sessions, and password reset for Vanguard CRM v3.0."""
+"""Authentication, sessions, and password reset for Sietch CRM v3.0."""
 
 from __future__ import annotations
 

@@ -374,7 +374,7 @@
         </div>
       </div>
 
-      <!-- Admin tab/section (only rendered/visible for kenc@vanguardadj.com; hidden from main list) -->
+      <!-- Admin tab/section (only rendered/visible for users with is_admin; hidden from main list) -->
       <div id="presence-admin" class="presence-admin hidden">
         <div class="presence-admin-header">Admin (you only)</div>
         <div id="presence-admin-list" class="presence-admin-list"></div>
@@ -1214,7 +1214,7 @@
             <p><strong>Import Sync (transitional, read-only)</strong></p>
             <p>Enter OnlyOffice details to pull missing data (tags, tasks) and attach to existing imported opportunities. Does not overwrite local Sietch data or push back.</p>
             <label>OnlyOffice Portal URL<br><input id="sync-portal-url" type="text" placeholder="https://office.example.com" style="width:100%;"></label>
-            <label style="margin-top:0.5rem;">Admin Email<br><input id="sync-email" type="text" placeholder="bot@vanguardadj.com" style="width:100%;"></label>
+             <label style="margin-top:0.5rem;">Admin Email<br><input id="sync-email" type="text" placeholder="admin@example.com" style="width:100%;"></label>
             <label style="margin-top:0.5rem;">Password<br><input id="sync-password" type="password" style="width:100%;"></label>
             <div style="margin-top:0.5rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
               <button id="sync-test-btn" class="btn btn-secondary">Test Connection</button>

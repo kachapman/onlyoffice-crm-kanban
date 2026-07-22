@@ -1,4 +1,4 @@
-# Deploying to DigitalOcean (dashboard.vanguardadj.com)
+# Deploying to DigitalOcean (dashboard.publicadjustermidwest.com)
 
 This guide covers updating the server after a commit to GitHub.
 
@@ -8,15 +8,15 @@ For initial server setup (Docker, Nginx, HTTPS certs), see the one-time setup st
 
 ---
 
-## DNS at Bluehost (for dashboard.vanguardadj.com)
+## DNS at Bluehost (for dashboard.publicadjustermidwest.com)
 
-1. In **Bluehost → Domains → DNS / Zone Editor** for `vanguardadj.com`.
+1. In **Bluehost → Domains → DNS / Zone Editor** for `publicadjustermidwest.com`.
 2. Add an A record: **dashboard** → your DigitalOcean droplet public IPv4.
 
 Verify:
 
 ```bash
-dig +short dashboard.vanguardadj.com
+dig +short dashboard.publicadjustermidwest.com
 ```
 
 ---
@@ -60,7 +60,7 @@ docker run --rm -v crm-kanban_dashboard-data:/data -v $(pwd):/backup alpine \
 | 502 / connection refused | `docker compose ps` and `docker compose logs -f` |
 | Login works locally but not on subdomain | `COOKIE_SECURE=true` only works over HTTPS; use certbot |
 | Settings not saving | `docker compose logs`; ensure `/app/data` volume is writable |
-| CRM API errors | `ONLYOFFICE_PORTAL_URL` correct; droplet can reach office.vanguardadj.com |
+| CRM API errors | `ONLYOFFICE_PORTAL_URL` correct; droplet can reach office.publicadjustermidwest.com |
 
 ---
 

@@ -1,5 +1,5 @@
 ================================================================================
-  PRODUCTION SERVER NOTES — dashboard.vanguardadj.com
+  PRODUCTION SERVER NOTES — dashboard.publicadjustermidwest.com
   Droplet: ubuntu-webapp1-estimateanalyzer (159.89.229.126)
 ================================================================================
 
@@ -9,7 +9,7 @@ change them. Back up these paths before major edits.
 
 
 --------------------------------------------------------------------------------
-DNS (Bluehost / vanguardadj.com)
+DNS (Bluehost / publicadjustermidwest.com)
 --------------------------------------------------------------------------------
 
   Host: dashboard
@@ -18,7 +18,7 @@ DNS (Bluehost / vanguardadj.com)
 
 Verify:
 
-  dig +short dashboard.vanguardadj.com A @8.8.8.8
+  dig +short dashboard.publicadjustermidwest.com A @8.8.8.8
 
 Expected: 159.89.229.126 (not Cloudways or other IPs).
 
@@ -29,12 +29,12 @@ CRM dashboard app (git repo on server)
 
   Path:     /opt/vanguard/onlyoffice-crm-kanban
   Clone:    https://github.com/kachapman/onlyoffice-crm-kanban.git
-  Container: vanguard-crm-dashboard
+  Container: sietch-crm
   Image:    onlyoffice-crm-kanban-dashboard
   Host port: 127.0.0.1:8765 only (not public; nginx proxies)
 
   Config:   .env on server (NOT in git). Example keys:
-            ONLYOFFICE_PORTAL_URL=https://office.vanguardadj.com
+            ONLYOFFICE_PORTAL_URL=https://office.publicadjustermidwest.com
             COOKIE_SECURE=true
 
   User data: Docker volume onlyoffice-crm-kanban_dashboard-data
@@ -111,11 +111,11 @@ TLS / Let's Encrypt
 
   Dashboard cert:
 
-    /etc/letsencrypt/live/dashboard.vanguardadj.com/
+    /etc/letsencrypt/live/dashboard.publicadjustermidwest.com/
 
   Issue / renew (on host, NOT certbot --nginx):
 
-    certbot certonly --webroot -w /var/www/certbot -d dashboard.vanguardadj.com
+    certbot certonly --webroot -w /var/www/certbot -d dashboard.publicadjustermidwest.com
 
   ACME webroot must be visible inside estimate-nginx at /var/www/certbot.
 
@@ -135,7 +135,7 @@ Unused on this server (safe to ignore)
 --------------------------------------------------------------------------------
 
   /etc/nginx/sites-enabled/dashboard.vanguardadj.com
-    (host nginx site — not used; ports 80/443 are on estimate-nginx)
+    (legacy host nginx site — not used; ports 80/443 are on host nginx)
 
   deploy/nginx-dashboard.conf in CRM repo
     (for host nginx only — not used in production here)
@@ -146,9 +146,9 @@ Quick health checks
 --------------------------------------------------------------------------------
 
   curl -s http://127.0.0.1:8765/api/config
-  curl -s https://dashboard.vanguardadj.com/api/config
+  curl -s https://dashboard.publicadjustermidwest.com/api/config
   docker compose -f /opt/vanguard/onlyoffice-crm-kanban/docker-compose.yml ps
-  docker ps --filter name=estimate-nginx
+  docker ps --filter name=sietch-crm
 
 
 --------------------------------------------------------------------------------

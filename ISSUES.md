@@ -532,8 +532,8 @@ When building employee-mode deal detail for the Telegram bot, we need the full t
    - That page fetches the body via `/Products/CRM/HttpHandlers/filehandler.ashx?action=mailmessage&message_id={messageId}`.
    - The `message_id` query parameter is the same `messageId` from the history event (e.g. `27639`), **not** the `id` shown in `MailViewer.aspx?id=...` (e.g. `38596`). These are two different IDs.
 
-4. **Bot account needs admin + mail access.**
-   - The bot authenticates as `BOT_CRM_EMAIL` and calls the filehandler with an `Authorization: <token>` header.
+4. **Bot account needs admin + mail access (historical OnlyOffice sync).**
+   - The bot authenticated as a dedicated CRM admin account and called the filehandler with an `Authorization: <token>` header.
    - Initially the bot account was a regular user and the filehandler returned no body / permission errors.
    - Making the bot account an OnlyOffice admin and enabling mail module access for it allowed the filehandler to return full email HTML.
 

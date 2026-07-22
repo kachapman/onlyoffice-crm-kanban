@@ -21,7 +21,7 @@
 |--------|-------------------------------|----------------|
 | `enhancer.sherwoodestimates.com` | `http://app:8000` | `estimate-enhancer` |
 | `iwscalc.sherwoodestimates.com` | `http://iws-calculator:80` | `iws-calculator` |
-| `dashboard.publicadjustermidwest.com` | `http://dashboard:8765` | `vanguard-crm-dashboard` |
+| `dashboard.publicadjustermidwest.com` | `http://dashboard:8765` | `sietch-crm` |
 
 ### Network details
 

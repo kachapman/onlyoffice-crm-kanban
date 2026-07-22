@@ -14,6 +14,12 @@ Target release v2.2.5 on `new-crm` branch.
 - **Files:** `server.py`, `public/index.html`, `public/app.js`, `docker-compose.yml`, `config.example.env`.
 - Cache-bust bumped to `app.js?v=1.95.17`, `styles.css?v=1.87.30`.
 
+### v2.2.5
+- **Rebrand active codebase and docs from "Vanguard" to "Sietch CRM".** Updated user-facing strings in `smtp_client.py`, `telegram_bot.py`, `auth.py`, `db.py`, `init.sql`, `migrate_from_onlyoffice.py`, `README.md`, `Toaster_Features`, `big_CRM_plan.md`, `FUTURE_FEATURES.md`, `server.py`, and `public/index.html`. Active infrastructure docs (`AGENTS.md`, `docs/DASHBOARD_INFRASTRUCTURE.md`, `docs/UPDATE_AND_DEPLOY.txt`, `docs/PRODUCTION_SERVER_NOTES.txt`, `DEPLOY.md`, `docs/crm-telegram-bot.service`, `docs/TELEGRAM_BOT_UPDATES.md`) now use the `sietch-crm` container name and `dashboard.publicadjustermidwest.com` production domain.
+- **Removed hardcoded admin credential references.** Eliminated `kenc@vanguardadj.com`, `bot@vanguardadj.com`, and `FRi3tz4yWXrMTEZ` from code comments and active docs. `BOT_CRM_EMAIL` / `BOT_CRM_PASSWORD` are now documented as obsolete; Telegram bot only requires `TELEGRAM_BOT_TOKEN`.
+- **Historical release notes and migration runbooks left untouched** (`docs/RELEASE_*.md`, `docs/MIGRATE_DOMAINS.md`, `docs/CUTOVER_RUNBOOK.md`, `CHANGELOG.md` older entries, `onlyoffice-module/`).
+- **Note:** Phase 2E photo gallery and Document Server fixes in v1.95.16/v1.95.17 are implemented and server-tested but not yet verified in browser.
+
 ### v1.95.16
 - **Added Photos tab to opportunity preview modal.** New "Photos" tab alongside Details/Documents with an image grid, upload button, per-project quota display, thumbnail generation, and delete-on-hover.
 - **Photo upload endpoint implemented.** `POST /api/v2/projects/{id}/photos` accepts multipart/form-data image uploads, persists to `data/photos/{oppId}/`, generates a 400px JPEG thumbnail with Pillow, extracts EXIF metadata, and enforces the 150MB per-project quota trigger.

@@ -155,7 +155,7 @@ The deal-edit modal only supported **plain-text** event notes (old hint removed)
 
 3. **Proxy changes (`server.py`)**
    - Today the proxy is JSON-oriented. File upload may require streaming multipart through the dashboard proxy without breaking body parsing.
-   - Option A: upload directly from browser to `office.vanguardadj.com` with session/cookie (complex cross-origin).
+   - Option A: upload directly from browser to `office.publicadjustermidwest.com` with session/cookie (complex cross-origin).
    - Option B: extend `server.py` to forward `multipart/form-data` to the portal (preferred for single-origin dashboard).
 
 4. **UI**
@@ -330,7 +330,7 @@ See **[Toaster_Features](./Toaster_Features)** for dashboard tile/widget ideas (
   - Store AccuLynx API key in user profile (local dev only for safety).
   - Manual "Import from AccuLynx" or small "AccuLynx Jobs" header widget / toaster: fetch recent jobs, map to opp create (title, contact, value, custom fields for claim # etc.).
   - Webhook receiver (if running locally) for auto-create/update on job events.
-  - Benefits for Vanguard: faster data transfer from field tools into OnlyOffice CRM, less double entry.
+  - Benefits for Sietch CRM: faster data transfer from field tools into OnlyOffice CRM, less double entry.
   - Risks: API keys, mapping/deduping, only useful when dashboard runs on same machine as user workflow.
 
 **References:** https://apidocs.acculynx.com, existing Hover/Make integrations.

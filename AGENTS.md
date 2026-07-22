@@ -1,7 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** 2026-07-22 session 15: Fixed OnlyOffice Document Server integration. Changed `document.key` in editor config to a plain string (OnlyOffice 7.1+ requirement); made `_effective_docs_internal_url()` production-safe (honors intentional `DOCS_INTERNAL_URL`, falls back to `DOCS_PUBLIC_URL` for standalone dev or placeholder values); removed hardcoded `DOCS_INTERNAL_URL` from `docker-compose.yml`; added configurable `DOCSERVER_CONTAINER_NAME` for `POST /api/v2/admin/restart-docserver`. Updated `config.example.env` with production guidance. Verified editor config returns valid plain-key JWT and restart endpoint triggers container restart. Cache-bust: app.js?v=1.95.17, styles.css?v=1.87.30. PUSHED.
+**Last session summary (for next resume):** 2026-07-22 session 16: Rebranded active codebase and docs from "Vanguard" to "Sietch CRM". Updated user-facing strings in backend/frontend files and active infrastructure docs to use `sietch-crm` container name and `dashboard.publicadjustermidwest.com` production domain. Removed hardcoded admin credential references (`kenc@vanguardadj.com`, `bot@vanguardadj.com`, `FRi3tz4yWXrMTEZ`); `BOT_CRM_EMAIL`/`BOT_CRM_PASSWORD` now obsolete. Left historical release notes and migration runbooks untouched. Ran Python/JS/compose syntax checks and restarted local server; `/api/config` returns `version: 2.2.5`. Note: Phase 2E photo gallery and Document Server fixes (v1.95.16/17) are implemented and server-tested but not browser-verified. PUSHED.
 
 - Known issue: server process dies when backgrounded from opencode shell (use `setsid` to detach — see ISSUE-012).
 - Known issue: server must be killed and restarted after opencode session exits (use `setsid` to detach — see ISSUE-012).
@@ -149,10 +149,10 @@ The dashboard uses an OnlyOffice Document Server for editing Word/Excel/PowerPoi
 ```bash
 # From the dashboard container
 # Editor config should have a plain-string document.key
-# docker exec -it vanguard-crm-dashboard /bin/sh -c 'python3 -c "import urllib.request; print(urllib.request.urlopen("http://localhost:8766/api/v2/documents/1/editor-config").read().decode()[:500])"'
+# docker exec -it sietch-crm /bin/sh -c 'python3 -c "import urllib.request; print(urllib.request.urlopen("http://localhost:8766/api/v2/documents/1/editor-config").read().decode()[:500])"'
 
 # Document Server healthcheck from inside the dashboard container
-docker exec vanguard-crm-dashboard /bin/sh -c 'python3 -c "import urllib.request; print(urllib.request.urlopen("http://onlyoffice-docserver:80/healthcheck", timeout=5).status)"'
+docker exec sietch-crm /bin/sh -c 'python3 -c "import urllib.request; print(urllib.request.urlopen("http://onlyoffice-docserver:80/healthcheck", timeout=5).status)"'
 
 # Document Server healthcheck from the host (via public URL / mapped port)
 curl -s -k -o /dev/null -w "%{http_code}\n" https://docs.publicadjustermidwest.com/healthcheck

@@ -1,4 +1,4 @@
--- Vanguard CRM v3.0 — Full PostgreSQL Schema
+-- Sietch CRM v3.0 — Full PostgreSQL Schema
 -- Run once on first container start via docker-entrypoint-initdb.d
 
 BEGIN;

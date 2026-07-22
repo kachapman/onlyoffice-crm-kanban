@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-time migration from OnlyOffice CRM to PostgreSQL (Vanguard CRM v3.0).
+"""One-time migration from OnlyOffice CRM to PostgreSQL (Sietch CRM v3.0).
 
 Run after init.sql has been executed and the PostgreSQL container is up.
 

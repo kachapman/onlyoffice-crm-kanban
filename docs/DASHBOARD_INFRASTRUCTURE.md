@@ -24,13 +24,13 @@ ports 80/443 on host (systemd nginx)
    ▼
 /etc/nginx/sites-enabled/dashboard.publicadjustermidwest.com
    │
-   ├──► vanguard-crm-dashboard:8765   (127.0.0.1 only)
+   ├──► sietch-crm:8765   (127.0.0.1 only)
    │
    └──► other host services (sherwood-toolbox on 8777, etc.)
 
-systemd: crm-telegram-bot   Telegram bot (@vanguardupdates_bot)
-                            polls Telegram API, calls dashboard at
-                            http://127.0.0.1:8765 (host loopback → container)
+systemd: crm-telegram-bot   Telegram customer bot (@vanguardupdates_bot)
+                             polls Telegram API, calls dashboard at
+                             http://127.0.0.1:8765 (host loopback → container)
 ```
 
 ### Critical facts (2026-07)
@@ -84,7 +84,7 @@ Path: `/opt/vanguard/onlyoffice-crm-kanban/docker-compose.yml`
 ```yaml
 services:
   dashboard:
-    container_name: vanguard-crm-dashboard
+    container_name: sietch-crm
     ports:
       - "127.0.0.1:8765:8765"   # bound to loopback only; external traffic uses nginx proxy
     networks:
@@ -106,7 +106,7 @@ The dashboard still declares the external network so the container can join it i
 
 ## Telegram Bot (crm-telegram-bot)
 
-The Telegram customer bot (`@vanguardupdates_bot`) runs as a **systemd service** on the host, **not** inside Docker. This keeps polling independent of the dashboard container lifecycle.
+The Telegram customer bot (`@vanguardupdates_bot`) runs as a **systemd service** on the host, **not** inside Docker. This keeps polling independent of the dashboard container lifecycle. Customer-facing bot text says "Sietch CRM".
 
 | Property | Value |
 |----------|-------|
@@ -116,8 +116,8 @@ The Telegram customer bot (`@vanguardupdates_bot`) runs as a **systemd service**
 | Executable | `/tmp/botenv/bin/python3 telegram_bot.py` |
 | Python venv | `/tmp/botenv` (created via `python3 -m venv /tmp/botenv`) |
 | Dependencies | `python-telegram-bot==22.8`, `httpx` |
-| Env vars | Loaded from `.env` in working dir: `TELEGRAM_BOT_TOKEN`, `BOT_CRM_EMAIL`, `BOT_CRM_PASSWORD`, `ONLYOFFICE_PORTAL_URL` |
-| Dashboard URL | `http://127.0.0.1:8765` (host loopback → `vanguard-crm-dashboard` container) |
+| Env vars | Loaded from `.env` in working dir: `TELEGRAM_BOT_TOKEN`, `ONLYOFFICE_PORTAL_URL` |
+| Dashboard URL | `http://127.0.0.1:8765` (host loopback → `sietch-crm` container) |
 | Auth to dashboard | Bearer token = `TELEGRAM_BOT_TOKEN` (dashboard verifies on bot endpoints) |
 
 ### Lifecycle
@@ -281,7 +281,7 @@ curl -sI https://dashboard.publicadjustermidwest.com/ | head -3
 curl -s https://dashboard.publicadjustermidwest.com/api/config | head -c 200
 
 # Container
-docker ps --filter name=vanguard-crm-dashboard
+docker ps --filter name=sietch-crm
 curl -I http://127.0.0.1:8765/ 2>&1 | head -5
 ```
 
@@ -312,7 +312,7 @@ See `AGENTS.md` → "Document Server (OnlyOffice) deployment notes" for the full
 
 ```bash
 # Healthcheck from inside the dashboard container
-docker exec vanguard-crm-dashboard /bin/sh -c 'python3 -c "import urllib.request; print(urllib.request.urlopen(\"http://onlyoffice-docserver:80/healthcheck\", timeout=5).status)"'
+docker exec sietch-crm /bin/sh -c 'python3 -c "import urllib.request; print(urllib.request.urlopen(\"http://onlyoffice-docserver:80/healthcheck\", timeout=5).status)"'
 
 # Healthcheck from the host (via public URL / mapped port)
 curl -s -k -o /dev/null -w "%{http_code}\n" https://docs.publicadjustermidwest.com/healthcheck
@@ -342,5 +342,5 @@ curl -s https://dashboard.publicadjustermidwest.com/api/config | head -c 200
 
 # Container health (localhost)
 curl -I http://127.0.0.1:8765/ 2>&1 | head -5
-docker ps --filter name=vanguard-crm-dashboard
+docker ps --filter name=sietch-crm
 ```

@@ -151,6 +151,6 @@ AGPL v3 — see [LICENSE](./LICENSE)
 
 ## Credits
 
-Built for **Vanguard Adjusting**.
+Built for **Sietch CRM**.
 
 Inspired by the sietch fortresses of Arrakis — where strategy is planned, resources are preserved, and nothing is lost.

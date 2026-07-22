@@ -47,7 +47,7 @@ This document is the single source of truth for phases, progress, and open decis
 - The dashboard runs standalone with PostgreSQL (sietch_crm), native auth, v2 API, Document Server.
 - One-time import of OnlyOffice data completed (1191 opps, 38898 history, 11 users, 16 contacts, 18 stages, 21 tags defs). Data KEPT (no wipe). Tags/tasks per-opp not transferred in bulk export; will be addressed via future read-only enrich/sync (not blocking functionality).
 - Focus: make Sietch fully functional standalone first (create/edit deals, no reliance on OO for core). Import diagnosis deprioritized; move through phases per plan, revisit import/sync later.
-- Bot (bot@vanguardadj.com / FRi3tz4yWXrMTEZ) and other admins (e.g. kenc) work for login.
+- Bot account and other admins with `is_admin` in the DB work for login.
 - Admin UIs (branding etc) auto-available to isAdmin users (no extra login).
 - Local run: use venv + DB_HOST=127.0.0.1 if needed; server binds 0.0.0.0 and prints LAN URLs.
 

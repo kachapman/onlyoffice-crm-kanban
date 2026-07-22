@@ -1,4 +1,4 @@
-# Vanguard CRM v3.0 Migration Plan  
+# Sietch CRM v3.0 Migration Plan  
 **Version:** 4.0 — Locked  
  **Date:** 2026-07-18  
  **Author:** Lumo (AI assistant) + project owner  
@@ -34,7 +34,7 @@
 28. [Open Questions (Resolved)](https://lumo.proton.me/#28-open-questions-resolved "https://lumo.proton.me/#28-open-questions-resolved")  
 29. [Glossary](https://lumo.proton.me/#29-glossary "https://lumo.proton.me/#29-glossary")  
 ## 1. Objective  
-Replace the OnlyOffice Community Server CRM dependency with a self-contained Vanguard CRM system. The dashboard (server.py + public/app.js + frontend) becomes a standalone CRM application backed by PostgreSQL, running in a Docker container. OnlyOffice Community Server is open source (AGPLv3) but development has been discontinued by the team. This migration eliminates all cross-server API calls, CRM API quirks, and the proxy layer, while preserving 100% of current dashboard functionality and adding new features: threaded history replies, photo gallery, inline notification replies, unified admin panel, and a subtle terminal-inspired UI refresh.  
+Replace the OnlyOffice Community Server CRM dependency with a self-contained Sietch CRM system. The dashboard (server.py + public/app.js + frontend) becomes a standalone CRM application backed by PostgreSQL, running in a Docker container. OnlyOffice Community Server is open source (AGPLv3) but development has been discontinued by the team. This migration eliminates all cross-server API calls, CRM API quirks, and the proxy layer, while preserving 100% of current dashboard functionality and adding new features: threaded history replies, photo gallery, inline notification replies, unified admin panel, and a subtle terminal-inspired UI refresh.  
 **End state:**  
 - One droplet, one Docker Compose stack (dashboard + PostgreSQL)  
 - Zero API calls to OnlyOffice  
@@ -88,17 +88,17 @@ Dashboard Droplet (159.89.229.126)
 - Proxy cache invalidation complexity  
 - Mutation queue / crash resilience / 502 recovery code  
 - oo_token cookie dependency on OnlyOffice auth  
-- Bot authenticating to CRM as bot@vanguardadj.com  
+- Bot no longer authenticates to CRM as a fixed admin account; it reads from the local DB directly.
 ## 5. Target Architecture  
 Single Droplet (CRM Droplet — where OnlyOffice currently runs)  
- ├── Host nginx (systemd)   │     ├── /etc/nginx/sites-enabled/office.publicadjustermidwest.com   │     │     └── proxy_pass → OnlyOffice (unchanged during transition)   │     └── /etc/nginx/sites-enabled/crm.publicadjustermidwest.com   │           └── proxy_pass → 127.0.0.1:8766   │   ├── Docker Compose stack (NEW)   │     ├── vanguard-crm-v3 (Python server.py + public/)   │     │     ├── data/photos/{project_id}/   │     │     ├── data/attachments/{project_id}/   │     │     ├── db.py (PostgreSQL connection layer)   │     │     ├── auth.py (password hashing, sessions, reset tokens)   │     │     ├── smtp_client.py (SMTP relay for password reset)   │     │     ├── photo_manager.py (thumbnails, EXIF extraction)   │     │     ├── notification_engine.py (notification generation + dispatch)   │     │     ├── admin_panel.py (admin CRUD handlers)   │     │     ├── sync_worker.py (bidirectional sync with OnlyOffice)   │     │     ├── migrate_from_onlyoffice.py (one-time migration script)   │     │     ├── imap_sync.py (background IMAP sync — Phase 3+)   │     │     └── server.py (REWRITTEN — direct DB queries, no proxy)   │     │   │     └── vanguard-db (PostgreSQL 16 Alpine)   │           └── vanguard database   │                 ├── users, sessions, user_roles, password_reset_tokens   │                 ├── stages, system_settings   │                 ├── contacts   │                 ├── custom_field_definitions, custom_field_options   │                 ├── opportunities, opportunity_tags, tag_definitions   │      	          ├── opportunity_custom_field_values   │                 ├── history_categories, history_events   │                 ├── history_replies, history_attachments, history_notify_users   │                 ├── tasks   │                 ├── notifications, notification_preferences   │                 ├── project_photo_folders, project_photos, photo_exif_cache   │                 ├── mail_accounts, mail_messages, mail_deal_links, mail_flag_queue   │                 ├── sync_watermarks, opportunity_changes, sync_errors   │                 └── user_profiles   │   └── systemd services (on CRM droplet host)         ├── crm-telegram-bot-v3 (v3 bot instance)         ├── crm-imap-sync (email sync — Phase 3+)         └── crm-sync-worker (bidirectional sync with OnlyOffice — transition only)  
+ ├── Host nginx (systemd)   │     ├── /etc/nginx/sites-enabled/office.publicadjustermidwest.com   │     │     └── proxy_pass → OnlyOffice (unchanged during transition)   │     └── /etc/nginx/sites-enabled/crm.publicadjustermidwest.com   │           └── proxy_pass → 127.0.0.1:8766   │   ├── Docker Compose stack (NEW)   │     ├── sietch-crm (Python server.py + public/)   │     │     ├── data/photos/{project_id}/   │     │     ├── data/attachments/{project_id}/   │     │     ├── db.py (PostgreSQL connection layer)   │     │     ├── auth.py (password hashing, sessions, reset tokens)   │     │     ├── smtp_client.py (SMTP relay for password reset)   │     │     ├── photo_manager.py (thumbnails, EXIF extraction)   │     │     ├── notification_engine.py (notification generation + dispatch)   │     │     ├── admin_panel.py (admin CRUD handlers)   │     │     ├── sync_worker.py (bidirectional sync with OnlyOffice)   │     │     ├── migrate_from_onlyoffice.py (one-time migration script)   │     │     ├── imap_sync.py (background IMAP sync — Phase 3+)   │     │     └── server.py (REWRITTEN — direct DB queries, no proxy)   │     │   │     └── vanguard-db (PostgreSQL 16 Alpine)   │           └── vanguard database   │                 ├── users, sessions, user_roles, password_reset_tokens   │                 ├── stages, system_settings   │                 ├── contacts   │                 ├── custom_field_definitions, custom_field_options   │                 ├── opportunities, opportunity_tags, tag_definitions   │      	          ├── opportunity_custom_field_values   │                 ├── history_categories, history_events   │                 ├── history_replies, history_attachments, history_notify_users   │                 ├── tasks   │                 ├── notifications, notification_preferences   │                 ├── project_photo_folders, project_photos, photo_exif_cache   │                 ├── mail_accounts, mail_messages, mail_deal_links, mail_flag_queue   │                 ├── sync_watermarks, opportunity_changes, sync_errors   │                 └── user_profiles   │   └── systemd services (on CRM droplet host)         ├── crm-telegram-bot-v3 (v3 bot instance)         ├── crm-imap-sync (email sync — Phase 3+)         └── crm-sync-worker (bidirectional sync with OnlyOffice — transition only)  
 ## 6. Deployment Topology  
 ### Current State (Pre-Migration)  
 Dashboard Droplet (159.89.229.126)  
  └─ dashboard.publicadjustermidwest.com (v2.x production)  OnlyOffice CRM Droplet (separate)   └─ office.publicadjustermidwest.com (OnlyOffice Community Server)  
 ### Beta Deployment Architecture (v3.0 on CRM Droplet)  
 CRM Droplet (existing OnlyOffice server)  
- ├─ Host nginx (systemd)   │   ├─ office.publicadjustermidwest.com  → OnlyOffice (stays live)   │   └─ crm.publicadjustermidwest.com     → v3.0 beta (NEW, port 8766)   │   ├─ Docker Compose stack (NEW)   │   ├─ vanguard-crm-v3 (container, port 8766)   │   │   └─ server.py + PostgreSQL (local DB)   │   └─ vanguard-db (PostgreSQL 16 Alpine)   │   └─ email-scanner (existing Docker container — dry-run mode, later phase)  Dashboard Droplet (unchanged during beta)   └─ dashboard.publicadjustermidwest.com (v2.x — users who haven't migrated yet)  Users can access either:   • dashboard.publicadjustermidwest.com (v2.x — familiar)   • crm.publicadjustermidwest.com (v3.0 — beta, new features)  Gradual migration as users prefer v3.0 over v2.x  
+ ├─ Host nginx (systemd)   │   ├─ office.publicadjustermidwest.com  → OnlyOffice (stays live)   │   └─ crm.publicadjustermidwest.com     → v3.0 beta (NEW, port 8766)   │   ├─ Docker Compose stack (NEW)   │   ├─ sietch-crm (container, port 8766)   │   │   └─ server.py + PostgreSQL (local DB)   │   └─ vanguard-db (PostgreSQL 16 Alpine)   │   └─ email-scanner (existing Docker container — dry-run mode, later phase)  Dashboard Droplet (unchanged during beta)   └─ dashboard.publicadjustermidwest.com (v2.x — users who haven't migrated yet)  Users can access either:   • dashboard.publicadjustermidwest.com (v2.x — familiar)   • crm.publicadjustermidwest.com (v3.0 — beta, new features)  Gradual migration as users prefer v3.0 over v2.x  
 ### Cutover Strategy (Weeks 6-8)  
 - **Week 6:** v3.0 beta live on CRM droplet, bidirectional sync active  
 - **Week 7-8:** Users gradually migrate to v3.0 based on confidence  
@@ -664,7 +664,7 @@ Every /api/proxy/* handler in server.py that forward to OnlyOffice gets replaced
 | Proxy cache (_proxy_cache) | Local DB is fast enough |   
 | X-OnlyOffice-Portal header handling | Single-tenant, not needed |   
 | CRM token management / refresh | Own auth system |   
-| Bot CRM auth (BOT_CRM_EMAIL / BOT_CRM_PASSWORD) | Bot reads from DB directly |   
+| Bot CRM auth | Bot reads from DB directly; BOT_CRM_EMAIL / BOT_CRM_PASSWORD obsolete |   
 ### 9.3 New db.py Module  
 # db.py — PostgreSQL connection layer  
 import psycopg2  
@@ -1086,7 +1086,7 @@ SMTP_HOST = os.getenv('SMTP_HOST', '')
 SMTP_PORT = int(os.getenv('SMTP_PORT', '587'))  
 SMTP_USER = os.getenv('SMTP_USER', '')  
 SMTP_PASSWORD = os.getenv('SMTP_PASSWORD', '')  
-SMTP_FROM_NAME = os.getenv('SMTP_FROM_NAME', 'Vanguard CRM')  
+SMTP_FROM_NAME = os.getenv('SMTP_FROM_NAME', 'Sietch CRM')  
 SMTP_USE_TLS = os.getenv('SMTP_USE_TLS', 'true').lower() == 'true'  
 def send_email(to_addr: str, subject: str, html_body: str, text_body: str = None):  
     """Send email via external SMTP relay."""  
@@ -1177,7 +1177,7 @@ Specific changes:
 ### Updated docker-compose.yml  
 services:  
   dashboard:  
-    container_name: vanguard-crm-v3  
+    container_name: sietch-crm  
     build: .  
     ports:  
       - "127.0.0.1:8766:8766"  

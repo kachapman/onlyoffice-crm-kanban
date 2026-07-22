@@ -191,7 +191,7 @@ def main():
             "-d", NEW_DOMAIN,
             "--non-interactive",
             "--agree-tos",
-            "-m", "info@vanguardadj.com",
+            "-m", "admin@example.com",
         ])
         print("Certificate subject:")
         run([
