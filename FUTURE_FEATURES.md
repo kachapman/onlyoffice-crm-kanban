@@ -237,7 +237,7 @@ Until then, documents continue to open in a separate tab/window as they do today
 
 ## FEAT-007 — Advanced Opportunity Search (enhanced CRM-style filtering)
 
-**Status:** Planned — current implementation is title-only. Needs expansion.
+**Status:** In progress — Phase D implementation active on `new-crm` branch. Expanding the search modal into a full filterable project directory with full-text search across deal and user fields.
 
 ### What the native CRM search does
 
@@ -251,13 +251,12 @@ In OnlyOffice CRM, the Opportunities page has a search/filter panel that lets yo
 - Full-text search across title, description, contact name
 - Save and name filter combinations
 
-### Current dashboard implementation (v1.8.0)
+### Current dashboard implementation
 
-- Header search bar: searches by **title only**
-- Queries local loaded opportunities + CRM `/api/2.0/crm/opportunity/filter`
-- Returns title + ID only
-- Single-select → opens preview modal
-- No filters, no custom field search, no saved searches
+- **Header search bar** and **search modal** currently search by **title only** via `filterValue`.
+- Search modal has stage/owner filters, batch ops, rich results, select-all, and row-click preview.
+- Tags are searched via a separate Tags tab.
+- No custom-field filtering, no sort options, no server-side pagination.
 
 ### Why this matters
 
@@ -265,32 +264,36 @@ The user explicitly needs to find **opportunities with similar custom/user field
 
 ### Implementation phases
 
-| Phase | Feature | Effort | APIs |
-|-------|---------|--------|------|
-| A | Rich search results (show stage, due date, value, contact in dropdown) | Low | Existing filter API |
-| B | Filter by stage + responsible user | Low | Existing filter API |
-| C | Filter by tags (multi-select) | Low | Existing filter API |
-| D | **Filter by custom/user fields** | Low | Existing filter API + custom field defs |
-| E | Date range filters (created, closing, last modified) | Low | Existing filter API |
-| F | Full-text search (description, contact, company) | Medium | May need CRM config |
-| G | Saveable searches / named filters | Medium | Profile storage |
+| Phase | Feature | Status | Notes |
+|-------|---------|--------|-------|
+| A | Rich search results (show stage, due date, value, contact in dropdown) | ✅ Shipped | Stage/owner filters, batch ops, select-all, row-click preview. |
+| B | Filter by stage + responsible user | ✅ Shipped | Included in Phase 2A. |
+| C | Filter by tags | ✅ Shipped | Separate Tags tab; being merged into Projects tab in Phase D. |
+| D | **Filter by custom/user fields + full-text search + pagination + sort** | ✅ Shipped | Server-side `customFieldFilters`, full-text `filterValue` across title/description/contact/custom fields, 50-item pagination, sort dropdown, tag filter merged into Projects tab, "Open in CRM" links removed, softened title/checkbox contrast. |
+| E | Date range filters (created, closing, last modified) | 🔲 Planned | Needs dedicated UI (from/to pickers). |
+| F | Full-text search (description, contact, company) | 🔵 In Progress | Rolled into Phase D. |
+| G | Saveable searches / named filters | 🔲 Planned | Persist in user profile. |
 
 ### Priority: Phase D first
 
-Custom/user field filtering is the most-used workflow and should be implemented first. It leverages:
+Custom/user field filtering plus full-text search is the most-used workflow. It leverages:
 - `state.customFieldDefs` (already loaded in dashboard)
-- `opportunity.userFields` (already available on opportunity objects)
-- CRM filter API already supports `customFieldKey` + `customFieldValue` parameters
+- `/api/v2/projects` local v2 API (extended with `customFieldFilters`, `tagId`, full-text `filterValue`, and pagination)
+- New `/api/v2/projects/count` endpoint for pagination totals
+- Trigram indexes for fast `ILIKE` across text fields
 
 ### Files to modify
 
-- `public/app.js` — Search logic, filter UI, custom field dropdowns
-- `public/index.html` — Search modal / filter panel
-- `public/styles.css` — Filter dropdowns, multi-select, results list
-- `user_profile_store.py` — Saved search persistence (Phase G)
+- `server.py` — Full-text WHERE, custom-field JOINs, tag filter, sort by stage, count endpoint, pagination default
+- `init.sql` — Trigram and B-tree indexes
+- `public/app.js` — Search logic, filter UI state, custom-field rows, pagination, background tab add
+- `public/index.html` — Search modal filter panel (remove Tags tab, add tag/sort/custom-filter/pagination controls)
+- `public/styles.css` — Filter rows, pagination bar, mobile stacking
+- `CHANGELOG.md`, `AGENTS.md` — Release notes and session summary
 
 ### See also
 
+- `sietch-crm-plan.md` — Phase 2A Details section
 - `Toaster_Features` — Cross-reference for CRM search patterns
 - `ISSUES.md` — No blocking issues
 

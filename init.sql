@@ -161,6 +161,18 @@ CREATE TABLE opportunity_custom_field_values (
     UNIQUE(opportunity_id, field_id)
 );
 
+CREATE INDEX idx_opportunity_custom_field_values_field ON opportunity_custom_field_values(field_id);
+CREATE INDEX idx_opportunity_custom_field_values_opp ON opportunity_custom_field_values(opportunity_id);
+
+-- Trigram indexes for fast ILIKE search across project text fields.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX idx_opportunities_title_trgm ON opportunities USING gin (title gin_trgm_ops);
+CREATE INDEX idx_opportunities_description_trgm ON opportunities USING gin (description gin_trgm_ops);
+CREATE INDEX idx_contacts_first_name_trgm ON contacts USING gin (first_name gin_trgm_ops);
+CREATE INDEX idx_contacts_last_name_trgm ON contacts USING gin (last_name gin_trgm_ops);
+CREATE INDEX idx_contacts_company_trgm ON contacts USING gin (company gin_trgm_ops);
+CREATE INDEX idx_opportunity_custom_field_values_value_trgm ON opportunity_custom_field_values USING gin (field_value gin_trgm_ops);
+
 -- ============================================================================
 -- 7.7 Tags
 -- ============================================================================

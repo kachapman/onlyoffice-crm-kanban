@@ -712,6 +712,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
 
         # ── v2 API: Projects ──
+        if api_path == "/api/v2/projects/count":
+            self._handle_projects_count(qs)
+            return
         if api_path == "/api/v2/projects":
             self._handle_projects_list(qs)
             return
@@ -1133,48 +1136,117 @@ class KanbanHandler(SimpleHTTPRequestHandler):
 
     # ── Projects ────────────────────────────────────────────────────────────
 
+    def _projects_query_val(self, qs: dict, *keys):
+        """Return first non-empty query value for any of the given keys."""
+        for k in keys:
+            if k in qs and qs[k]:
+                return qs[k][0] if isinstance(qs[k], (list, tuple)) else qs[k]
+        return None
+
+    def _build_projects_where(self, qs: dict) -> tuple[list[str], list]:
+        """Build WHERE clauses and params for project list/count queries."""
+        qval = self._projects_query_val
+        where = ["1=1"]
+        params: list = []
+
+        search = qval(qs, "search", "filterValue")
+        if search:
+            like = f"%{search}%"
+            where.append("""(
+                o.title ILIKE %s
+                OR o.description ILIKE %s
+                OR EXISTS (
+                    SELECT 1 FROM contacts c
+                    WHERE c.id = o.contact_id
+                    AND (c.first_name ILIKE %s OR c.last_name ILIKE %s OR c.company ILIKE %s)
+                )
+                OR EXISTS (
+                    SELECT 1 FROM opportunity_custom_field_values cfv
+                    WHERE cfv.opportunity_id = o.id AND cfv.field_value ILIKE %s
+                )
+            )""")
+            params.extend([like, like, like, like, like, like])
+
+        st = qval(qs, "stage_type", "stageType")
+        if st is not None and str(st).strip() != "":
+            where.append("o.stage_type = %s")
+            params.append(int(st))
+
+        sid = qval(qs, "stageId", "opportunityStagesid")
+        if sid:
+            where.append("o.stage_id = %s")
+            params.append(int(sid))
+
+        cid = qval(qs, "contact_id", "contactid")
+        if cid:
+            where.append("o.contact_id = %s")
+            params.append(int(cid))
+
+        rid = qval(qs, "responsible_user_id", "responsibleUserId")
+        if rid:
+            where.append("o.responsible_user_id = %s")
+            params.append(int(rid))
+
+        tag_id = qval(qs, "tag_id", "tagId")
+        if tag_id:
+            where.append("o.id IN (SELECT opportunity_id FROM opportunity_tags WHERE tag_id = %s)")
+            params.append(int(tag_id))
+
+        cf_filters_raw = qval(qs, "customFieldFilters")
+        if cf_filters_raw:
+            try:
+                cf_filters = json.loads(cf_filters_raw)
+                if isinstance(cf_filters, list):
+                    for cf in cf_filters:
+                        field_id = cf.get("fieldId") or cf.get("field_id") or cf.get("id")
+                        value = cf.get("value")
+                        operator = str(cf.get("operator", "equals")).lower()
+                        if field_id is None or value is None or str(value).strip() == "":
+                            continue
+                        field_id = int(field_id)
+                        if operator == "contains":
+                            where.append("o.id IN (SELECT opportunity_id FROM opportunity_custom_field_values WHERE field_id = %s AND field_value ILIKE %s)")
+                            params.extend([field_id, f"%{value}%"])
+                        else:
+                            where.append("o.id IN (SELECT opportunity_id FROM opportunity_custom_field_values WHERE field_id = %s AND LOWER(field_value) = LOWER(%s))")
+                            params.extend([field_id, str(value)])
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        return where, params
+
+    def _handle_projects_count(self, qs: dict) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        where, params = self._build_projects_where(qs)
+        where_sql = " AND ".join(where)
+        row = db.query(
+            f"""SELECT COUNT(o.id)
+                FROM opportunities o
+                WHERE {where_sql}""",
+            tuple(params),
+            fetch="one",
+        )
+        _json_response(self, 200, {"count": row[0] if row else 0})
+
     def _handle_projects_list(self, qs: dict) -> None:
         user = _require_auth(self)
         if not user:
             return
-        def qval(*keys):
-            for k in keys:
-                if k in qs and qs[k]:
-                    v = qs[k][0] if isinstance(qs[k], (list, tuple)) else qs[k]
-                    return v
-            return None
-        where = ["1=1"]
-        params: list = []
-        search = qval("search", "filterValue")
-        if search:
-            where.append("o.title ILIKE %s")
-            params.append(f"%{search}%")
-        st = qval("stage_type", "stageType")
-        if st is not None and str(st).strip() != "":
-            where.append("o.stage_type = %s")
-            params.append(int(st))
-        sid = qval("stageId", "opportunityStagesid")
-        if sid:
-            where.append("o.stage_id = %s")
-            params.append(int(sid))
-        cid = qval("contact_id", "contactid")
-        if cid:
-            where.append("o.contact_id = %s")
-            params.append(int(cid))
-        rid = qval("responsible_user_id", "responsibleUserId")
-        if rid:
-            where.append("o.responsible_user_id = %s")
-            params.append(int(rid))
-        if "tag_id" in qs:
-            where.append("o.id IN (SELECT opportunity_id FROM opportunity_tags WHERE tag_id = %s)")
-            params.append(int(qs["tag_id"][0]))
+        where, params = self._build_projects_where(qs)
 
         count = int(qs.get("count", ["500"])[0])
         start = int(qs.get("startIndex", ["0"])[0])
         sort_by = qs.get("sort_by", ["date_created"])[0]
         sort_order = qs.get("sort_order", ["descending"])[0]
         order = "DESC" if sort_order == "descending" else "ASC"
-        sort_col = {"date_created": "o.created_at", "title": "o.title", "bid_value": "o.bid_value"}.get(sort_by, "o.created_at")
+        sort_col = {
+            "date_created": "o.created_at",
+            "title": "o.title",
+            "bid_value": "o.bid_value",
+            "stage": "s.title",
+        }.get(sort_by, "o.created_at")
 
         where_sql = " AND ".join(where)
         rows = db.query(

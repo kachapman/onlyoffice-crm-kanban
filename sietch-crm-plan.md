@@ -95,7 +95,7 @@ Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local 
 
 | Sub-phase | Status | Notes |
 |-----------|--------|-------|
-| 2A: Search modal expansion | ✅ | Filters (stage, owner), batch ops (add/remove tag, set stage, export selected), rich results, select-all, row-click preview. |
+| 2A: Search modal expansion | ✅ | Full-text search (title, description, contact, custom fields), custom/user field filters, tag filter merged into Projects tab, sort options, server-side pagination (50/page), "+ Tab" adds preview in background, "Open in CRM" links removed, softened title/checkbox contrast. Original scope (stage/owner filters, batch ops, rich results, select-all, row-click preview) already shipped. |
 | 2B: Project card click behavior | ✅ | Cards click → preview (side/full) or edit; Phase 1 follow-up completed. |
 | 2C: Unified Admin Modal | ✅ | Vertical sidebar tabs (overview/sync/users/stages/custom-fields/contacts/tags/branding/bot/logs); custom fields read-only, tags add, contacts/stages add+search, sync stubs; icons per non-neg. Projects managed via search modal (filters + batch ops). |
 | 2D: Tile layout refactoring | ✅ | CSS grid (spans, double-height, responsive), SortableJS drag-drop + ghost/chosen/drag classes + layout buttons; smooth collapse animation; terminal theme on data panes + admin modal; hover glow. |
@@ -105,6 +105,41 @@ Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local 
 | 2H: Documents modal | ✅ | Full file manager: three scopes (project/personal/company), nested folders in personal/company, breadcrumb navigation, New button (Word/Excel/Folder), folder context menu (rename/delete with recursive CTE), inline rename, move/copy popup, batch ops, search, icon-only toolbar, sidebar toggle, drag-drop upload. Document Server used as editor with title-bar rename sync. |
 | 2I: Preview modal + tile revamp | 🔵 | Code complete: Description→top, "Project Fields" merged, Stage dropdown, "Follow-up Due Date", interactive Tags (add/remove), Checklist 3-col checkboxes, kanban created date + native tooltip. Needs LAN server testing. |
 | 2J: Re-import CRM data | 🔲 | Re-run `migrate_from_onlyoffice.py` export script (with tasks and user/custom fields fixed) then import into new CRM to verify all data displays correctly in preview modals, deal tiles, kanban stages, tags, and custom fields. |
+
+### Phase 2A Details: Search Modal Expansion (FEAT-007 Phase D)
+
+#### Goal
+Expand the search modal from a simple title-search popup into a full filterable project directory that matches the OnlyOffice CRM search experience: full-text search across deal and user fields, custom-field filters, tag filtering, sort options, and paginated results.
+
+#### Backend changes
+- Extend `GET /api/v2/projects` so `filterValue` searches across `title`, `description`, `contact` (first/last/company), and all custom-field values using `ILIKE '%q%'`.
+- Add `customFieldFilters` JSON array parameter: `[{ fieldId, value, operator }]` where `operator` is `equals` or `contains`.
+- Add `tagId` parameter for server-side tag filtering.
+- Extend `sort_by` to support `date_created`, `title`, `bid_value`, and `stage`.
+- Change default `count` to 50 for search-modal queries; add `startIndex` pagination.
+- Add `GET /api/v2/projects/count` returning `{ count: N }` for the same filters, used for pagination.
+- Add trigram (GIN) indexes on `opportunities.title`, `opportunities.description`, `contacts.first_name`, `contacts.last_name`, `contacts.company`, and `opportunity_custom_field_values.field_value` for fast `ILIKE` queries.
+
+#### Frontend changes
+- Open the search modal to the first page of open projects (50/page) instead of an empty state.
+- Search input uses debounced (300 ms) `input` events; empty search returns all open projects.
+- Merge the Tags tab into the Projects tab as a single-select tag filter.
+- Add sort dropdown (newest, oldest, title A/Z, bid high/low, stage A/Z).
+- Add dynamic custom-field filter rows: field select + type-specific value control + remove button.
+- Move all filters (search, stage, owner, tag, sort, custom fields) to the server.
+- Add pagination controls (Prev / Page N of M / Next).
+- "+ Tab" button adds a preview tab in the background without switching; row click opens and switches.
+- Upgrade the dashboard header search to use the same full-text search.
+
+#### Files
+- `server.py`
+- `init.sql`
+- `public/index.html`
+- `public/app.js`
+- `public/styles.css`
+- `CHANGELOG.md`, `AGENTS.md`, `FUTURE_FEATURES.md`
+
+---
 
 ### Phase 2I Details: Preview Modal + Kanban Tile Revamp
 

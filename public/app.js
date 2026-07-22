@@ -15705,6 +15705,11 @@ const SEARCH_MINIMIZED_STORAGE_KEY = "oo_board_search_minimized_v1";
 let searchPopupCurrentOpps = []; // latest unfiltered results (used for stage/owner filters)
 let searchPopupCurrentTagLabel = null; // current tag header label
 let searchPopupSelected = new Set(); // selected opp ids for batch ops
+let searchPopupCustomFilters = []; // active custom field filters: [{ id, fieldId, value }]
+let searchPopupStartIndex = 0; // pagination offset
+const SEARCH_POPUP_PAGE_SIZE = 50; // projects per page
+let searchPopupTotal = 0; // total matching projects (from count endpoint)
+let searchPopupQueryAbort = null; // debounce abort controller
 
 function createCrmOpenLink(oppId, { className = "crm-open-external", title = "Open in CRM" } = {}) {
   const a = document.createElement("a");
@@ -17661,13 +17666,7 @@ function bindGlobalOpportunitySearch() {
         openOpportunityPreviewModal(o.id, o.title).catch((err) => showToast(err.message, true));
       });
 
-      const openLink = createCrmOpenLink(o.id, {
-        className: "global-opp-search-open",
-        title: "Open in CRM",
-      });
-
       row.appendChild(titleBtn);
-      row.appendChild(openLink);
       results.appendChild(row);
     }
   };
@@ -17721,16 +17720,21 @@ async function openSearchPopupModal() {
   try { localStorage.removeItem(SEARCH_MINIMIZED_FLAG_KEY); } catch {}
   const trigger = $("#search-trigger");
   if (trigger) trigger.classList.add("trigger-hidden");
+
+  // Ensure dependencies are loaded before rendering filters
+  if (!state.customFieldDefs.length) await loadOpportunityCustomFieldDefs();
+  if (!state.allTags.length) await loadAllTags();
+  if (!state.portalUsers.length) await loadPortalUsers();
+
+  populateSearchFilterDropdowns();
+  renderSearchPopupCustomFilters();
+
   // If modal is closed, no live tabs exist, and we have parked tabs — restore them
   if (modal.classList.contains("hidden") && searchPopupPreviewTabs.size === 0 && hasMinimizedSearchTabs()) {
     restoreMinimizedSearchTabs();
     modal.classList.remove("hidden");
     const input = $("#search-popup-input");
     if (input) { input.focus(); input.select(); }
-    populateSearchTagDropdown();
-    populateSearchFilterDropdowns();
-    if (!state.portalUsers.length) await loadPortalUsers();
-    populateSearchFilterDropdowns();
     return;
   }
   modal.classList.remove("hidden");
@@ -17739,25 +17743,7 @@ async function openSearchPopupModal() {
     input.focus();
     input.select();
   }
-  populateSearchTagDropdown();
-  populateSearchFilterDropdowns();
-  if (!state.portalUsers.length) await loadPortalUsers();
-  populateSearchFilterDropdowns();
   activateSearchPopupTab("projects");
-}
-
-function populateSearchTagDropdown() {
-  const select = $("#search-popup-tag-select");
-  if (!select) return;
-  select.innerHTML = '<option value="">— Select tag —</option>';
-  const tags = state.allTags || [];
-  const sorted = tags.map((t) => normalizeTagTitle(t.title ?? t)).filter(Boolean).sort((a, b) => String(a).localeCompare(String(b)));
-  for (const title of sorted) {
-    const opt = document.createElement("option");
-    opt.value = title;
-    opt.textContent = title;
-    select.appendChild(opt);
-  }
 }
 
 function closeSearchPopupModal() {
@@ -17770,18 +17756,27 @@ function closeSearchPopupModal() {
   }
   const input = $("#search-popup-input");
   if (input) input.value = "";
-  const tagSelect = $("#search-popup-tag-select");
-  if (tagSelect) tagSelect.value = "";
+  const tagFilter = $("#search-popup-tag-filter");
+  if (tagFilter) tagFilter.value = "";
   const stageFilter = $("#search-popup-stage-filter");
   if (stageFilter) stageFilter.value = "";
   const respFilter = $("#search-popup-responsible-filter");
   if (respFilter) respFilter.value = "";
+  const sortSel = $("#search-popup-sort");
+  if (sortSel) sortSel.value = "date_created:descending";
   const results = $("#search-popup-results");
   if (results) results.innerHTML = "";
+  const resultsCount = $("#search-popup-results-count");
+  if (resultsCount) resultsCount.textContent = "";
   hideSearchPopupError();
   searchPopupCurrentOpps = [];
   searchPopupCurrentTagLabel = null;
+  searchPopupCustomFilters = [];
+  searchPopupStartIndex = 0;
+  searchPopupTotal = 0;
   clearSearchPopupSelection();
+  renderSearchPopupCustomFilters();
+  updateSearchPopupPagination();
   // Also clear parked/minimized tabs (close = discard)
   clearMinimizedSearchTabs();
 }
@@ -18014,33 +18009,31 @@ function bindSearchPopupModal() {
     }
   });
 
-  // Enter in search input
+  // Live search input (debounced)
   const input = $("#search-popup-input");
   if (input) {
+    input.addEventListener("input", () => {
+      if (searchPopupQueryAbort) {
+        try { searchPopupQueryAbort.abort(); } catch {}
+      }
+      searchPopupQueryAbort = new AbortController();
+      const signal = searchPopupQueryAbort.signal;
+      setTimeout(() => {
+        if (!signal.aborted) {
+          searchPopupStartIndex = 0;
+          performSearchPopupQuery();
+        }
+      }, 300);
+    });
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
+        if (searchPopupQueryAbort) {
+          try { searchPopupQueryAbort.abort(); } catch {}
+          searchPopupQueryAbort = null;
+        }
+        searchPopupStartIndex = 0;
         performSearchPopupQuery();
-      }
-    });
-  }
-
-  // Tag search button
-  const tagSearchBtn = $("#search-popup-tag-search");
-  if (tagSearchBtn) {
-    tagSearchBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-      performSearchPopupTagQuery();
-    });
-  }
-
-  // Tag select Enter key
-  const tagSelect = $("#search-popup-tag-select");
-  if (tagSelect) {
-    tagSelect.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        performSearchPopupTagQuery();
       }
     });
   }
@@ -18072,13 +18065,32 @@ function bindSearchPopupModal() {
   $("#search-popup-minimize")?.addEventListener("click", minimizeSearchPopup);
 
   // Filters
-  $("#search-popup-stage-filter")?.addEventListener("change", refreshSearchPopupFilters);
-  $("#search-popup-responsible-filter")?.addEventListener("change", refreshSearchPopupFilters);
-  $("#search-popup-clear-filters")?.addEventListener("click", () => {
-    const sf = $("#search-popup-stage-filter"); if (sf) sf.value = "";
-    const rf = $("#search-popup-responsible-filter"); if (rf) rf.value = "";
-    refreshSearchPopupFilters();
+  $("#search-popup-stage-filter")?.addEventListener("change", () => {
+    searchPopupStartIndex = 0;
+    performSearchPopupQuery();
   });
+  $("#search-popup-responsible-filter")?.addEventListener("change", () => {
+    searchPopupStartIndex = 0;
+    performSearchPopupQuery();
+  });
+  $("#search-popup-tag-filter")?.addEventListener("change", () => {
+    searchPopupStartIndex = 0;
+    performSearchPopupQuery();
+  });
+  $("#search-popup-sort")?.addEventListener("change", () => {
+    searchPopupStartIndex = 0;
+    performSearchPopupQuery();
+  });
+  $("#search-popup-clear-filters")?.addEventListener("click", clearSearchPopupFilters);
+
+  // Add custom field filter
+  $("#search-popup-add-custom-filter")?.addEventListener("click", () => {
+    addSearchPopupCustomFilter();
+  });
+
+  // Pagination
+  $("#search-popup-prev")?.addEventListener("click", () => performSearchPopupPageChange(-1));
+  $("#search-popup-next")?.addEventListener("click", () => performSearchPopupPageChange(1));
 
   // Batch ops
   $("#search-popup-batch-apply")?.addEventListener("click", applySearchPopupBatchAction);
@@ -18152,97 +18164,115 @@ function tryParseJSON(str) {
   try { return JSON.parse(str); } catch { return null; }
 }
 
-async function performSearchPopupQuery() {
-  const input = $("#search-popup-input");
-  const results = $("#search-popup-results");
-  if (!input || !results) return;
-  hideSearchPopupError();
-  const q = input.value.trim();
-  if (!q) {
-    results.innerHTML = "";
-    return;
+function getSearchPopupQueryParams() {
+  const params = new URLSearchParams({
+    startIndex: String(searchPopupStartIndex),
+    count: String(SEARCH_POPUP_PAGE_SIZE),
+    stageType: "0",
+  });
+
+  const q = $("#search-popup-input")?.value.trim();
+  if (q) params.set("filterValue", q);
+
+  const stageFilter = $("#search-popup-stage-filter")?.value;
+  if (stageFilter) params.set("stageId", stageFilter);
+
+  const respFilter = $("#search-popup-responsible-filter")?.value;
+  if (respFilter) params.set("responsibleUserId", respFilter);
+
+  const tagFilter = $("#search-popup-tag-filter")?.value;
+  if (tagFilter) {
+    const tagId = tagIdForTitle(tagFilter);
+    if (tagId) params.set("tagId", String(tagId));
   }
 
-  results.innerHTML = '<p class="search-popup-results-empty">Searching…</p>';
+  const sortVal = $("#search-popup-sort")?.value || "date_created:descending";
+  const [sortBy, sortOrder] = sortVal.split(":");
+  if (sortBy) params.set("sort_by", sortBy);
+  if (sortOrder) params.set("sort_order", sortOrder);
+
+  const cfFilters = getSearchPopupCustomFilters();
+  if (cfFilters.length) params.set("customFieldFilters", JSON.stringify(cfFilters));
+
+  return params;
+}
+
+async function performSearchPopupQuery() {
+  const results = $("#search-popup-results");
+  if (!results) return;
+  hideSearchPopupError();
+
+  const abortController = searchPopupQueryAbort;
+  results.innerHTML = '<p class="search-popup-results-empty">Loading…</p>';
+  const params = getSearchPopupQueryParams();
+
   try {
-    const params = new URLSearchParams({
-      startIndex: "0",
-      count: "100",
-      filterValue: q,
-      stageType: "0",
-    });
-    const data = await api(`/api/v2/projects?${params}`);
+    const [data, countData] = await Promise.all([
+      api(`/api/v2/projects?${params}`),
+      api(`/api/v2/projects/count?${params}`),
+    ]);
+    if (abortController && abortController.aborted) return;
     let opps = unwrap(data);
-    if (opps.length) {
-      opps = await enrichOpportunitiesTags(opps);
-    }
+    searchPopupTotal = countData?.count ?? opps.length;
     searchPopupCurrentOpps = opps;
     searchPopupCurrentTagLabel = null;
     searchPopupSelected.clear();
     updateSearchPopupBatchBar();
-    const filtered = applySearchPopupFilters(opps);
-    renderSearchPopupResults(filtered, null, results);
+    updateSearchPopupPagination();
+    renderSearchPopupResults(opps);
   } catch (err) {
+    if (abortController && abortController.aborted) return;
     results.innerHTML = `<p class="search-popup-results-empty">${escapeHtml(err.message)}</p>`;
   }
 }
 
-async function performSearchPopupTagQuery() {
-  const select = $("#search-popup-tag-select");
-  const results = $("#search-popup-tag-results");
-  if (!select || !results) return;
-  hideSearchPopupError();
-  const tagTitle = select.value.trim();
-  if (!tagTitle) {
-    showSearchPopupError("Please select a tag first");
-    return;
-  }
-
-  results.innerHTML = '<p class="search-popup-results-empty">Searching…</p>';
-  try {
-    const params = new URLSearchParams({
-      startIndex: "0",
-      count: "100",
-      stageType: "0",
-    });
-    const data = await api(`/api/v2/projects?${params}`);
-    let opps = unwrap(data);
-    if (opps.length) {
-      opps = await enrichOpportunitiesTags(opps);
-      const catalog = buildTagCatalog();
-      opps = opps.filter((o) => oppMatchesSelectedTags(o, [tagTitle], catalog));
-    }
-    searchPopupCurrentOpps = opps;
-    searchPopupCurrentTagLabel = tagTitle;
-    searchPopupSelected.clear();
-    // Tags tab doesn't show batch bar
-    renderSearchPopupResults(opps, tagTitle, results);
-  } catch (err) {
-    results.innerHTML = `<p class="search-popup-results-empty">${escapeHtml(err.message)}</p>`;
-  }
+function performSearchPopupPageChange(direction) {
+  const totalPages = Math.max(1, Math.ceil(searchPopupTotal / SEARCH_POPUP_PAGE_SIZE));
+  const currentPage = Math.floor(searchPopupStartIndex / SEARCH_POPUP_PAGE_SIZE) + 1;
+  const newPage = currentPage + direction;
+  if (newPage < 1 || newPage > totalPages) return;
+  searchPopupStartIndex = (newPage - 1) * SEARCH_POPUP_PAGE_SIZE;
+  performSearchPopupQuery();
 }
 
-function renderSearchPopupResults(opps, tagFilterLabel = null, container) {
+function updateSearchPopupPagination() {
+  const prev = $("#search-popup-prev");
+  const next = $("#search-popup-next");
+  const info = $("#search-popup-page-info");
+  if (!prev || !next || !info) return;
+
+  const totalPages = Math.max(1, Math.ceil(searchPopupTotal / SEARCH_POPUP_PAGE_SIZE));
+  const currentPage = Math.floor(searchPopupStartIndex / SEARCH_POPUP_PAGE_SIZE) + 1;
+
+  info.textContent = `Page ${currentPage} of ${totalPages}`;
+  prev.disabled = currentPage <= 1;
+  next.disabled = currentPage >= totalPages;
+}
+
+function renderSearchPopupResults(opps, container) {
   const results = container || $("#search-popup-results");
   if (!results) return;
   results.innerHTML = "";
-  if (!opps.length) {
-    results.innerHTML = tagFilterLabel
-      ? `<p class="search-popup-results-empty">No open deals with tag "${escapeHtml(tagFilterLabel)}"</p>`
-      : '<p class="search-popup-results-empty">No open deals found</p>';
-    return;
+
+  const countEl = $("#search-popup-results-count");
+  if (countEl) {
+    if (searchPopupTotal > 0) {
+      const start = searchPopupStartIndex + 1;
+      const end = Math.min(searchPopupStartIndex + SEARCH_POPUP_PAGE_SIZE, searchPopupTotal);
+      countEl.textContent = `Showing ${start}–${end} of ${searchPopupTotal} open projects`;
+    } else {
+      countEl.textContent = "";
+    }
   }
 
-  if (tagFilterLabel) {
-    const header = document.createElement("div");
-    header.className = "search-popup-results-header";
-    header.innerHTML = `<span class="search-popup-results-header-label">Deals tagged:</span> <span class="search-popup-results-header-tag">${escapeHtml(tagFilterLabel)}</span> <span class="search-popup-results-header-count">(${opps.length})</span>`;
-    results.appendChild(header);
+  if (!opps.length) {
+    results.innerHTML = '<p class="search-popup-results-empty">No open deals found</p>';
+    return;
   }
 
   const selectAll = document.createElement("div");
   selectAll.className = "search-popup-select-all";
-  selectAll.innerHTML = `<label><input type="checkbox" id="search-popup-select-all"> Select all</label>`;
+  selectAll.innerHTML = `<label><input type="checkbox" id="search-popup-select-all"> Select all on page</label>`;
   results.appendChild(selectAll);
   const selAllCb = selectAll.querySelector("input");
   selAllCb.addEventListener("change", () => {
@@ -18319,12 +18349,7 @@ function renderSearchPopupResults(opps, tagFilterLabel = null, container) {
     previewBtn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      openSearchPreviewTab(id, title);
-    });
-
-    const crmLink = createCrmOpenLink(id, {
-      className: "opp-preview-open-crm",
-      title: "Open in CRM",
+      openSearchPreviewTab(id, title, { activate: false });
     });
 
     row.addEventListener("click", (e) => {
@@ -18334,7 +18359,6 @@ function renderSearchPopupResults(opps, tagFilterLabel = null, container) {
 
     actions.appendChild(bookmarkBtn);
     actions.appendChild(previewBtn);
-    actions.appendChild(crmLink);
     row.appendChild(chk);
     row.appendChild(titleEl);
     row.appendChild(metaEl);
@@ -18372,7 +18396,6 @@ function populateSearchFilterDropdowns() {
   if (respSel) {
     const val = respSel.value;
     respSel.innerHTML = '<option value=\'\'>All owners</option>';
-    if (!state.portalUsers.length) loadPortalUsers().then(populateSearchFilterDropdowns);
     for (const u of state.portalUsers || []) {
       const opt = document.createElement('option');
       opt.value = String(u.id);
@@ -18380,6 +18403,20 @@ function populateSearchFilterDropdowns() {
       respSel.appendChild(opt);
     }
     respSel.value = val;
+  }
+  const tagSel = $('#search-popup-tag-filter');
+  if (tagSel) {
+    const val = tagSel.value;
+    tagSel.innerHTML = '<option value=\'\'>All tags</option>';
+    const tags = state.allTags || [];
+    const sorted = tags.map((t) => normalizeTagTitle(t.title ?? t)).filter(Boolean).sort((a, b) => String(a).localeCompare(String(b)));
+    for (const title of sorted) {
+      const opt = document.createElement('option');
+      opt.value = title;
+      opt.textContent = title;
+      tagSel.appendChild(opt);
+    }
+    tagSel.value = val;
   }
   const addTag = $('#search-popup-batch-add-tag');
   const remTag = $('#search-popup-batch-remove-tag');
@@ -18421,25 +18458,169 @@ function populateSearchFilterDropdowns() {
   }
 }
 
-function applySearchPopupFilters(opps) {
-  const stageFilter = $('#search-popup-stage-filter')?.value;
-  const respFilter = $('#search-popup-responsible-filter')?.value;
-  return opps.filter((o) => {
-    if (stageFilter) {
-      const sid = String(o.stage?.id ?? o.stage?.ID ?? o.Stage?.id ?? o.Stage?.ID ?? o.stageId ?? '');
-      if (sid !== String(stageFilter)) return false;
-    }
-    if (respFilter) {
-      const rid = String(o.responsible?.id ?? o.responsible?.ID ?? o.responsibleId ?? o.responsibleID ?? '');
-      if (rid !== String(respFilter)) return false;
-    }
-    return true;
-  });
+function clearSearchPopupFilters() {
+  const input = $('#search-popup-input'); if (input) input.value = '';
+  const sf = $('#search-popup-stage-filter'); if (sf) sf.value = '';
+  const rf = $('#search-popup-responsible-filter'); if (rf) rf.value = '';
+  const tf = $('#search-popup-tag-filter'); if (tf) tf.value = '';
+  const sort = $('#search-popup-sort'); if (sort) sort.value = 'date_created:descending';
+  searchPopupCustomFilters = [];
+  renderSearchPopupCustomFilters();
+  searchPopupStartIndex = 0;
+  performSearchPopupQuery();
 }
 
-function refreshSearchPopupFilters() {
-  const filtered = applySearchPopupFilters(searchPopupCurrentOpps);
-  renderSearchPopupResults(filtered, searchPopupCurrentTagLabel, $("#search-popup-results"));
+let searchPopupCustomFilterDebounce = null;
+
+function renderSearchPopupCustomFilters() {
+  const container = $("#search-popup-custom-filters");
+  if (!container) return;
+  container.innerHTML = "";
+
+  for (const filter of searchPopupCustomFilters) {
+    const row = document.createElement("div");
+    row.className = "search-popup-custom-filter-row";
+    row.dataset.filterId = String(filter.id);
+
+    const fieldSelect = document.createElement("select");
+    fieldSelect.className = "search-popup-custom-filter-field";
+    fieldSelect.innerHTML = '<option value="">— Select field —</option>';
+    for (const def of state.customFieldDefs || []) {
+      const fid = customFieldDefinitionId(def);
+      if (fid == null) continue;
+      const opt = document.createElement("option");
+      opt.value = String(fid);
+      opt.textContent = customFieldLabel(def) || `Field ${fid}`;
+      fieldSelect.appendChild(opt);
+    }
+    fieldSelect.value = String(filter.fieldId || "");
+    fieldSelect.addEventListener("change", () => {
+      filter.fieldId = Number(fieldSelect.value) || null;
+      filter.value = "";
+      renderSearchPopupCustomFilters();
+      if (filter.fieldId) {
+        searchPopupStartIndex = 0;
+        performSearchPopupQuery();
+      }
+    });
+
+    const valueControl = buildSearchPopupCustomFilterValueControl(filter);
+    if (valueControl) {
+      const onChange = () => {
+        filter.value = readSearchPopupCustomFilterValue(filter, valueControl);
+        searchPopupStartIndex = 0;
+        performSearchPopupQuery();
+      };
+      valueControl.addEventListener("change", onChange);
+      if (valueControl.tagName === "INPUT" && valueControl.type !== "checkbox" && valueControl.type !== "date") {
+        valueControl.addEventListener("input", () => {
+          if (searchPopupCustomFilterDebounce) clearTimeout(searchPopupCustomFilterDebounce);
+          searchPopupCustomFilterDebounce = setTimeout(() => {
+            const rowEl = valueControl.closest(".search-popup-custom-filter-row");
+            const f = searchPopupCustomFilters.find((x) => String(x.id) === rowEl?.dataset.filterId);
+            if (f) f.value = valueControl.value;
+            searchPopupStartIndex = 0;
+            performSearchPopupQuery();
+          }, 300);
+        });
+      }
+    }
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "search-popup-custom-filter-remove";
+    removeBtn.textContent = "×";
+    removeBtn.title = "Remove filter";
+    removeBtn.addEventListener("click", () => {
+      removeSearchPopupCustomFilter(filter.id);
+    });
+
+    row.appendChild(fieldSelect);
+    if (valueControl) row.appendChild(valueControl);
+    row.appendChild(removeBtn);
+    container.appendChild(row);
+  }
+}
+
+function buildSearchPopupCustomFilterValueControl(filter) {
+  if (!filter.fieldId) return null;
+  const def = state.customFieldById?.get(String(filter.fieldId));
+  if (!def) return null;
+  const kind = createOppCustomFieldInputKind(def);
+
+  if (kind === "select") {
+    const select = document.createElement("select");
+    select.className = "search-popup-custom-filter-value";
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = "—";
+    select.appendChild(empty);
+    for (const optText of parseCustomFieldSelectOptions(def)) {
+      const opt = document.createElement("option");
+      opt.value = optText;
+      opt.textContent = optText;
+      select.appendChild(opt);
+    }
+    select.value = filter.value || "";
+    return select;
+  }
+
+  if (kind === "checkbox") {
+    const select = document.createElement("select");
+    select.className = "search-popup-custom-filter-value";
+    select.innerHTML = '<option value="">—</option><option value="true">Yes</option><option value="false">No</option>';
+    const val = String(filter.value || "").toLowerCase();
+    select.value = val === "true" || val === "1" || val === "yes" ? "true" : val === "false" || val === "0" || val === "no" ? "false" : "";
+    return select;
+  }
+
+  if (kind === "date") {
+    const input = document.createElement("input");
+    input.type = "date";
+    input.className = "search-popup-custom-filter-value";
+    input.value = filter.value || "";
+    return input;
+  }
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "search-popup-custom-filter-value";
+  input.placeholder = "contains…";
+  input.value = filter.value || "";
+  return input;
+}
+
+function readSearchPopupCustomFilterValue(filter, control) {
+  if (!control) return "";
+  if (control.tagName === "SELECT") return control.value;
+  if (control.type === "checkbox") return control.checked ? "true" : "false";
+  return control.value || "";
+}
+
+function addSearchPopupCustomFilter() {
+  const id = Date.now() + Math.random();
+  searchPopupCustomFilters.push({ id, fieldId: null, value: "" });
+  renderSearchPopupCustomFilters();
+}
+
+function removeSearchPopupCustomFilter(id) {
+  searchPopupCustomFilters = searchPopupCustomFilters.filter((f) => f.id !== id);
+  renderSearchPopupCustomFilters();
+  searchPopupStartIndex = 0;
+  performSearchPopupQuery();
+}
+
+function getSearchPopupCustomFilters() {
+  const out = [];
+  for (const f of searchPopupCustomFilters) {
+    if (!f.fieldId || String(f.value).trim() === "") continue;
+    const def = state.customFieldById?.get(String(f.fieldId));
+    const kind = createOppCustomFieldInputKind(def);
+    let operator = "equals";
+    if (!def || kind === "text" || kind === "textarea") operator = "contains";
+    out.push({ fieldId: f.fieldId, value: f.value, operator });
+  }
+  return out;
 }
 
 function updateSearchPopupBatchBar() {
@@ -18477,13 +18658,7 @@ async function applySearchPopupBatchAction() {
   const r = $('#search-popup-batch-remove-tag'); if (r) r.value = '';
   const s = $('#search-popup-batch-set-stage'); if (s) s.value = '';
   clearSearchPopupSelection();
-  const input = $('#search-popup-input');
-  const tagSelect = $('#search-popup-tag-select');
-  if (input?.value.trim()) {
-    await performSearchPopupQuery();
-  } else if (tagSelect?.value.trim()) {
-    await performSearchPopupTagQuery();
-  }
+  await performSearchPopupQuery();
 }
 
 function exportSearchPopupSelected() {
@@ -18526,7 +18701,7 @@ function exportSearchResultsToCsv(opps) {
   URL.revokeObjectURL(url);
 }
 
-async function openSearchPreviewTab(oppId, titleHint) {
+async function openSearchPreviewTab(oppId, titleHint, { activate = true } = {}) {
   const id = Number(oppId);
   if (!Number.isFinite(id) || id <= 0) return;
 
@@ -18571,7 +18746,6 @@ async function openSearchPreviewTab(oppId, titleHint) {
           <button type="button" class="search-popup-preview-refresh" data-refresh-id="${id}" title="Refresh">⟳</button>
           <button type="button" class="search-popup-preview-edit" data-edit-id="${id}" title="Edit deal">✎</button>
           <button type="button" class="search-popup-preview-bookmark" data-opp-id="${id}" title="Bookmark deal">${bookmarkIcon}</button>
-          <span class="search-popup-preview-crm-wrap"></span>
         </div>
       </div>
       <div class="search-popup-preview-body" data-preview-body="${id}">
@@ -18580,12 +18754,6 @@ async function openSearchPreviewTab(oppId, titleHint) {
     </div>
   `;
   containers.appendChild(container);
-
-  // CRM link
-  const crmWrap = container.querySelector(".search-popup-preview-crm-wrap");
-  if (crmWrap) {
-    crmWrap.appendChild(createCrmOpenLink(id, { className: "opp-preview-open-crm" }));
-  }
 
   // Refresh button
   const refreshBtn = container.querySelector(".search-popup-preview-refresh");
@@ -18631,8 +18799,13 @@ async function openSearchPreviewTab(oppId, titleHint) {
     data: null,
   });
 
-  // Activate immediately
-  activateSearchPopupTab(`preview-${id}`);
+  // Activate immediately if requested
+  if (activate) {
+    activateSearchPopupTab(`preview-${id}`);
+  } else {
+    tabBtn.classList.add("new-tab");
+    setTimeout(() => tabBtn.classList.remove("new-tab"), 2400);
+  }
 
   // Load data
   try {
@@ -18642,7 +18815,7 @@ async function openSearchPreviewTab(oppId, titleHint) {
       body.innerHTML = "";
       renderOpportunityPreviewContent(body, data);
       linkifyPhonesAndEmails(body);
-      updateInferredStatus("preview", data.opp?.title || data.opp?.Title || titleHint);
+      if (activate) updateInferredStatus("preview", data.opp?.title || data.opp?.Title || titleHint);
     }
     // Update title if loaded
     const fullTitle = data.opp?.title || data.opp?.Title || titleHint;
@@ -18726,19 +18899,15 @@ function activateSearchPopupTab(tabId) {
     el.style.display = isMatch ? "" : "none";
   });
 
-  // Hide preview containers wrapper when projects or tags tab is active so it doesn't take up flex space
+  // Hide preview containers wrapper when projects tab is active so it doesn't take up flex space
   const previewContainers = $("#search-popup-preview-containers");
   if (previewContainers) {
-    const isStaticTab = tabId === "projects" || tabId === "tags";
-    previewContainers.style.display = isStaticTab ? "none" : "";
+    previewContainers.style.display = tabId === "projects" ? "none" : "";
   }
 
-  // Load data for static tabs
+  // Load data for projects tab
   if (tabId === "projects") {
     performSearchPopupQuery();
-  } else if (tabId === "tags") {
-    populateSearchTagDropdown();
-    performSearchPopupTagQuery();
   }
 }
 

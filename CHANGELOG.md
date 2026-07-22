@@ -2,9 +2,23 @@
 
 All notable changes to the Sietch CRM dashboard are documented here.
 
-## Phase 2D-3 — Grid stability fix (ISSUE-013) ✅ COMPLETE
+## Phase 2A — Search modal expansion (FEAT-007 Phase D) 🟡 IN PROGRESS
 
-Released 2026-07-22 as v2.2.3. Pushed to `new-crm` branch.
+Target release v2.2.4 on `new-crm` branch.
+
+### v1.95.14
+- **Search modal now opens as a filterable project directory.** Loads the first 50 open projects on open with server-side pagination (Prev / Next / page info / total count).
+- **Full-text search across deal and user fields.** `filterValue` now searches `title`, `description`, `contact` (first/last/company), and all custom-field values via `ILIKE '%q%'` on both the header search bar and the search modal. Header search automatically upgraded to use the new behavior.
+- **Server-side filters.** Stage, owner, tag, and custom-field filters are all sent to the backend; the previous client-side stage/owner filtering was removed.
+- **Custom/user field filters.** Dynamic filter rows in the search modal: select a custom field, then a type-specific value control (text contains, select exact, checkbox Yes/No, date exact). Multiple filters are combined with AND logic.
+- **Tag filter merged into Projects tab.** The standalone Tags tab was removed; tag filtering now lives in the main filter bar alongside stage/owner/sort.
+- **Sort options added.** Newest, oldest, title A–Z / Z–A, bid high–low / low–high, stage A–Z.
+- **"+ Tab" button adds preview in background.** Clicking a project row still opens and switches to the preview tab; the "+ Tab" button adds a preview tab without leaving the search list.
+- **Removed "Open in CRM" links from search results and header search dropdown.** The dashboard is independent of OnlyOffice, so deep-linking to the old CRM is no longer needed.
+- **Reduced contrast on search result title and checkbox.** Title now uses `font-weight: 500` and a softer `#b8c0d0` color; checkbox is scaled down and muted.
+- **Backend:** extended `GET /api/v2/projects` with `customFieldFilters`, `tagId`, `sort_by=stage`, and full-text `filterValue`; added `GET /api/v2/projects/count`; added trigram (GIN) indexes for fast `ILIKE` on text fields.
+- **Files:** `server.py`, `init.sql`, `public/index.html`, `public/app.js`, `public/styles.css`.
+- Cache-bust bumped to `app.js?v=1.95.14`, `styles.css?v=1.87.27`.
 
 ### v1.95.13
 - **Moved Tasks tile user filter into the title bar.** The `<select id="tasks-user-filter">` was previously in a separate `.panel-header` row below the toolbar with a "User" label. Removed the label and the panel-header row; the select now lives in `.tile-toolbar-tools` via a new `ensureTasksUserFilter()` helper. Added compact styling (`.tasks-user-filter-select`) so it matches toolbar height and does not thicken the title bar.

@@ -19,7 +19,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=1.87.25" />
+  <link rel="stylesheet" href="styles.css?v=1.87.27" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css" />
 </head>
 <body>
@@ -1048,26 +1048,50 @@
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
           <span>Projects</span>
         </button>
-        <button type="button" class="search-popup-tab search-popup-tab-tags" data-tab="tags" title="Filter by Tag">
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h.01"/><path d="M3.5 11.5l6.5 6.5h9l2-2V7l-2-2h-9L3.5 11.5z"/></svg>
-          <span>Tags</span>
-        </button>
       </div>
 
       <!-- Projects tab content -->
       <div class="search-popup-tab-content" data-tab-content="projects">
         <div class="search-popup-input-wrap">
-          <input type="search" id="search-popup-input" class="search-popup-input" placeholder="Search open deals… (press Enter)" autocomplete="off" />
+          <input type="search" id="search-popup-input" class="search-popup-input" placeholder="Search open deals…" autocomplete="off" />
         </div>
         <div class="search-popup-filter-bar">
-          <select id="search-popup-stage-filter" class="search-popup-filter-select">
+          <select id="search-popup-stage-filter" class="search-popup-filter-select" title="Filter by stage">
             <option value="">All stages</option>
           </select>
-          <select id="search-popup-responsible-filter" class="search-popup-filter-select">
+          <select id="search-popup-responsible-filter" class="search-popup-filter-select" title="Filter by owner">
             <option value="">All owners</option>
+          </select>
+          <select id="search-popup-tag-filter" class="search-popup-filter-select" title="Filter by tag">
+            <option value="">All tags</option>
+          </select>
+          <select id="search-popup-sort" class="search-popup-filter-select" title="Sort results">
+            <option value="date_created:descending">Newest first</option>
+            <option value="date_created:ascending">Oldest first</option>
+            <option value="title:ascending">Title A–Z</option>
+            <option value="title:descending">Title Z–A</option>
+            <option value="bid_value:descending">Bid high–low</option>
+            <option value="bid_value:ascending">Bid low–high</option>
+            <option value="stage:ascending">Stage A–Z</option>
           </select>
           <button type="button" id="search-popup-clear-filters" class="btn btn-secondary btn-sm">Clear</button>
         </div>
+
+        <!-- Custom field filters -->
+        <div class="search-popup-custom-filters" id="search-popup-custom-filters"></div>
+        <div class="search-popup-custom-filter-actions">
+          <button type="button" id="search-popup-add-custom-filter" class="btn btn-secondary btn-sm">+ Add custom field filter</button>
+        </div>
+
+        <!-- Pagination -->
+        <div class="search-popup-pagination" id="search-popup-pagination">
+          <button type="button" id="search-popup-prev" class="btn btn-secondary btn-sm">← Prev</button>
+          <span id="search-popup-page-info" class="search-popup-page-info">Page 1 of 1</span>
+          <button type="button" id="search-popup-next" class="btn btn-secondary btn-sm">Next →</button>
+        </div>
+
+        <div id="search-popup-results-count" class="search-popup-results-count"></div>
+
         <div id="search-popup-batch-bar" class="search-popup-batch-bar hidden">
           <span id="search-popup-selected-count" class="search-popup-batch-count">0 selected</span>
           <select id="search-popup-batch-add-tag">
@@ -1085,18 +1109,6 @@
         </div>
         <div id="search-popup-results" class="search-popup-results"></div>
         <div id="search-popup-error" class="search-popup-error hidden"></div>
-      </div>
-
-      <!-- Tags tab content -->
-      <div class="search-popup-tab-content" data-tab-content="tags" style="display:none;">
-        <div class="search-popup-tag-wrap">
-          <select id="search-popup-tag-select" class="search-popup-tag-select">
-            <option value="">— Select tag —</option>
-          </select>
-          <button type="button" id="search-popup-tag-search" class="btn btn-secondary btn-sm">Search by Tag</button>
-        </div>
-        <div id="search-popup-tag-results" class="search-popup-results"></div>
-        <div id="search-popup-tag-error" class="search-popup-error hidden"></div>
       </div>
 
       <!-- Preview tab containers injected dynamically -->
@@ -1470,6 +1482,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
-  <script src="app.js?v=1.95.12" type="module"></script>
+  <script src="app.js?v=1.95.14" type="module"></script>
 </body>
 </html>
