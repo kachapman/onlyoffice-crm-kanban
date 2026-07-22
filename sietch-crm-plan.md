@@ -99,7 +99,7 @@ Goal: Fix the remaining UI/JS bugs so the dashboard is usable against the local 
 | 2B: Project card click behavior | ✅ | Cards click → preview (side/full) or edit; Phase 1 follow-up completed. |
 | 2C: Unified Admin Modal | ✅ | Vertical sidebar tabs (overview/sync/users/stages/custom-fields/contacts/tags/branding/bot/logs); custom fields read-only, tags add, contacts/stages add+search, sync stubs; icons per non-neg. Projects managed via search modal (filters + batch ops). |
 | 2D: Tile layout refactoring | ✅ | CSS grid (spans, double-height, responsive), SortableJS drag-drop + ghost/chosen/drag classes + layout buttons; smooth collapse animation; terminal theme on data panes + admin modal; hover glow. |
-| 2E: Photo gallery | 🔲 | Backend + DB + quota/EXIF/folders ready; no frontend UI (no Photos tab in preview, no gallery/lightbox). |
+| 2E: Photo gallery | ✅ | Photos tab in preview modal with upload, thumbnail grid, quota display, delete, and lightbox. `POST /api/v2/projects/{id}/photos`, `GET /api/v2/photos/{id}` + `?thumbnail=1`, Pillow thumbnail + EXIF extraction. |
 | 2F: Notification drawer | 🔲 | Feed tile + keyword filter exists; no slide-out drawer with inline replies. |
 | 2G: User profile/account modal | 🔲 | /api/user-profile exists for sync; no dedicated modal for edit (name/email/pw/prefs/pic). |
 | 2H: Documents modal | ✅ | Full file manager: three scopes (project/personal/company), nested folders in personal/company, breadcrumb navigation, New button (Word/Excel/Folder), folder context menu (rename/delete with recursive CTE), inline rename, move/copy popup, batch ops, search, icon-only toolbar, sidebar toggle, drag-drop upload. Document Server used as editor with title-bar rename sync. |

@@ -29,6 +29,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse, urlencode
 
+try:
+    from PIL import Image
+except Exception:  # pragma: no cover - Pillow is optional in dev, present in Docker
+    Image = None
+
 import logging
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -258,12 +263,57 @@ _EXT_TO_MIME = {
     "pdf": "application/pdf",
     "txt": "text/plain",
     "csv": "text/csv",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+    "bmp": "image/bmp",
+    "tiff": "image/tiff",
+    "tif": "image/tiff",
+    "heic": "image/heic",
+    "heif": "image/heif",
 }
 
 
 def _guess_mime(filename: str) -> str:
     ext = Path(filename).suffix.lstrip(".").lower()
     return _EXT_TO_MIME.get(ext, "application/octet-stream")
+
+
+def _extract_exif(img) -> dict | None:
+    """Return a JSON-serializable subset of EXIF data from a Pillow image."""
+    if not hasattr(img, "getexif"):
+        return None
+    exif = img.getexif()
+    if not exif:
+        return None
+    out = {}
+    # Selected EXIF tags: Make, Model, DateTime, DateTimeOriginal, GPSInfo, FNumber, ISOSpeedRatings, FocalLength, ExposureTime
+    tags = {
+        0x010F: "make",
+        0x0110: "model",
+        0x0132: "dateTime",
+        0x9003: "dateTimeOriginal",
+        0x829D: "fNumber",
+        0x8827: "isoSpeedRatings",
+        0x920A: "focalLength",
+        0x829A: "exposureTime",
+    }
+    for code, key in tags.items():
+        val = exif.get(code)
+        if val:
+            out[key] = str(val)
+    gps = exif.get(0x8825)
+    if gps:
+        gps_out = {}
+        for code, key in {1: "gpsLatitudeRef", 2: "gpsLatitude", 3: "gpsLongitudeRef", 4: "gpsLongitude", 6: "gpsAltitude"}.items():
+            val = gps.get(code)
+            if val:
+                gps_out[key] = str(val)
+        if gps_out:
+            out["gps"] = gps_out
+    return out if out else None
 
 
 def _document_type_from_ext(ext: str) -> str:
@@ -800,6 +850,10 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         m = re.match(r"^/api/v2/documents/(\d+)$", api_path)
         if m:
             self._handle_document_download(int(m.group(1)))
+            return
+        m = re.match(r"^/api/v2/photos/(\d+)$", api_path)
+        if m:
+            self._handle_photo_download(int(m.group(1)))
             return
         m = re.match(r"^/api/v2/documents/(\d+)/editor-config$", api_path)
         if m:
@@ -2017,25 +2071,105 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         )
         photos = []
         for r in rows:
+            photo_id = r[0]
             photos.append({
-                "id": r[0], "filename": r[1], "filePath": r[2],
+                "id": photo_id, "filename": r[1], "filePath": r[2],
                 "fileSize": r[3], "mimeType": r[4], "exifData": r[5],
                 "thumbnailPath": r[6], "altDescription": r[7],
                 "uploadedBy": r[8], "uploadedAt": r[9].isoformat() if r[9] else None,
+                "url": f"/api/v2/photos/{photo_id}",
+                "thumbnailUrl": f"/api/v2/photos/{photo_id}?thumbnail=1",
             })
         # Total size for quota display
         total = db.query(
-            "SELECT COALESCE(SUM(file_size), 0) FROM project_photos WHERE opportunity_id = %s AND is_deleted = FALSE",
+            "SELECT COALESCE(SUM(file_size), 0)::bigint FROM project_photos WHERE opportunity_id = %s AND is_deleted = FALSE",
             (opp_id,), fetch="one",
         )
-        _json_response(self, 200, {"photos": photos, "totalSize": total[0] if total else 0, "quota": 157286400})
+        _json_response(self, 200, {"photos": photos, "totalSize": int(total[0]) if total else 0, "quota": 157286400})
 
     def _handle_project_photo_upload(self, opp_id: int) -> None:
         user = _require_auth(self)
         if not user:
             return
-        # TODO: multipart file upload handling (Phase 2E)
-        _json_response(self, 501, {"error": "Photo upload not yet implemented"})
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.startswith("multipart/form-data"):
+            _json_response(self, 400, {"error": "Expected multipart/form-data"})
+            return
+        try:
+            parsed = _parse_multipart(_read_body(self), content_type)
+        except Exception as exc:
+            _json_response(self, 400, {"error": f"Invalid multipart body: {exc}"})
+            return
+        file_info = parsed.get("file")
+        if not file_info:
+            _json_response(self, 400, {"error": "file field required"})
+            return
+        filename = file_info["filename"]
+        data = file_info["data"]
+        mime_type = file_info.get("content-type") or _guess_mime(filename)
+        if not mime_type.startswith("image/"):
+            _json_response(self, 400, {"error": "Only image files are supported"})
+            return
+        safe_name = re.sub(r'[^\w.\-]', '_', filename)
+        if not safe_name:
+            safe_name = "image.jpg"
+        opp_dir = PHOTO_STORAGE_PATH / str(opp_id)
+        opp_dir.mkdir(parents=True, exist_ok=True)
+        unique_name = f"{int(time.time())}_{safe_name}"
+        file_path = opp_dir / unique_name
+        thumb_name = f"thumb_{unique_name}"
+        thumb_path = opp_dir / thumb_name
+        file_path.write_bytes(data)
+        file_size = len(data)
+        exif_data: dict | None = None
+        # Generate thumbnail and extract EXIF using Pillow
+        if Image:
+            try:
+                with Image.open(io.BytesIO(data)) as img:
+                    exif_data = _extract_exif(img)
+                    img.thumbnail((400, 400), Image.Resampling.LANCZOS)
+                    # Save thumbnail as JPEG for consistency (preserve transparency as white bg)
+                    if img.mode in ("RGBA", "P"):
+                        bg = Image.new("RGB", img.size, (255, 255, 255))
+                        if img.mode == "P":
+                            img = img.convert("RGBA")
+                        bg.paste(img, mask=img.split()[3])
+                        img = bg
+                    elif img.mode != "RGB":
+                        img = img.convert("RGB")
+                    img.save(thumb_path, "JPEG", quality=85)
+            except Exception as exc:
+                logger.warning("Photo thumbnail/EXIF failed for %s: %s", filename, exc)
+                thumb_path = None
+        else:
+            thumb_path = None
+        try:
+            photo_id = db.insert_returning(
+                """INSERT INTO project_photos (opportunity_id, filename, file_path, file_size, mime_type, exif_data, thumbnail_path, uploaded_by)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                (opp_id, filename, str(file_path.relative_to(ROOT)), file_size, mime_type,
+                 json.dumps(exif_data) if exif_data else None,
+                 str(thumb_path.relative_to(ROOT)) if thumb_path else None,
+                 user["id"]),
+            )
+        except Exception as exc:
+            # DB trigger may reject quota; clean up saved files
+            try:
+                file_path.unlink(missing_ok=True)
+                if thumb_path:
+                    thumb_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            log_infra_event("error", f"Photo upload DB insert failed: {exc}")
+            _json_response(self, 500, {"error": f"Upload failed: {exc}"})
+            return
+        _json_response(self, 201, {
+            "id": photo_id, "filename": filename, "fileSize": file_size,
+            "mimeType": mime_type, "exifData": exif_data,
+            "url": f"/api/v2/photos/{photo_id}",
+            "thumbnailUrl": f"/api/v2/photos/{photo_id}?thumbnail=1",
+            "uploadedBy": user["id"], "uploadedAt": datetime.now(timezone.utc).isoformat(),
+        })
 
     def _handle_project_photo_folders_get(self, opp_id: int) -> None:
         user = _require_auth(self)
@@ -2088,6 +2222,36 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         db.execute("DELETE FROM project_photo_folders WHERE id = %s", (folder_id,))
         _json_response(self, 200, {"ok": True})
+
+    def _handle_photo_download(self, photo_id: int) -> None:
+        user = _require_auth(self)
+        if not user:
+            return
+        qs = parse_qs(urlparse(self.path).query)
+        want_thumb = (qs.get("thumbnail") or [""])[0].lower() in ("1", "true")
+        row = db.query(
+            "SELECT opportunity_id, filename, file_path, file_size, mime_type, thumbnail_path FROM project_photos WHERE id = %s AND is_deleted = FALSE",
+            (photo_id,), fetch="one",
+        )
+        if not row:
+            self.send_error(404)
+            return
+        opp_id, filename, file_path, file_size, mime_type, thumbnail_path = row
+        if want_thumb:
+            file_path = thumbnail_path or file_path
+        full_path = ROOT / file_path
+        if not full_path.exists():
+            self.send_error(404)
+            return
+        data = full_path.read_bytes()
+        self.send_response(200)
+        # Thumbnails are always JPEG; original uses stored mime type
+        ct = "image/jpeg" if want_thumb else (mime_type or "application/octet-stream")
+        self.send_header("Content-Type", ct)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", f'inline; filename="{filename}"')
+        self.end_headers()
+        self.wfile.write(data)
 
     # ── Documents ─────────────────────────────────────────────────────────────
 

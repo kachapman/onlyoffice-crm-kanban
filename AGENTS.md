@@ -1,7 +1,7 @@
 # AGENTS.md — Sietch CRM (new-crm branch)
 
 **Current version:** 3.0.0 (released 2026-07-18; see CHANGELOG.md)  
-**Last session summary (for next resume):** 2026-07-22 session 13: Phase 2A search modal expansion marked complete and pushed to GitHub `new-crm` branch. Added inline project-fields editor to opportunity preview modal: edit button next to "Project fields" title, editable stage/contact/responsible/value/due date/private + all custom fields, check/X save/cancel, same input types as create-project modal. Extended `updateOpportunityBulk` and `buildOpportunityPutBody` to support contact/responsible/bidValue/isPrivate. Backend/frontend/docs from session 12 retained. Cache-bust: app.js?v=1.95.15, styles.css?v=1.87.28. PUSHED.
+**Last session summary (for next resume):** 2026-07-22 session 14: Phase 2E photo gallery shipped and pushed to GitHub `new-crm` branch. Added Photos tab to opportunity preview modal with upload, thumbnail grid, per-project quota display, delete, and lightbox viewer. Implemented `POST /api/v2/projects/{id}/photos` (multipart upload + Pillow thumbnail + EXIF), `GET /api/v2/photos/{id}` and `?thumbnail=1`. Updated preview data fetcher and modal to include photos. Local endpoint tests passed (upload/download/thumbnail/delete/quota). Cache-bust: app.js?v=1.95.16, styles.css?v=1.87.29. PUSHED.
 
 - Known issue: server process dies when backgrounded from opencode shell (use `setsid` to detach — see ISSUE-012).
 - Known issue: server must be killed and restarted after opencode session exits (use `setsid` to detach — see ISSUE-012).

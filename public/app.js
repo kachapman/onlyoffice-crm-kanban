@@ -17267,14 +17267,15 @@ async function fetchOpportunityPreviewData(oppId, quick = false) {
   ]);
 
   const opp = await fetchOpportunityForUpdate(id);
-  const [customFieldValues, history, tags, documents] = await Promise.all([
+  const [customFieldValues, history, tags, documents, photos] = await Promise.all([
     fetchOpportunityCustomFieldValues(id),
     fetchAllOpportunityHistory(id, quick ? 2 : undefined),
     loadDealEditTags(opp),
     fetchOpportunityDocuments(id),
+    fetchOpportunityPhotos(id),
   ]);
 
-  return { opp, customFieldValues, history, tags, documents, oppId: id };
+  return { opp, customFieldValues, history, tags, documents, photos, oppId: id };
 }
 
 async function fetchOpportunityDocuments(oppId) {
@@ -17283,6 +17284,17 @@ async function fetchOpportunityDocuments(oppId) {
   try {
     const data = await api(`/api/v2/projects/${id}/documents`);
     return (data && data.documents) ? data.documents : unwrap(data);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchOpportunityPhotos(oppId) {
+  const id = Number(oppId);
+  if (!Number.isFinite(id) || id <= 0) return [];
+  try {
+    const data = await api(`/api/v2/projects/${id}/photos`);
+    return (data && data.photos) ? data.photos : unwrap(data);
   } catch {
     return [];
   }
@@ -20710,7 +20722,7 @@ function renderOpportunityPreviewContent(container, data) {
   if (!container) return;
   container.innerHTML = "";
 
-  const { opp, customFieldValues, history, tags, documents } = data;
+  const { opp, customFieldValues, history, tags, documents, photos } = data;
   const standardRows = buildOpportunityPreviewStandardFields(opp);
   const allUserRows = buildOpportunityPreviewUserFields(opp, customFieldValues);
   const userRows = allUserRows.filter((r) => !r._isCheckbox);
@@ -20753,8 +20765,14 @@ function renderOpportunityPreviewContent(container, data) {
   tabDocs.className = "opp-preview-tab";
   tabDocs.textContent = "Documents";
   tabDocs.dataset.tab = "documents";
+  const tabPhotos = document.createElement("button");
+  tabPhotos.type = "button";
+  tabPhotos.className = "opp-preview-tab";
+  tabPhotos.textContent = "Photos";
+  tabPhotos.dataset.tab = "photos";
   tabs.appendChild(tabDetails);
   tabs.appendChild(tabDocs);
+  tabs.appendChild(tabPhotos);
   container.appendChild(tabs);
 
   // Details content
@@ -21496,14 +21514,253 @@ function renderOpportunityPreviewContent(container, data) {
 
   container.appendChild(docsContent);
 
+  // Photos tab
+  const photosContent = document.createElement("div");
+  photosContent.className = "opp-preview-tab-content";
+  photosContent.dataset.tabContent = "photos";
+  photosContent.style.display = "none";
+  renderOpportunityPreviewPhotosTab(photosContent, oppId, photos || []);
+  container.appendChild(photosContent);
+
   // Tab switching
   const activateTab = (tabName) => {
     tabs.querySelectorAll('.opp-preview-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tabName));
     detailsContent.style.display = tabName === 'details' ? '' : 'none';
     docsContent.style.display = tabName === 'documents' ? '' : 'none';
+    photosContent.style.display = tabName === 'photos' ? '' : 'none';
   };
   tabDetails.addEventListener('click', () => activateTab('details'));
   tabDocs.addEventListener('click', () => activateTab('documents'));
+  tabPhotos.addEventListener('click', () => activateTab('photos'));
+}
+
+function formatBytes(bytes) {
+  const n = Number(bytes) || 0;
+  if (n === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const i = Math.min(units.length - 1, Math.floor(Math.log10(n) / 3));
+  const value = n / Math.pow(1000, i);
+  return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
+  if (!container) return;
+  container.innerHTML = "";
+
+  const toolbar = document.createElement("div");
+  toolbar.className = "opp-photos-toolbar";
+
+  const uploadInput = document.createElement("input");
+  uploadInput.type = "file";
+  uploadInput.accept = "image/*";
+  uploadInput.multiple = true;
+  uploadInput.style.display = "none";
+
+  const uploadBtn = document.createElement("button");
+  uploadBtn.type = "button";
+  uploadBtn.className = "btn btn-primary btn-sm";
+  uploadBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload`;
+  uploadBtn.addEventListener("click", () => uploadInput.click());
+
+  const quotaEl = document.createElement("span");
+  quotaEl.className = "opp-photos-quota";
+
+  toolbar.appendChild(uploadBtn);
+  toolbar.appendChild(quotaEl);
+  container.appendChild(toolbar);
+
+  const grid = document.createElement("div");
+  grid.className = "opp-photos-grid";
+  container.appendChild(grid);
+
+  let state = { photos: [...photos], totalSize: 0, quota: 157286400 };
+
+  async function refresh() {
+    try {
+      const data = await api(`/api/v2/projects/${oppId}/photos`);
+      state.photos = (data && data.photos) ? data.photos : [];
+      state.totalSize = (data && typeof data.totalSize === "number") ? data.totalSize : 0;
+      state.quota = (data && typeof data.quota === "number") ? data.quota : 157286400;
+    } catch (err) {
+      showToast(err.message, true);
+    }
+    render();
+  }
+
+  function render() {
+    quotaEl.textContent = `${formatBytes(state.totalSize)} / ${formatBytes(state.quota)}`;
+    grid.innerHTML = "";
+    if (!state.photos.length) {
+      const empty = document.createElement("p");
+      empty.className = "opp-preview-empty opp-photos-empty";
+      empty.textContent = "No photos yet. Upload images to this project.";
+      grid.appendChild(empty);
+      return;
+    }
+    state.photos.forEach((photo) => {
+      const photoId = photo.id ?? photo.ID;
+      const thumbUrl = photo.thumbnailUrl || `/api/v2/photos/${photoId}?thumbnail=1`;
+      const filename = photo.filename || photo.Filename || "Photo";
+
+      const item = document.createElement("div");
+      item.className = "opp-photo-item";
+
+      const imgWrap = document.createElement("button");
+      imgWrap.type = "button";
+      imgWrap.className = "opp-photo-thumb";
+      imgWrap.setAttribute("aria-label", `View ${filename}`);
+      imgWrap.style.backgroundImage = `url("${thumbUrl}")`;
+      imgWrap.addEventListener("click", () => openPhotoLightbox(state.photos, photoId));
+      item.appendChild(imgWrap);
+
+      const meta = document.createElement("div");
+      meta.className = "opp-photo-meta";
+      const name = document.createElement("span");
+      name.className = "opp-photo-name";
+      name.textContent = filename;
+      name.title = filename;
+      meta.appendChild(name);
+      const size = document.createElement("span");
+      size.className = "opp-photo-size";
+      size.textContent = formatBytes(photo.fileSize ?? photo.FileSize);
+      meta.appendChild(size);
+      item.appendChild(meta);
+
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "opp-photo-delete";
+      delBtn.setAttribute("aria-label", "Delete photo");
+      delBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+      delBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (!confirm(`Delete "${filename}"?`)) return;
+        try {
+          await api(`/api/v2/photos/${photoId}`, { method: "DELETE" });
+          showToast("Photo deleted");
+          await refresh();
+        } catch (err) {
+          showToast(err.message, true);
+        }
+      });
+      item.appendChild(delBtn);
+
+      grid.appendChild(item);
+    });
+  }
+
+  uploadInput.addEventListener("change", async () => {
+    const files = Array.from(uploadInput.files).filter(f => f.size > 0);
+    if (!files.length) return;
+    uploadBtn.disabled = true;
+    let ok = 0, fail = 0, lastErr = "";
+    for (const file of files) {
+      if (!file.type.startsWith("image/")) {
+        fail++;
+        lastErr = `${file.name} is not an image`;
+        continue;
+      }
+      const formData = new FormData();
+      formData.append("file", file);
+      try {
+        const res = await fetch(`/api/v2/projects/${oppId}/photos`, { method: "POST", credentials: "same-origin", body: formData });
+        if (res.ok) { ok++; }
+        else {
+          fail++;
+          try { const j = await res.json(); lastErr = j.error || res.statusText; } catch { lastErr = res.statusText; }
+        }
+      } catch (err) { fail++; lastErr = err.message; }
+    }
+    uploadBtn.disabled = false;
+    if (ok) showToast(`Uploaded ${ok} photo${ok > 1 ? "s" : ""}`);
+    if (fail) showToast(`Failed ${fail}: ${lastErr}`, true);
+    if (ok) await refresh();
+    uploadInput.value = "";
+  });
+
+  // Initial render with provided photos; then refresh from server to ensure totals
+  if (state.photos.length) {
+    render();
+    refresh();
+  } else {
+    render();
+  }
+}
+
+function openPhotoLightbox(photos, startPhotoId) {
+  let currentIndex = Math.max(0, photos.findIndex(p => (p.id ?? p.ID) == startPhotoId));
+  const backdrop = document.createElement("div");
+  backdrop.className = "photo-lightbox-backdrop";
+  backdrop.setAttribute("role", "dialog");
+  backdrop.setAttribute("aria-modal", "true");
+  backdrop.tabIndex = -1;
+
+  const box = document.createElement("div");
+  box.className = "photo-lightbox-box";
+
+  const img = document.createElement("img");
+  img.className = "photo-lightbox-img";
+  img.alt = "Preview";
+
+  const caption = document.createElement("div");
+  caption.className = "photo-lightbox-caption";
+
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "photo-lightbox-close";
+  closeBtn.setAttribute("aria-label", "Close");
+  closeBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+
+  const prevBtn = document.createElement("button");
+  prevBtn.type = "button";
+  prevBtn.className = "photo-lightbox-nav photo-lightbox-prev";
+  prevBtn.setAttribute("aria-label", "Previous");
+  prevBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>`;
+
+  const nextBtn = document.createElement("button");
+  nextBtn.type = "button";
+  nextBtn.className = "photo-lightbox-nav photo-lightbox-next";
+  nextBtn.setAttribute("aria-label", "Next");
+  nextBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>`;
+
+  function update() {
+    const photo = photos[currentIndex];
+    const photoId = photo.id ?? photo.ID;
+    img.src = photo.url || `/api/v2/photos/${photoId}`;
+    const name = photo.filename || photo.Filename || "Photo";
+    const size = formatBytes(photo.fileSize ?? photo.FileSize);
+    caption.textContent = `${currentIndex + 1} / ${photos.length}: ${name} (${size})`;
+    prevBtn.style.display = photos.length > 1 ? "" : "none";
+    nextBtn.style.display = photos.length > 1 ? "" : "none";
+  }
+
+  function close() {
+    backdrop.remove();
+    document.removeEventListener("keydown", onKey);
+  }
+
+  function onKey(e) {
+    if (e.key === "Escape") close();
+    if (photos.length > 1) {
+      if (e.key === "ArrowLeft") { currentIndex = (currentIndex - 1 + photos.length) % photos.length; update(); }
+      if (e.key === "ArrowRight") { currentIndex = (currentIndex + 1) % photos.length; update(); }
+    }
+  }
+
+  closeBtn.addEventListener("click", close);
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
+  prevBtn.addEventListener("click", (e) => { e.stopPropagation(); currentIndex = (currentIndex - 1 + photos.length) % photos.length; update(); });
+  nextBtn.addEventListener("click", (e) => { e.stopPropagation(); currentIndex = (currentIndex + 1) % photos.length; update(); });
+  document.addEventListener("keydown", onKey);
+
+  box.appendChild(closeBtn);
+  box.appendChild(prevBtn);
+  box.appendChild(img);
+  box.appendChild(nextBtn);
+  box.appendChild(caption);
+  backdrop.appendChild(box);
+  document.body.appendChild(backdrop);
+  backdrop.focus();
+  update();
 }
 
 function bindNewTaskOpportunityPicker() {
