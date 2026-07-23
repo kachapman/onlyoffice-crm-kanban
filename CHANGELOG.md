@@ -20,6 +20,10 @@ Target release v2.2.5 on `new-crm` branch.
 - **Historical release notes and migration runbooks left untouched** (`docs/RELEASE_*.md`, `docs/MIGRATE_DOMAINS.md`, `docs/CUTOVER_RUNBOOK.md`, `CHANGELOG.md` older entries, `onlyoffice-module/`).
 - **Note:** Phase 2E photo gallery and Document Server fixes in v1.95.16/v1.95.17 are implemented and server-tested but not yet verified in browser.
 
+### v2.2.5-1
+- **Fixed tile resize regression.** Restored `pointer-events: auto` on `.tile-resize-handle` after commit `8bcd106` accidentally set it to `none`, making resize handles visible but undraggable. No JS changes needed.
+- **Files:** `public/styles.css`.
+
 ### v1.95.16
 - **Added Photos tab to opportunity preview modal.** New "Photos" tab alongside Details/Documents with an image grid, upload button, per-project quota display, thumbnail generation, and delete-on-hover.
 - **Photo upload endpoint implemented.** `POST /api/v2/projects/{id}/photos` accepts multipart/form-data image uploads, persists to `data/photos/{oppId}/`, generates a 400px JPEG thumbnail with Pillow, extracts EXIF metadata, and enforces the 150MB per-project quota trigger.

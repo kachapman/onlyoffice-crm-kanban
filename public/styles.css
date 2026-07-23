@@ -9909,7 +9909,7 @@ body {
   transition: opacity 0.15s ease;
   touch-action: none; /* let pointer events drive the resize on touch */
   overflow: hidden;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .dashboard-tile:hover .tile-resize-handle {
