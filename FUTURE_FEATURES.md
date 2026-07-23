@@ -311,6 +311,8 @@ See **[Toaster_Features](./Toaster_Features)** for dashboard tile/widget ideas (
 | FEAT-007 | **Advanced Opportunity Search** — filter by stage, user, tags, custom fields, date range (see detailed section below) | High |
 | FEAT-022 | **In-modal document editor tab** — open documents inside the existing Documents modal instead of a separate page/tab. Deferred until Document Server features are fully unlocked. | Deferred |
 | FEAT-023 | **Documents: Save-as conversion** — export doc to PDF/ODT/Markdown from the documents modal context menu or toolbar. OnlyOffice Document Server supports format conversion via callback, but a simpler approach is server-side conversion using LibreOffice headless (`soffice --convert-to pdf`). Needs Docker container with LibreOffice or a dedicated conversion API. | Medium |
+| FEAT-025 | **Project number + email auto-linking** — expose a unique project number (or short ID) on each opportunity; user includes it in the subject line when forwarding emails to the CRM inbox; a classifier or regex on incoming mail auto-links the email to the matching project's history. | High |
+| FEAT-026 | **Full dashboard light mode** — a theme toggle (dark ↔ light) that reskins the entire dashboard UI. Final cosmetic phase after all functional work is complete. | Low |
 
 ### FEAT-008 — AccuLynx API research (post-v1.1, from user list)
 
@@ -400,6 +402,159 @@ A separate **nginx proxy subdomain** — no URL rewriting, no Python overhead, e
 
 ---
 
+## FEAT-025 — Project Number + Email Auto-Linking
+
+**Status:** Planned — detailed design below.  
+**Priority:** High  
+**Area:** Opportunity preview modal, email modal, server-side mail processing
+
+### Problem
+
+When a user forwards an email to the CRM inbox (to link it to a specific project/opportunity), they currently have to manually open the deal-edit modal and paste a link or type the deal name. The CRM's native mail linking searches by contact name or deal title, which is ambiguous when multiple deals share similar names. There is no reliable, machine-readable identifier the user can include in the email subject line.
+
+### Solution
+
+Expose a **unique project number** (or short alphanumeric ID) on each opportunity. The user copies this number into the email subject line when forwarding. A server-side classifier or regex on incoming CRM mail events detects the number pattern, looks up the matching project, and auto-links the email to that project's history — eliminating the manual linking step.
+
+### Design
+
+#### Project number assignment
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **A. Sequential integer** (`#1001`, `#1002`, …) | Human-readable, short, predictable | Requires a DB sequence; gaps on delete; not meaningful |
+| **B. Short hash** (`PRJ-A3F`, `PRJ-7K2`) | No sequence, collision-resistant | Slightly harder to type; still compact |
+| **C. Custom field** (existing `customFieldList`) | No schema change | Not enforced; users can edit/delete it; no uniqueness guarantee |
+
+**Recommended: Approach A** — sequential integer with a configurable prefix (default `#`). Stored in a new `project_number` column on the `opportunities` table (or `project_documents` if reusing existing schema). Auto-assigned on opportunity creation; never reused.
+
+#### Where the number is shown
+
+1. **Opportunity preview modal** — displayed prominently next to the title, e.g. `#1042 — Smith Roofing Claim`. Copy-to-clipboard button.
+2. **Deal-edit modal** — shown in the header or a read-only field (non-editable once assigned).
+3. **Card on group tile** — optional: small `#1042` badge in the card corner (configurable via profile setting).
+
+#### Email subject syntax
+
+The user includes the project number in the email subject line using a recognizable syntax:
+
+```
+Fwd: Re: Inspection notes [#1042]
+```
+
+or
+
+```
+Fwd: Claim update PRJ-1042
+```
+
+The classifier looks for:
+- `[#<number>]` — bracketed hash + digits (primary pattern)
+- `PRJ-<number>` — prefix + digits (alternative)
+- `<number>` alone — fallback, but lower confidence (may match unrelated digits)
+
+#### Server-side classifier (`server.py`)
+
+A new endpoint or background hook on the CRM mail webhook/notification path:
+
+1. When a new mail event arrives in the CRM (detected via the existing `/api/2.0/crm/history/filter` polling or a future webhook), extract the subject line.
+2. Run the regex patterns against the subject.
+3. If a match is found:
+   - Look up the project by `project_number` in the local DB.
+   - If found, call the CRM's `PUT /api/2.0/mail/crm/link.json` to auto-link the email to the matched opportunity.
+   - Log the auto-link event in the infra ring buffer.
+4. If no match or ambiguous, skip (user can still manually link via the email modal sidebar).
+
+#### Classification models considered
+
+| Model | Complexity | Accuracy | Notes |
+|-------|-----------|----------|-------|
+| **Regex only** | Low | High for structured syntax | Best starting point; `[#\d+]` and `PRJ-\d+` patterns |
+| **Keyword + regex** | Low | High | Add "project", "claim", "job" context words around the number |
+| **ML classifier** | High | Potentially higher for noisy subjects | Overkill for v1; regex covers 95%+ of intentional use cases |
+
+**Recommendation:** Start with regex. The user is the one typing the number, so they control the format. A simple regex with two patterns covers the use case without infrastructure overhead.
+
+#### DB schema change
+
+```sql
+ALTER TABLE opportunities ADD COLUMN project_number INTEGER UNIQUE;
+CREATE SEQUENCE project_number_seq START 1001;
+```
+
+Or, if using the existing `project_documents` table for number assignment, add a `project_number` column with a unique constraint.
+
+#### Files to modify
+
+| File | Change |
+|------|--------|
+| `server.py` | Auto-assign `project_number` on opp creation; expose in opp GET response; new `/api/v2/projects/{id}/number` endpoint; mail classifier hook |
+| `init.sql` | `project_number` column + sequence |
+| `public/app.js` | Display number in preview modal + deal-edit; copy-to-clipboard button; card badge (optional) |
+| `public/styles.css` | Number badge styling, copy button |
+| `public/index.html` | Number display slot in preview modal markup |
+
+#### Acceptance criteria
+
+1. Every opportunity has a unique `project_number` assigned at creation.
+2. Preview modal shows `#<number>` next to the title with a copy-to-clipboard button.
+3. When a user forwards an email with `[#1042]` in the subject, the email is auto-linked to project #1042 within a reasonable polling interval.
+4. If no match is found, no error is raised — the email simply isn't auto-linked.
+5. The number is non-editable by users (read-only).
+
+---
+
+## FEAT-026 — Full Dashboard Light Mode
+
+**Status:** Planned — final cosmetic phase.  
+**Priority:** Low  
+**Area:** Entire dashboard UI (`public/styles.css`, `public/app.js`, `public/index.html`)
+
+### Goal
+
+Provide a **theme toggle** (dark ↔ light) that reskins the entire dashboard. The current dark theme is the default. Light mode inverts surfaces, borders, text, and accents to produce a clean, readable light UI.
+
+### Scope
+
+| Element | Dark (current) | Light |
+|---------|----------------|-------|
+| Background | `#0f172a` (slate-900) | `#ffffff` or `#f8fafc` |
+| Surface | `#1e293b` (slate-800) | `#ffffff` |
+| Surface elevated | `#334155` (slate-700) | `#f1f5f9` |
+| Text | `#e2e8f0` (slate-200) | `#0f172a` (slate-900) |
+| Muted text | `#64748b` (slate-500) | `#64748b` (same) |
+| Borders | `#334155` (slate-700) | `#e2e8f0` (slate-200) |
+| Accent | `#3b82f6` (blue-500) | `#2563eb` (blue-600, slightly darker for contrast) |
+| Cards/tiles | Dark surfaces with subtle borders | White/light surfaces with subtle shadows |
+
+### Implementation approach
+
+1. **CSS custom properties** — all colors already use CSS variables (`--bg`, `--surface`, `--text`, `--border`, etc.). A `[data-theme="light"]` selector on `<html>` overrides every variable.
+2. **Toggle** — small sun/moon icon button in the header (next to the sign-out button or inside the profile dropdown).
+3. **Persistence** — stored in `user_profile_store` (server) + localStorage fallback. Applied on page load via `document.documentElement.dataset.theme`.
+4. **No JS class toggling** — CSS variables handle everything; no per-component class swaps needed.
+5. **Scope** — all dashboard UI (tiles, modals, sidebar, header, footer, admin console). Document Server iframe remains unchanged (OnlyOffice has its own theme).
+
+### Files to modify
+
+| File | Change |
+|------|--------|
+| `public/styles.css` | `[data-theme="light"]` variable overrides at `:root`; toggle button styles |
+| `public/app.js` | Toggle handler; load theme from profile/localStorage on init; persist on change |
+| `public/index.html` | Toggle button in header; `<html data-theme="dark">` default |
+| `user_profile_store.py` | Persist `theme` preference (dark/light) |
+| `server.py` | Expose `theme` in profile payload |
+
+### Acceptance criteria
+
+1. Toggle switches between dark and light mode instantly (no page reload).
+2. All dashboard surfaces, text, borders, and accents are readable in both modes.
+3. Theme persists across sessions (server + localStorage).
+4. Default is dark (current behavior unchanged for existing users).
+5. Document Server iframe is unaffected.
+
+---
+
 ## Suggested implementation order
 
 1. **FEAT-001** — Preview popup (high user value, uses existing APIs).
@@ -408,3 +563,5 @@ A separate **nginx proxy subdomain** — no URL rewriting, no Python overhead, e
 4. Pick items from **Toaster_Features** by priority.
 5. **FEAT-022** — In-modal document editor tab: implement after Document Server features (JWT, callbacks, co-edit) are fully unlocked and stable.
 6. **FEAT-024** — Native CRM iframe embed (investigated, not implemented — see above).
+7. **FEAT-025** — Project number + email auto-linking (after email modal is stable).
+8. **FEAT-026** — Full dashboard light mode (final cosmetic phase).

@@ -31,6 +31,7 @@ Target release v2.2.5 on `new-crm` branch.
   - Batch copy duplicates files and assigns the current user as `uploaded_by`; move updates `opportunity_id` and clears `folder_id`; delete soft-deletes selected rows.
 - **Improved Document Server self-signed certificate UX.** `public/doc-editor.html` now shows a clickable healthcheck link and a reload button when the OnlyOffice `api.js` script fails to load, guiding users to accept the certificate before retrying.
 - **Unified Documents tab in preview modal with Documents-modal list UI.** Replaced the separate toolbar buttons with a single **Actions…** dropdown (Download, Move to…, Copy to…, Delete) plus a select-all checkbox. Document rows now match the full Documents modal style: checkbox, file-type icon, title, size, date, and hover download button. No directories/folders in the preview tab.
+- **Admin console sidebar toggle redesign.** Replaced thick text arrows (`▶`/`◀`) with a clean inline SVG chevron. Toggle is now absolutely positioned at the `.admin-body` boundary, replacing the vertical border divider. Works on all screen sizes (not just mobile). Collapses/expands with smooth left-slide animation. Soft `--text-muted` color for dark mode.
 - **Files:** `server.py`, `public/app.js`, `public/styles.css`, `public/doc-editor.html`.
 
 ### v1.95.16

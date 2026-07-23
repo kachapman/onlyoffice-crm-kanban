@@ -19759,13 +19759,12 @@ function openAdminConsoleModal() {
     modal.querySelectorAll(".admin-tab-btn").forEach(btn => {
       btn.addEventListener("click", () => switchAdminTab(btn.dataset.tab));
     });
-    // Mobile sidebar toggle (like Documents modal)
+    // Sidebar toggle (works on all screen sizes)
     const adminTabs = modal.querySelector(".admin-tabs");
     const adminTabsToggle = modal.querySelector("#admin-tabs-toggle");
     if (adminTabs && adminTabsToggle) {
       adminTabsToggle.addEventListener("click", () => {
         const collapsed = adminTabs.classList.toggle("admin-tabs-collapsed");
-        adminTabsToggle.textContent = collapsed ? "▶" : "◀";
         adminTabsToggle.setAttribute("aria-label", collapsed ? "Show tabs" : "Hide tabs");
         adminTabsToggle.setAttribute("title", collapsed ? "Show tabs" : "Hide tabs");
       });
@@ -19786,7 +19785,6 @@ function openAdminConsoleModal() {
   const adminTabsToggle = modal.querySelector("#admin-tabs-toggle");
   if (adminTabs && adminTabsToggle && window.innerWidth <= 640) {
     adminTabs.classList.add("admin-tabs-collapsed");
-    adminTabsToggle.textContent = "▶";
     adminTabsToggle.setAttribute("aria-label", "Show tabs");
     adminTabsToggle.setAttribute("title", "Show tabs");
   }
