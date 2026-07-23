@@ -170,7 +170,23 @@
           new DocsAPI.DocEditor("editor", config);
         };
         script.onerror = () => {
-          showError(`Could not load the document editor from the configured server.\nURL: ${config.docsApiUrl}`);
+          const baseUrl = config.docsApiUrl.replace(/\/web-apps\/.*$/, "");
+          const healthUrl = `${baseUrl}/healthcheck`;
+          errorMsgEl.innerHTML = `
+            <p><strong>Could not load the document editor.</strong></p>
+            <p style="margin:0.75rem 0;word-break:break-all;">${config.docsApiUrl}</p>
+            <p style="margin:0.75rem 0;">
+              If this is the first time you are opening the editor, the Document Server may use a self-signed certificate that your browser has not yet trusted.
+            </p>
+            <p style="margin:0.75rem 0;">
+              <a href="${healthUrl}" target="_blank" rel="noopener noreferrer">Open the Document Server healthcheck in a new tab</a>, accept the certificate warning, then return and reload this page.
+            </p>
+            <button type="button" id="doc-editor-reload" class="btn btn-primary btn-sm" style="margin-top:0.75rem;">Reload editor</button>
+          `;
+          loadingEl.style.display = "none";
+          errorEl.style.display = "flex";
+          const reloadBtn = document.getElementById("doc-editor-reload");
+          if (reloadBtn) reloadBtn.addEventListener("click", () => window.location.reload());
         };
         document.head.appendChild(script);
       } catch (err) {

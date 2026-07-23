@@ -21,6 +21,7 @@ import socket
 import ssl
 import time
 import urllib.error
+import zipfile
 import urllib.request
 from datetime import datetime, timezone
 from http import cookies
@@ -304,6 +305,10 @@ _EXT_TO_MIME = {
     "heic": "image/heic",
     "heif": "image/heif",
 }
+
+# Reverse lookup for generating extensions from stored MIME types.
+# Only the first entry is kept when multiple extensions map to the same MIME.
+_MIME_TO_EXT = {mime: f".{ext}" for ext, mime in _EXT_TO_MIME.items()}
 
 
 def _guess_mime(filename: str) -> str:
@@ -1131,6 +1136,15 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             return
         if api_path == "/api/v2/documents/batch-copy" and method == "POST":
             self._handle_documents_batch_copy()
+            return
+        if api_path == "/api/v2/photos/batch-download" and method == "POST":
+            self._handle_photos_batch_download()
+            return
+        if api_path == "/api/v2/photos/batch-move" and method == "POST":
+            self._handle_photos_batch_move()
+            return
+        if api_path == "/api/v2/photos/batch-copy" and method == "POST":
+            self._handle_photos_batch_copy()
             return
         if api_path == "/api/v2/documents/personal/upload" and method == "POST":
             self._handle_document_upload_personal()
@@ -2302,9 +2316,171 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         ct = "image/jpeg" if want_thumb else (mime_type or "application/octet-stream")
         self.send_header("Content-Type", ct)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Content-Disposition", f'inline; filename="{filename}"')
+        want_download = (qs.get("download") or [""])[0].lower() in ("1", "true")
+        disposition = "attachment" if want_download else "inline"
+        self.send_header("Content-Disposition", f'{disposition}; filename="{filename}"')
         self.end_headers()
         self.wfile.write(data)
+
+    def _handle_photos_batch_download(self) -> None:
+        """Return a ZIP of selected full-size photos."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            body = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        ids = body.get("ids", [])
+        if not ids:
+            _json_response(self, 400, {"error": "ids required"})
+            return
+        rows = db.query(
+            """SELECT id, opportunity_id, filename, file_path, file_size, mime_type
+               FROM project_photos WHERE id = ANY(%s) AND is_deleted = FALSE""",
+            (ids,),
+        )
+        if not rows:
+            _json_response(self, 404, {"error": "No photos found"})
+            return
+        buf = io.BytesIO()
+        seen_names: dict[str, int] = {}
+        common_opp_id = rows[0][1]
+        all_same_opp = all(r[1] == common_opp_id for r in rows)
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for r in rows:
+                photo_id, opp_id, filename, file_path, file_size, mime_type = r
+                src = ROOT / file_path
+                if not src.exists():
+                    continue
+                name = filename or f"photo_{photo_id}"
+                ext = Path(name).suffix or (_MIME_TO_EXT.get(mime_type, "") or ".jpg")
+                if not name.endswith(ext):
+                    name = name + ext
+                if name in seen_names:
+                    seen_names[name] += 1
+                    stem = Path(name).stem
+                    name = f"{stem} ({seen_names[name]}){ext}"
+                else:
+                    seen_names[name] = 0
+                zf.writestr(name, src.read_bytes())
+        zip_data = buf.getvalue()
+        zip_name = f"project-{common_opp_id}-photos.zip" if all_same_opp else "selected-photos.zip"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Length", str(len(zip_data)))
+        self.send_header("Content-Disposition", f'attachment; filename="{zip_name}"')
+        self.end_headers()
+        self.wfile.write(zip_data)
+
+    def _handle_photos_batch_move(self) -> None:
+        """Move selected photos to another project."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            body = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        ids = body.get("ids", [])
+        new_opp_id = body.get("opportunity_id")
+        if not ids or not new_opp_id:
+            _json_response(self, 400, {"error": "ids and opportunity_id required"})
+            return
+        opp = db.query("SELECT id FROM opportunities WHERE id = %s", (new_opp_id,), fetch="one")
+        if not opp:
+            _json_response(self, 404, {"error": "Destination project not found"})
+            return
+        is_admin = user.get("is_admin")
+        rows = db.query(
+            "SELECT id, uploaded_by FROM project_photos WHERE id = ANY(%s) AND is_deleted = FALSE",
+            (ids,),
+        )
+        found = {r[0]: r[1] for r in rows}
+        for pid in ids:
+            if pid not in found:
+                _json_response(self, 404, {"error": f"Photo {pid} not found"})
+                return
+            if found[pid] != user["id"] and not is_admin:
+                _json_response(self, 403, {"error": f"Not authorized to move photo {pid}"})
+                return
+        db.execute(
+            """UPDATE project_photos
+               SET opportunity_id = %s, folder_id = NULL
+               WHERE id = ANY(%s)""",
+            (new_opp_id, ids),
+        )
+        _json_response(self, 200, {"ok": True, "count": len(ids)})
+
+    def _handle_photos_batch_copy(self) -> None:
+        """Copy selected photos to another project. Current user becomes uploaded_by."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            body = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        ids = body.get("ids", [])
+        new_opp_id = body.get("opportunity_id")
+        if not ids or not new_opp_id:
+            _json_response(self, 400, {"error": "ids and opportunity_id required"})
+            return
+        opp = db.query("SELECT id FROM opportunities WHERE id = %s", (new_opp_id,), fetch="one")
+        if not opp:
+            _json_response(self, 404, {"error": "Destination project not found"})
+            return
+        rows = db.query(
+            """SELECT id, filename, file_path, file_size, mime_type, thumbnail_path
+               FROM project_photos WHERE id = ANY(%s) AND is_deleted = FALSE""",
+            (ids,),
+        )
+        if not rows:
+            _json_response(self, 404, {"error": "No photos found"})
+            return
+        opp_dir = PHOTO_STORAGE_PATH / str(new_opp_id)
+        opp_dir.mkdir(parents=True, exist_ok=True)
+        copied = 0
+        for r in rows:
+            photo_id, filename, file_path, file_size, mime_type, thumbnail_path = r
+            src = ROOT / file_path
+            if not src.exists():
+                continue
+            safe_name = re.sub(r'[^\w.\-]', '_', filename) or "image.jpg"
+            unique_name = f"{int(time.time())}_{photo_id}_{safe_name}"
+            dst = opp_dir / unique_name
+            dst.write_bytes(src.read_bytes())
+            new_thumb_path = None
+            if thumbnail_path:
+                thumb_src = ROOT / thumbnail_path
+                if thumb_src.exists():
+                    thumb_name = f"thumb_{unique_name}"
+                    thumb_dst = opp_dir / thumb_name
+                    thumb_dst.write_bytes(thumb_src.read_bytes())
+                    new_thumb_path = str(thumb_dst.relative_to(ROOT))
+            try:
+                db.insert_returning(
+                    """INSERT INTO project_photos (opportunity_id, filename, file_path, file_size, mime_type, thumbnail_path, uploaded_by)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                    (new_opp_id, filename, str(dst.relative_to(ROOT)), file_size, mime_type,
+                     new_thumb_path, user["id"]),
+                )
+                copied += 1
+            except Exception as exc:
+                # Quota or DB error; clean up copied file
+                try:
+                    dst.unlink(missing_ok=True)
+                    if new_thumb_path:
+                        (ROOT / new_thumb_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+                log_infra_event("error", f"Photo copy failed for {photo_id}: {exc}")
+                _json_response(self, 500, {"error": f"Copy failed for photo {photo_id}: {exc}"})
+                return
+        _json_response(self, 200, {"ok": True, "copied": copied})
 
     # ── Documents ─────────────────────────────────────────────────────────────
 

@@ -5714,6 +5714,118 @@ body {
   background: rgba(220, 38, 38, 0.85);
 }
 
+.opp-photo-item.selected .opp-photo-thumb {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.opp-photo-checkbox {
+  position: absolute;
+  top: 0.35rem;
+  left: 0.35rem;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  z-index: 2;
+  cursor: pointer;
+}
+
+.opp-photos-select-all-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.opp-photos-select-all {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.opp-photos-dest-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.65rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 0.5rem;
+}
+
+.opp-photos-dest-panel.hidden {
+  display: none;
+}
+
+.opp-photos-dest-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.opp-photos-dest-field {
+  position: relative;
+}
+
+.opp-photos-dest-input {
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+.opp-photos-dest-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.opp-photos-dest-results {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  max-height: 180px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-top: 0.25rem;
+}
+
+.opp-photos-dest-results.hidden {
+  display: none;
+}
+
+.opp-photos-dest-results button {
+  width: 100%;
+  text-align: left;
+  padding: 0.45rem 0.65rem;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.opp-photos-dest-results button:hover,
+.opp-photos-dest-results button:focus-visible {
+  background: var(--surface-2);
+}
+
+.opp-photos-dest-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
 /* Photo lightbox */
 
 .photo-lightbox-backdrop {

@@ -24,6 +24,14 @@ Target release v2.2.5 on `new-crm` branch.
 - **Fixed tile resize regression.** Restored `pointer-events: auto` on `.tile-resize-handle` after commit `8bcd106` accidentally set it to `none`, making resize handles visible but undraggable. No JS changes needed.
 - **Files:** `public/styles.css`.
 
+### v2.2.5-2
+- **Added photo batch download, move, and copy.** Photos tab now supports selecting multiple images via checkboxes, downloading them individually or as a ZIP, and moving/copying them to another project.
+  - Backend: added `GET /api/v2/photos/{id}?download=1` attachment disposition, `POST /api/v2/photos/batch-download` (ZIP of originals), `POST /api/v2/photos/batch-move`, and `POST /api/v2/photos/batch-copy`.
+  - Frontend: toolbar with select-all, Download, Move, Copy; per-photo checkboxes; inline destination project search panel.
+  - Batch copy duplicates files and assigns the current user as `uploaded_by`; move updates `opportunity_id` and clears `folder_id`.
+- **Improved Document Server self-signed certificate UX.** `public/doc-editor.html` now shows a clickable healthcheck link and a reload button when the OnlyOffice `api.js` script fails to load, guiding users to accept the certificate before retrying.
+- **Files:** `server.py`, `public/app.js`, `public/styles.css`, `public/doc-editor.html`.
+
 ### v1.95.16
 - **Added Photos tab to opportunity preview modal.** New "Photos" tab alongside Details/Documents with an image grid, upload button, per-project quota display, thumbnail generation, and delete-on-hover.
 - **Photo upload endpoint implemented.** `POST /api/v2/projects/{id}/photos` accepts multipart/form-data image uploads, persists to `data/photos/{oppId}/`, generates a 400px JPEG thumbnail with Pillow, extracts EXIF metadata, and enforces the 150MB per-project quota trigger.

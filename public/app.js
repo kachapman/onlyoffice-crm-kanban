@@ -21562,14 +21562,14 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
   if (!container) return;
   container.innerHTML = "";
 
-  const toolbar = document.createElement("div");
-  toolbar.className = "opp-photos-toolbar";
-
   const uploadInput = document.createElement("input");
   uploadInput.type = "file";
   uploadInput.accept = "image/*";
   uploadInput.multiple = true;
   uploadInput.style.display = "none";
+
+  const toolbar = document.createElement("div");
+  toolbar.className = "opp-photos-toolbar";
 
   const uploadBtn = document.createElement("button");
   uploadBtn.type = "button";
@@ -21577,18 +21577,95 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
   uploadBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload`;
   uploadBtn.addEventListener("click", () => uploadInput.click());
 
+  const selectAllCheckbox = document.createElement("input");
+  selectAllCheckbox.type = "checkbox";
+  selectAllCheckbox.className = "opp-photos-select-all";
+  selectAllCheckbox.title = "Select all photos";
+  const selectAllLabel = document.createElement("label");
+  selectAllLabel.className = "opp-photos-select-all-label";
+  selectAllLabel.appendChild(selectAllCheckbox);
+  selectAllLabel.appendChild(document.createTextNode(" Select all"));
+
+  const downloadBtn = document.createElement("button");
+  downloadBtn.type = "button";
+  downloadBtn.className = "btn btn-secondary btn-sm";
+  downloadBtn.textContent = "Download";
+  downloadBtn.disabled = true;
+
+  const moveBtn = document.createElement("button");
+  moveBtn.type = "button";
+  moveBtn.className = "btn btn-secondary btn-sm";
+  moveBtn.textContent = "Move";
+  moveBtn.disabled = true;
+
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "btn btn-secondary btn-sm";
+  copyBtn.textContent = "Copy";
+  copyBtn.disabled = true;
+
   const quotaEl = document.createElement("span");
   quotaEl.className = "opp-photos-quota";
 
   toolbar.appendChild(uploadBtn);
+  toolbar.appendChild(selectAllLabel);
+  toolbar.appendChild(downloadBtn);
+  toolbar.appendChild(moveBtn);
+  toolbar.appendChild(copyBtn);
   toolbar.appendChild(quotaEl);
   container.appendChild(toolbar);
+
+  // Destination panel for move/copy
+  const destPanel = document.createElement("div");
+  destPanel.className = "opp-photos-dest-panel hidden";
+  const destTitle = document.createElement("div");
+  destTitle.className = "opp-photos-dest-title";
+  destPanel.appendChild(destTitle);
+  const destField = document.createElement("div");
+  destField.className = "opp-photos-dest-field";
+  const destInput = document.createElement("input");
+  destInput.type = "text";
+  destInput.className = "opp-photos-dest-input";
+  destInput.placeholder = "Type project name…";
+  destInput.autocomplete = "off";
+  const destResults = document.createElement("div");
+  destResults.className = "opp-photos-dest-results hidden";
+  destField.appendChild(destInput);
+  destField.appendChild(destResults);
+  destPanel.appendChild(destField);
+  const destActions = document.createElement("div");
+  destActions.className = "opp-photos-dest-actions";
+  const destConfirm = document.createElement("button");
+  destConfirm.type = "button";
+  destConfirm.className = "btn btn-primary btn-sm";
+  destConfirm.textContent = "Confirm";
+  destConfirm.disabled = true;
+  const destCancel = document.createElement("button");
+  destCancel.type = "button";
+  destCancel.className = "btn btn-secondary btn-sm";
+  destCancel.textContent = "Cancel";
+  destActions.appendChild(destConfirm);
+  destActions.appendChild(destCancel);
+  destPanel.appendChild(destActions);
+  container.appendChild(destPanel);
 
   const grid = document.createElement("div");
   grid.className = "opp-photos-grid";
   container.appendChild(grid);
 
   let state = { photos: [...photos], totalSize: 0, quota: 157286400 };
+  let selected = new Set();
+  let destMode = null; // 'move' | 'copy'
+  let destProjectId = null;
+
+  function updateToolbar() {
+    const has = selected.size > 0;
+    downloadBtn.disabled = !has;
+    moveBtn.disabled = !has;
+    copyBtn.disabled = !has;
+    selectAllCheckbox.checked = state.photos.length > 0 && selected.size === state.photos.length;
+    selectAllCheckbox.indeterminate = has && selected.size < state.photos.length;
+  }
 
   async function refresh() {
     try {
@@ -21599,6 +21676,8 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
     } catch (err) {
       showToast(err.message, true);
     }
+    selected = new Set();
+    updateToolbar();
     render();
   }
 
@@ -21619,6 +21698,21 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
 
       const item = document.createElement("div");
       item.className = "opp-photo-item";
+      if (selected.has(photoId)) item.classList.add("selected");
+
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.className = "opp-photo-checkbox";
+      checkbox.title = "Select photo";
+      checkbox.checked = selected.has(photoId);
+      checkbox.addEventListener("change", (e) => {
+        e.stopPropagation();
+        if (checkbox.checked) selected.add(photoId);
+        else selected.delete(photoId);
+        item.classList.toggle("selected", selected.has(photoId));
+        updateToolbar();
+      });
+      item.appendChild(checkbox);
 
       const imgWrap = document.createElement("button");
       imgWrap.type = "button";
@@ -21663,6 +21757,149 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
     });
   }
 
+  selectAllCheckbox.addEventListener("change", () => {
+    if (selectAllCheckbox.checked) {
+      state.photos.forEach(p => selected.add(p.id ?? p.ID));
+    } else {
+      selected.clear();
+    }
+    render();
+    updateToolbar();
+  });
+
+  downloadBtn.addEventListener("click", () => {
+    const ids = Array.from(selected);
+    if (!ids.length) return;
+    if (ids.length === 1) {
+      const a = document.createElement("a");
+      a.href = `/api/v2/photos/${ids[0]}?download=1`;
+      a.download = "";
+      a.click();
+      return;
+    }
+    downloadPhotosZip(ids);
+  });
+
+  async function downloadPhotosZip(ids) {
+    downloadBtn.disabled = true;
+    try {
+      const res = await fetch("/api/v2/photos/batch-download", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ ids }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        showToast(j.error || "Download failed", true);
+        return;
+      }
+      const blob = await res.blob();
+      const header = res.headers.get("content-disposition");
+      let zipName = "photos.zip";
+      if (header) {
+        const m = header.match(/filename="?([^";]+)"?/);
+        if (m) zipName = m[1];
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = zipName;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (err) {
+      showToast(err.message, true);
+    } finally {
+      downloadBtn.disabled = selected.size === 0;
+    }
+  }
+
+  function showDestPanel(mode) {
+    destMode = mode;
+    destProjectId = null;
+    destTitle.textContent = mode === "move" ? "Move photos to project" : "Copy photos to project";
+    destInput.value = "";
+    destResults.innerHTML = "";
+    destResults.classList.add("hidden");
+    destConfirm.disabled = true;
+    destPanel.classList.remove("hidden");
+    destInput.focus();
+  }
+
+  function hideDestPanel() {
+    destPanel.classList.add("hidden");
+    destMode = null;
+    destProjectId = null;
+  }
+
+  moveBtn.addEventListener("click", () => showDestPanel("move"));
+  copyBtn.addEventListener("click", () => showDestPanel("copy"));
+  destCancel.addEventListener("click", hideDestPanel);
+
+  let destDebounce;
+  destInput.addEventListener("input", () => {
+    clearTimeout(destDebounce);
+    const q = destInput.value.trim();
+    if (!q || q.length < 2) {
+      destResults.classList.add("hidden");
+      destProjectId = null;
+      destConfirm.disabled = true;
+      return;
+    }
+    destDebounce = setTimeout(async () => {
+      const projects = await searchProjectsForMoveCopy(q);
+      destResults.innerHTML = "";
+      if (!projects.length) {
+        destResults.innerHTML = '<button type="button" disabled>No matches</button>';
+        destResults.classList.remove("hidden");
+        return;
+      }
+      projects.forEach(p => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = p.title || `Project ${p.id}`;
+        btn.addEventListener("click", () => {
+          destProjectId = p.id;
+          destInput.value = p.title || `Project ${p.id}`;
+          destResults.classList.add("hidden");
+          destConfirm.disabled = false;
+        });
+        destResults.appendChild(btn);
+      });
+      destResults.classList.remove("hidden");
+    }, 250);
+  });
+
+  destInput.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") destResults.classList.add("hidden");
+  });
+
+  document.addEventListener("click", (e) => {
+    if (destPanel.classList.contains("hidden")) return;
+    if (!destPanel.contains(e.target)) hideDestPanel();
+  });
+
+  destConfirm.addEventListener("click", async () => {
+    if (!destProjectId || !destMode) return;
+    const ids = Array.from(selected);
+    const endpoint = destMode === "move" ? "/api/v2/photos/batch-move" : "/api/v2/photos/batch-copy";
+    const successMsg = destMode === "move" ? "Photos moved" : "Photos copied";
+    destConfirm.disabled = true;
+    try {
+      await api(endpoint, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ ids, opportunity_id: destProjectId }),
+      });
+      showToast(successMsg);
+      hideDestPanel();
+      await refresh();
+    } catch (err) {
+      showToast(err.message, true);
+      destConfirm.disabled = false;
+    }
+  });
+
   uploadInput.addEventListener("change", async () => {
     const files = Array.from(uploadInput.files).filter(f => f.size > 0);
     if (!files.length) return;
@@ -21695,9 +21932,11 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
   // Initial render with provided photos; then refresh from server to ensure totals
   if (state.photos.length) {
     render();
+    updateToolbar();
     refresh();
   } else {
     render();
+    updateToolbar();
   }
 }
 
