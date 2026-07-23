@@ -25,10 +25,10 @@ Target release v2.2.5 on `new-crm` branch.
 - **Files:** `public/styles.css`.
 
 ### v2.2.5-2
-- **Added photo batch download, move, and copy.** Photos tab now supports selecting multiple images via checkboxes, downloading them individually or as a ZIP, and moving/copying them to another project.
-  - Backend: added `GET /api/v2/photos/{id}?download=1` attachment disposition, `POST /api/v2/photos/batch-download` (ZIP of originals), `POST /api/v2/photos/batch-move`, and `POST /api/v2/photos/batch-copy`.
-  - Frontend: toolbar with select-all, Download, Move, Copy; per-photo checkboxes; inline destination project search panel.
-  - Batch copy duplicates files and assigns the current user as `uploaded_by`; move updates `opportunity_id` and clears `folder_id`.
+- **Added photo batch actions (download, move, copy, delete).** Photos tab now uses a single **Actions…** dropdown (matching the Documents modal) with Download, Move to…, Copy to…, and Delete options. Selecting multiple images via checkboxes enables the menu.
+  - Backend: added `GET /api/v2/photos/{id}?download=1` attachment disposition, `POST /api/v2/photos/batch-download` (ZIP of originals), `POST /api/v2/photos/batch-move`, `POST /api/v2/photos/batch-copy`, and `POST /api/v2/photos/batch-delete`.
+  - Frontend: Actions dropdown + select-all checkbox + inline destination project search panel for move/copy.
+  - Batch copy duplicates files and assigns the current user as `uploaded_by`; move updates `opportunity_id` and clears `folder_id`; delete soft-deletes selected rows.
 - **Improved Document Server self-signed certificate UX.** `public/doc-editor.html` now shows a clickable healthcheck link and a reload button when the OnlyOffice `api.js` script fails to load, guiding users to accept the certificate before retrying.
 - **Files:** `server.py`, `public/app.js`, `public/styles.css`, `public/doc-editor.html`.
 

@@ -5746,6 +5746,16 @@ body {
   cursor: pointer;
 }
 
+.opp-photos-actions-select {
+  min-width: 7.5rem;
+  cursor: pointer;
+}
+
+.opp-photos-actions-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .opp-photos-dest-panel {
   display: flex;
   flex-direction: column;

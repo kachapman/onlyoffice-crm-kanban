@@ -1146,6 +1146,9 @@ class KanbanHandler(SimpleHTTPRequestHandler):
         if api_path == "/api/v2/photos/batch-copy" and method == "POST":
             self._handle_photos_batch_copy()
             return
+        if api_path == "/api/v2/photos/batch-delete" and method == "POST":
+            self._handle_photos_batch_delete()
+            return
         if api_path == "/api/v2/documents/personal/upload" and method == "POST":
             self._handle_document_upload_personal()
             return
@@ -2282,6 +2285,39 @@ class KanbanHandler(SimpleHTTPRequestHandler):
             (photo_id,),
         )
         _json_response(self, 200, {"ok": True})
+
+    def _handle_photos_batch_delete(self) -> None:
+        """Soft-delete multiple photos."""
+        user = _require_auth(self)
+        if not user:
+            return
+        try:
+            body = json.loads(_read_body(self) or b"{}")
+        except Exception:
+            _json_response(self, 400, {"error": "Invalid JSON body"})
+            return
+        ids = body.get("ids", [])
+        if not ids:
+            _json_response(self, 400, {"error": "ids required"})
+            return
+        is_admin = user.get("is_admin")
+        rows = db.query(
+            "SELECT id, uploaded_by FROM project_photos WHERE id = ANY(%s) AND is_deleted = FALSE",
+            (ids,),
+        )
+        found = {r[0]: r[1] for r in rows}
+        for pid in ids:
+            if pid not in found:
+                _json_response(self, 404, {"error": f"Photo {pid} not found"})
+                return
+            if found[pid] != user["id"] and not is_admin:
+                _json_response(self, 403, {"error": f"Not authorized to delete photo {pid}"})
+                return
+        db.execute(
+            "UPDATE project_photos SET is_deleted = TRUE, deleted_at = NOW() WHERE id = ANY(%s)",
+            (ids,),
+        )
+        _json_response(self, 200, {"ok": True, "count": len(ids)})
 
     def _handle_photo_folder_delete(self, folder_id: int) -> None:
         user = _require_auth(self)

@@ -21586,32 +21586,23 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
   selectAllLabel.appendChild(selectAllCheckbox);
   selectAllLabel.appendChild(document.createTextNode(" Select all"));
 
-  const downloadBtn = document.createElement("button");
-  downloadBtn.type = "button";
-  downloadBtn.className = "btn btn-secondary btn-sm";
-  downloadBtn.textContent = "Download";
-  downloadBtn.disabled = true;
-
-  const moveBtn = document.createElement("button");
-  moveBtn.type = "button";
-  moveBtn.className = "btn btn-secondary btn-sm";
-  moveBtn.textContent = "Move";
-  moveBtn.disabled = true;
-
-  const copyBtn = document.createElement("button");
-  copyBtn.type = "button";
-  copyBtn.className = "btn btn-secondary btn-sm";
-  copyBtn.textContent = "Copy";
-  copyBtn.disabled = true;
+  const actionsSelect = document.createElement("select");
+  actionsSelect.className = "btn btn-secondary btn-sm opp-photos-actions-select";
+  actionsSelect.disabled = true;
+  actionsSelect.innerHTML = `
+    <option value="">Actions…</option>
+    <option value="download">Download</option>
+    <option value="move">Move to…</option>
+    <option value="copy">Copy to…</option>
+    <option value="delete">Delete</option>
+  `;
 
   const quotaEl = document.createElement("span");
   quotaEl.className = "opp-photos-quota";
 
   toolbar.appendChild(uploadBtn);
   toolbar.appendChild(selectAllLabel);
-  toolbar.appendChild(downloadBtn);
-  toolbar.appendChild(moveBtn);
-  toolbar.appendChild(copyBtn);
+  toolbar.appendChild(actionsSelect);
   toolbar.appendChild(quotaEl);
   container.appendChild(toolbar);
 
@@ -21660,9 +21651,8 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
 
   function updateToolbar() {
     const has = selected.size > 0;
-    downloadBtn.disabled = !has;
-    moveBtn.disabled = !has;
-    copyBtn.disabled = !has;
+    actionsSelect.disabled = !has;
+    if (!has) actionsSelect.value = "";
     selectAllCheckbox.checked = state.photos.length > 0 && selected.size === state.photos.length;
     selectAllCheckbox.indeterminate = has && selected.size < state.photos.length;
   }
@@ -21767,21 +21757,31 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
     updateToolbar();
   });
 
-  downloadBtn.addEventListener("click", () => {
+  actionsSelect.addEventListener("change", () => {
+    const action = actionsSelect.value;
+    actionsSelect.value = "";
+    if (!action) return;
     const ids = Array.from(selected);
     if (!ids.length) return;
-    if (ids.length === 1) {
-      const a = document.createElement("a");
-      a.href = `/api/v2/photos/${ids[0]}?download=1`;
-      a.download = "";
-      a.click();
-      return;
+    if (action === "download") {
+      if (ids.length === 1) {
+        const a = document.createElement("a");
+        a.href = `/api/v2/photos/${ids[0]}?download=1`;
+        a.download = "";
+        a.click();
+      } else {
+        downloadPhotosZip(ids);
+      }
+    } else if (action === "move") {
+      showDestPanel("move");
+    } else if (action === "copy") {
+      showDestPanel("copy");
+    } else if (action === "delete") {
+      deleteSelectedPhotos(ids);
     }
-    downloadPhotosZip(ids);
   });
 
   async function downloadPhotosZip(ids) {
-    downloadBtn.disabled = true;
     try {
       const res = await fetch("/api/v2/photos/batch-download", {
         method: "POST",
@@ -21809,8 +21809,21 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch (err) {
       showToast(err.message, true);
-    } finally {
-      downloadBtn.disabled = selected.size === 0;
+    }
+  }
+
+  async function deleteSelectedPhotos(ids) {
+    if (!confirm(`Delete ${ids.length} photo${ids.length > 1 ? "s" : ""}?`)) return;
+    try {
+      await api("/api/v2/photos/batch-delete", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ ids }),
+      });
+      showToast("Photos deleted");
+      await refresh();
+    } catch (err) {
+      showToast(err.message, true);
     }
   }
 
@@ -21832,8 +21845,6 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
     destProjectId = null;
   }
 
-  moveBtn.addEventListener("click", () => showDestPanel("move"));
-  copyBtn.addEventListener("click", () => showDestPanel("copy"));
   destCancel.addEventListener("click", hideDestPanel);
 
   let destDebounce;
@@ -21871,12 +21882,13 @@ function renderOpportunityPreviewPhotosTab(container, oppId, photos) {
   });
 
   destInput.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") destResults.classList.add("hidden");
-  });
-
-  document.addEventListener("click", (e) => {
-    if (destPanel.classList.contains("hidden")) return;
-    if (!destPanel.contains(e.target)) hideDestPanel();
+    if (e.key === "Escape") {
+      if (!destResults.classList.contains("hidden")) {
+        destResults.classList.add("hidden");
+      } else {
+        hideDestPanel();
+      }
+    }
   });
 
   destConfirm.addEventListener("click", async () => {
