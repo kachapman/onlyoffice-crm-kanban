@@ -21370,7 +21370,7 @@ function renderOpportunityPreviewContent(container, data) {
 
   const previewDocsState = { selected: new Set(), documents: documents || [] };
 
-  // Toolbar: upload + select-all + delete
+  // Toolbar: upload + select-all + Actions dropdown
   const docsToolbar = document.createElement("div");
   docsToolbar.className = "opp-docs-toolbar";
 
@@ -21400,71 +21400,120 @@ function renderOpportunityPreviewContent(container, data) {
     uploadBtn.disabled = false;
     if (ok) showToast(`Uploaded ${ok} file${ok > 1 ? "s" : ""}`);
     if (fail) showToast(`Failed ${fail} file${fail > 1 ? "s" : ""}`, true);
-    if (ok) {
-      const fresh = await fetchOpportunityDocuments(oppId);
-      previewDocsState.documents = fresh;
-      previewDocsState.selected.clear();
-      renderPreviewDocsList();
-    }
+    if (ok) await refreshDocs();
     uploadInput.value = "";
   });
-  docsToolbar.appendChild(uploadBtn);
 
-  const selAllBtn = document.createElement("button");
-  selAllBtn.type = "button";
-  selAllBtn.className = "btn btn-secondary btn-sm";
-  selAllBtn.textContent = "Select all";
-  selAllBtn.addEventListener("click", () => {
-    const allSelected = previewDocsState.documents.every(d => previewDocsState.selected.has(d.id));
-    if (allSelected) {
-      previewDocsState.selected.clear();
-    } else {
-      previewDocsState.documents.forEach(d => previewDocsState.selected.add(d.id));
-    }
-    renderPreviewDocsList();
+  const selectAllCheckbox = document.createElement("input");
+  selectAllCheckbox.type = "checkbox";
+  selectAllCheckbox.className = "opp-docs-select-all";
+  selectAllCheckbox.title = "Select all documents";
+  const selectAllLabel = document.createElement("label");
+  selectAllLabel.className = "opp-docs-select-all-label";
+  selectAllLabel.appendChild(selectAllCheckbox);
+  selectAllLabel.appendChild(document.createTextNode(" Select all"));
+  selectAllLabel.addEventListener("click", (e) => {
+    if (e.target === selectAllCheckbox) return;
+    selectAllCheckbox.checked = !selectAllCheckbox.checked;
+    selectAllCheckbox.dispatchEvent(new Event("change"));
   });
-  docsToolbar.appendChild(selAllBtn);
 
-  const deleteBtn = document.createElement("button");
-  deleteBtn.type = "button";
-  deleteBtn.className = "btn btn-secondary btn-sm";
-  deleteBtn.textContent = "Delete selected";
-  deleteBtn.disabled = true;
-  deleteBtn.addEventListener("click", async () => {
-    if (!previewDocsState.selected.size) return;
-    if (!confirm(`Delete ${previewDocsState.selected.size} document${previewDocsState.selected.size > 1 ? "s" : ""}?`)) return;
+  const actionsSelect = document.createElement("select");
+  actionsSelect.className = "btn btn-secondary btn-sm opp-docs-actions-select";
+  actionsSelect.disabled = true;
+  actionsSelect.innerHTML = `
+    <option value="">Actions…</option>
+    <option value="download">Download</option>
+    <option value="move">Move to…</option>
+    <option value="copy">Copy to…</option>
+    <option value="delete">Delete</option>
+  `;
+
+  const docsCount = document.createElement("span");
+  docsCount.className = "opp-docs-count";
+
+  docsToolbar.appendChild(uploadBtn);
+  docsToolbar.appendChild(selectAllLabel);
+  docsToolbar.appendChild(actionsSelect);
+  docsToolbar.appendChild(docsCount);
+  docsContent.appendChild(docsToolbar);
+
+  // Destination panel for move/copy (reuses photo-dest styles)
+  const destPanel = document.createElement("div");
+  destPanel.className = "opp-photos-dest-panel hidden";
+  const destTitle = document.createElement("div");
+  destTitle.className = "opp-photos-dest-title";
+  destPanel.appendChild(destTitle);
+  const destField = document.createElement("div");
+  destField.className = "opp-photos-dest-field";
+  const destInput = document.createElement("input");
+  destInput.type = "text";
+  destInput.className = "opp-photos-dest-input";
+  destInput.placeholder = "Type project name…";
+  destInput.autocomplete = "off";
+  const destResults = document.createElement("div");
+  destResults.className = "opp-photos-dest-results hidden";
+  destField.appendChild(destInput);
+  destField.appendChild(destResults);
+  destPanel.appendChild(destField);
+  const destActions = document.createElement("div");
+  destActions.className = "opp-photos-dest-actions";
+  const destConfirm = document.createElement("button");
+  destConfirm.type = "button";
+  destConfirm.className = "btn btn-primary btn-sm";
+  destConfirm.textContent = "Confirm";
+  destConfirm.disabled = true;
+  const destCancel = document.createElement("button");
+  destCancel.type = "button";
+  destCancel.className = "btn btn-secondary btn-sm";
+  destCancel.textContent = "Cancel";
+  destActions.appendChild(destConfirm);
+  destActions.appendChild(destCancel);
+  destPanel.appendChild(destActions);
+  docsContent.appendChild(destPanel);
+
+  const docsList = document.createElement("ul");
+  docsList.className = "opp-preview-docs-list";
+  docsContent.appendChild(docsList);
+
+  let destMode = null; // 'move' | 'copy'
+  let destProjectId = null;
+
+  function updateDocsToolbar() {
+    const has = previewDocsState.selected.size > 0;
+    actionsSelect.disabled = !has;
+    if (!has) actionsSelect.value = "";
+    const all = previewDocsState.documents.length > 0 && previewDocsState.selected.size === previewDocsState.documents.length;
+    selectAllCheckbox.checked = all;
+    selectAllCheckbox.indeterminate = has && !all;
+    docsCount.textContent = `${previewDocsState.documents.length} document${previewDocsState.documents.length !== 1 ? "s" : ""}`;
+  }
+
+  async function refreshDocs() {
     try {
-      await api("/api/v2/documents/batch-delete", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ ids: Array.from(previewDocsState.selected) }),
-      });
-      showToast("Deleted");
-      previewDocsState.selected.clear();
       const fresh = await fetchOpportunityDocuments(oppId);
       previewDocsState.documents = fresh;
-      renderPreviewDocsList();
     } catch (err) {
       showToast(err.message, true);
+      previewDocsState.documents = [];
     }
-  });
-  docsToolbar.appendChild(deleteBtn);
-
-  docsContent.appendChild(docsToolbar);
+    previewDocsState.selected.clear();
+    updateDocsToolbar();
+    renderPreviewDocsList();
+  }
 
   function renderPreviewDocsList() {
     const list = docsContent.querySelector(".opp-preview-docs-list");
     if (!list) return;
     const { documents: ds, selected } = previewDocsState;
-    const countEl = docsContent.querySelector(".opp-docs-count");
-    if (countEl) countEl.textContent = `${ds.length} document${ds.length !== 1 ? "s" : ""}`;
-    deleteBtn.disabled = !selected.size;
     list.innerHTML = ds.length ? "" : `<p class="opp-preview-empty">No documents in this project. Use Upload to add files.</p>`;
     if (!ds.length) return;
     ds.forEach(d => {
       const docId = d.id ?? d.ID ?? "";
       const title = d.title || d.Title || d.name || d.Name || "Document";
-      const checked = selected.has(docId) ? "checked" : "";
+      const fileSize = d.fileSize ?? d.FileSize ?? 0;
+      const uploadedAt = d.uploadedAt || d.UploadedAt;
+
       const li = document.createElement("li");
       li.className = selected.has(docId) ? "opp-preview-doc-item selected" : "opp-preview-doc-item";
 
@@ -21472,12 +21521,11 @@ function renderOpportunityPreviewContent(container, data) {
       cb.type = "checkbox";
       cb.className = "opp-doc-cb";
       cb.checked = !!selected.has(docId);
-      cb.dataset.docId = docId;
       cb.addEventListener("change", () => {
-        if (cb.checked) previewDocsState.selected.add(docId);
-        else previewDocsState.selected.delete(docId);
-        deleteBtn.disabled = !previewDocsState.selected.size;
+        if (cb.checked) selected.add(docId);
+        else selected.delete(docId);
         li.classList.toggle("selected", cb.checked);
+        updateDocsToolbar();
       });
       li.appendChild(cb);
 
@@ -21486,34 +21534,38 @@ function renderOpportunityPreviewContent(container, data) {
       icon.innerHTML = docsIconForMime(d.mimeType || d.mimeType);
       li.appendChild(icon);
 
-      const a = document.createElement("a");
-      a.href = docId ? `/doc-editor.html?id=${docId}` : "#";
-      a.target = "_blank";
-      a.rel = "noopener noreferrer";
-      a.textContent = title;
-      a.title = title;
-      a.style.color = "inherit";
-      a.style.textDecoration = "none";
-      a.style.flex = "1";
-      a.style.minWidth = "0";
-      a.style.overflow = "hidden";
-      a.style.textOverflow = "ellipsis";
-      a.style.whiteSpace = "nowrap";
-      li.appendChild(a);
+      const titleWrap = document.createElement("div");
+      titleWrap.className = "opp-doc-title-wrap";
+      const titleLink = document.createElement("a");
+      titleLink.className = "opp-doc-title";
+      titleLink.href = docId ? `/doc-editor.html?id=${docId}` : "#";
+      titleLink.target = "_blank";
+      titleLink.rel = "noopener noreferrer";
+      titleLink.textContent = title;
+      titleLink.title = title;
+      titleWrap.appendChild(titleLink);
+      li.appendChild(titleWrap);
+
+      const meta = document.createElement("div");
+      meta.className = "opp-doc-meta";
+      const sizeSpan = document.createElement("span");
+      sizeSpan.className = "opp-doc-size";
+      sizeSpan.textContent = formatDocSize(fileSize);
+      const dateSpan = document.createElement("span");
+      dateSpan.className = "opp-doc-date";
+      dateSpan.textContent = uploadedAt ? uploadedAt.split("T")[0] : "—";
+      meta.appendChild(sizeSpan);
+      meta.appendChild(dateSpan);
+      li.appendChild(meta);
 
       if (docId) {
         const dl = document.createElement("a");
+        dl.className = "opp-doc-download";
         dl.href = `/api/v2/documents/${docId}`;
         dl.title = "Download";
         dl.setAttribute("aria-label", "Download");
-        dl.setAttribute("download", "");
-        dl.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
-        dl.style.textDecoration = "none";
-        dl.style.display = "inline-flex";
-        dl.style.alignItems = "center";
-        dl.style.flexShrink = "0";
-        dl.target = "_blank";
-        dl.rel = "noopener";
+        dl.setAttribute("download", title);
+        dl.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
         li.appendChild(dl);
       }
 
@@ -21521,11 +21573,141 @@ function renderOpportunityPreviewContent(container, data) {
     });
   }
 
-  const docsList = document.createElement("ul");
-  docsList.className = "opp-preview-docs-list";
-  docsContent.appendChild(docsList);
+  selectAllCheckbox.addEventListener("change", () => {
+    if (selectAllCheckbox.checked) {
+      previewDocsState.documents.forEach(d => previewDocsState.selected.add(d.id));
+    } else {
+      previewDocsState.selected.clear();
+    }
+    renderPreviewDocsList();
+    updateDocsToolbar();
+  });
+
+  actionsSelect.addEventListener("change", () => {
+    const action = actionsSelect.value;
+    actionsSelect.value = "";
+    if (!action) return;
+    const ids = Array.from(previewDocsState.selected);
+    if (!ids.length) return;
+    if (action === "download") {
+      ids.forEach(id => {
+        const doc = previewDocsState.documents.find(d => d.id === id);
+        const a = document.createElement("a");
+        a.href = `/api/v2/documents/${id}`;
+        a.download = doc ? doc.title : "";
+        a.click();
+      });
+    } else if (action === "move") {
+      showDocsDestPanel("move");
+    } else if (action === "copy") {
+      showDocsDestPanel("copy");
+    } else if (action === "delete") {
+      deleteSelectedDocs(ids);
+    }
+  });
+
+  async function deleteSelectedDocs(ids) {
+    if (!confirm(`Delete ${ids.length} document${ids.length > 1 ? "s" : ""}?`)) return;
+    try {
+      await api("/api/v2/documents/batch-delete", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ ids }),
+      });
+      showToast("Deleted");
+      await refreshDocs();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
+  function showDocsDestPanel(mode) {
+    destMode = mode;
+    destProjectId = null;
+    destTitle.textContent = mode === "move" ? "Move documents to project" : "Copy documents to project";
+    destInput.value = "";
+    destResults.innerHTML = "";
+    destResults.classList.add("hidden");
+    destConfirm.disabled = true;
+    destPanel.classList.remove("hidden");
+    destInput.focus();
+  }
+
+  function hideDocsDestPanel() {
+    destPanel.classList.add("hidden");
+    destMode = null;
+    destProjectId = null;
+  }
+
+  destCancel.addEventListener("click", hideDocsDestPanel);
+
+  let destDebounce;
+  destInput.addEventListener("input", () => {
+    clearTimeout(destDebounce);
+    const q = destInput.value.trim();
+    if (!q || q.length < 2) {
+      destResults.classList.add("hidden");
+      destProjectId = null;
+      destConfirm.disabled = true;
+      return;
+    }
+    destDebounce = setTimeout(async () => {
+      const projects = await searchProjectsForMoveCopy(q);
+      destResults.innerHTML = "";
+      if (!projects.length) {
+        destResults.innerHTML = '<button type="button" disabled>No matches</button>';
+        destResults.classList.remove("hidden");
+        return;
+      }
+      projects.forEach(p => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = p.title || `Project ${p.id}`;
+        btn.addEventListener("click", () => {
+          destProjectId = p.id;
+          destInput.value = p.title || `Project ${p.id}`;
+          destResults.classList.add("hidden");
+          destConfirm.disabled = false;
+        });
+        destResults.appendChild(btn);
+      });
+      destResults.classList.remove("hidden");
+    }, 250);
+  });
+
+  destInput.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      if (!destResults.classList.contains("hidden")) {
+        destResults.classList.add("hidden");
+      } else {
+        hideDocsDestPanel();
+      }
+    }
+  });
+
+  destConfirm.addEventListener("click", async () => {
+    if (!destProjectId || !destMode) return;
+    const ids = Array.from(previewDocsState.selected);
+    const endpoint = destMode === "move" ? "/api/v2/documents/batch-move" : "/api/v2/documents/batch-copy";
+    const successMsg = destMode === "move" ? "Documents moved" : "Documents copied";
+    destConfirm.disabled = true;
+    try {
+      await api(endpoint, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ ids, opportunity_id: destProjectId }),
+      });
+      showToast(successMsg);
+      hideDocsDestPanel();
+      await refreshDocs();
+    } catch (err) {
+      showToast(err.message, true);
+      destConfirm.disabled = false;
+    }
+  });
 
   renderPreviewDocsList();
+  updateDocsToolbar();
 
   container.appendChild(docsContent);
 
