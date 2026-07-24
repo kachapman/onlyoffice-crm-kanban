@@ -1,7 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
 **Current version:** 2.2.4 (released 2026-07-24; see CHANGELOG.md)  
-**Last session summary (for next resume):** v2.2.4 hotfix: Preview modal field layout overhaul — Stage/Tags/Supplement full-width, deal fields 2-col, user fields 2-col with doc checkboxes in 3-col row; Description moved to top; "Expected close" renamed "Follow-Up Due" with red overdue bg; tags restyled with individual borders; boolean user fields show ✓/✕; modal width +15%; fixed ampersand and green highlight in history notes; customer bot shows up to 3 recent updates. Changes in public/app.js, public/styles.css, server.py, telegram_bot.py.
+**Last session summary (for next resume):** v2.2.4 additions: Kanban card title link now opens preview modal instead of OnlyOffice CRM in new tab; removed preview-monitor button from card. Changes in public/app.js.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 

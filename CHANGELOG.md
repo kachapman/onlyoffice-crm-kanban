@@ -11,6 +11,7 @@ All notable changes to the CRM Kanban dashboard are documented here.
 
 ### Improvements
 
+- **Kanban card title link now opens preview modal.** The deal title in kanban cards was a link that opened OnlyOffice CRM in a new tab. It now opens the opportunity preview modal inline instead. The separate preview-monitor button has been removed from the card.
 - **"Expected close" renamed to "Follow-Up Due."** The field is now highlighted with a red background when the date is today or earlier.
 - **Tags restyled.** Individual tag pills now have their own borders; the outer Tags field border is removed. Tags are left-aligned next to the "Tags" label.
 - **Boolean user fields show symbols.** Yes values render as a green ✓; No values render as a neutral ✕.

@@ -6567,21 +6567,6 @@ function renderCard(opp, group, showStagePill) {
   const actions = document.createElement("div");
   actions.className = "card-actions";
 
-  const previewBtn = document.createElement("button");
-  previewBtn.type = "button";
-  previewBtn.className = "card-preview-btn";
-  previewBtn.title = "Preview deal";
-  previewBtn.setAttribute("aria-label", "Preview deal");
-  previewBtn.innerHTML = CARD_ICON_PREVIEW_SCREEN;
-  previewBtn.addEventListener("click", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const id = opp.id ?? opp.ID;
-    openOpportunityPreviewModal(id, opp.title || opp.Title || "", group).catch((err) =>
-      showToast(err.message, true)
-    );
-  });
-
   const editBtn = document.createElement("button");
   editBtn.type = "button";
   editBtn.className = "card-edit-btn";
@@ -6594,7 +6579,6 @@ function renderCard(opp, group, showStagePill) {
     openDealEditModal(opp, group).catch((err) => showToast(err.message, true));
   });
 
-  actions.appendChild(previewBtn);
   actions.appendChild(editBtn);
   card.appendChild(actions);
 
@@ -6602,10 +6586,16 @@ function renderCard(opp, group, showStagePill) {
   title.className = "card-title";
   const link = document.createElement("a");
   link.className = "card-title-link";
-  link.href = crmOpportunityUrl(opp.id);
-  link.target = "_blank";
-  link.rel = "noopener noreferrer";
+  link.href = "#";
   link.textContent = opp.title || "(Untitled)";
+  link.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const id = opp.id ?? opp.ID;
+    openOpportunityPreviewModal(id, opp.title || opp.Title || "", group).catch((err) =>
+      showToast(err.message, true)
+    );
+  });
   title.appendChild(link);
 
   const meta = document.createElement("div");
