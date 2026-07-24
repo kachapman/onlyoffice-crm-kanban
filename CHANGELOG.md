@@ -2,6 +2,29 @@
 
 All notable changes to the CRM Kanban dashboard are documented here.
 
+## [2.2.4] — 2026-07-24
+
+### New features
+
+- **Preview modal field layout overhaul.** Stage, Tags, and Supplement Request now render as full-width single-column rows. Remaining deal fields render in two columns. User fields render in two columns, with Measurement Report, Insurance Documents, and Inspection Photos placed in their own 3-column row at the bottom.
+- **Description moved to top of preview modal.** The Description section now appears above the deal fields.
+
+### Improvements
+
+- **"Expected close" renamed to "Follow-Up Due."** The field is now highlighted with a red background when the date is today or earlier.
+- **Tags restyled.** Individual tag pills now have their own borders; the outer Tags field border is removed. Tags are left-aligned next to the "Tags" label.
+- **Boolean user fields show symbols.** Yes values render as a green ✓; No values render as a neutral ✕.
+- **Modal width increased by 15%.** Opportunity preview modal is now 828px wide (was 720px) to reduce vertical scrolling.
+- **Customer bot shows up to 3 recent customer updates.** Previously only the latest customer update was shown; the Telegram bot now lists up to 3 matching updates with separators.
+
+### Bug fixes
+
+- **History notes: ampersand display fixed.** Plain-text history content now decodes HTML entities so `&amp;` displays as `&`.
+- **History notes: green highlight inconsistency fixed.** Highlight backgrounds are normalized in `sanitizeHistoryHtml` to the standard dark-green tint, and CSS selectors are expanded to catch more markup variants.
+
+### Files changed
+- `public/app.js`, `public/styles.css`, `server.py`, `telegram_bot.py`, `VERSION`, `CHANGELOG.md`, `AGENTS.md`
+
 ## [2.2.3] — 2026-07-15
 
 ### New features

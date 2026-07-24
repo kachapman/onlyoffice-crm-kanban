@@ -1,7 +1,7 @@
 # AGENTS.md — Vanguard CRM Kanban Dashboard (onlyoffice-crm-kanban)
 
-**Current version:** 2.2.3 (released 2026-07-15; see CHANGELOG.md)  
-**Last session summary (for next resume):** v2.2.3 release: Search popup minimize with right-side "Search" trigger and profile-persisted parked tabs; max preview tabs 10; CSV export icon-only. Bookmark sidebar dividers — draggable visual separators organized via header button. Login screen refresh — "Vanguard Adjusting Dashboard" title, hidden portal URL, "Old CRM link" footer. Login body-portalUrl fix so local dev works without env var. Includes earlier confirm-modal z-index 2100 and note editor paste handler fixes.
+**Current version:** 2.2.4 (released 2026-07-24; see CHANGELOG.md)  
+**Last session summary (for next resume):** v2.2.4 hotfix: Preview modal field layout overhaul — Stage/Tags/Supplement full-width, deal fields 2-col, user fields 2-col with doc checkboxes in 3-col row; Description moved to top; "Expected close" renamed "Follow-Up Due" with red overdue bg; tags restyled with individual borders; boolean user fields show ✓/✕; modal width +15%; fixed ampersand and green highlight in history notes; customer bot shows up to 3 recent updates. Changes in public/app.js, public/styles.css, server.py, telegram_bot.py.
 
 This file is auto-loaded by Grok into the system prompt for every session in this directory tree. It provides persistent project context so you do **not** need a full "pick up where we left off" explanation or complete re-exploration on every new session. (See also user-guide 12-project-rules.md and 17-sessions.md.)
 

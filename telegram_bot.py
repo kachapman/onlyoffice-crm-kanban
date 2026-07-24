@@ -616,17 +616,24 @@ def format_deal_detail(deals: list[dict], index: int, is_employee: bool = False)
         stage = d.get("stage", "")
         if stage:
             lines.append(f"Stage: {_esc(stage)}")
-        update = d.get("latestUpdate")
-        if update:
-            content = update.get("content", "")
-            created = _fmt_date(update.get("created", ""))
-            if content:
-                lines.append("")
-                header = "Latest customer update"
-                if created:
-                    header += f" — <i>{_esc(created)}</i>"
-                lines.append(header + ":")
-                lines.append(_sanitize_html(content))
+        updates = d.get("latestUpdates", [])
+        if updates:
+            lines.append("")
+            for idx, upd in enumerate(updates):
+                content = upd.get("content", "")
+                created = _fmt_date(upd.get("created", ""))
+                if content:
+                    if idx > 0:
+                        lines.append("───────────────")
+                    header = "Recent customer updates" if idx == 0 else ""
+                    if created:
+                        if header:
+                            header += f" — <i>{_esc(created)}</i>"
+                        else:
+                            header = f"<i>{_esc(created)}</i>"
+                    if header:
+                        lines.append(header + ":")
+                    lines.append(_sanitize_html(content))
         if lines and lines[-1] != "":
             lines.append("")
         lines.append("───────────────")

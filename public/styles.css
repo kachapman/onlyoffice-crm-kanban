@@ -2756,24 +2756,28 @@ body {
    target mark, span, and b with both background-color and background shorthand. */
 .opp-preview-history-body mark,
 .opp-preview-history-body span[style*="background-color"],
-.opp-preview-history-body span[style*="background:"],
+.opp-preview-history-body span[style*="background"],
 .opp-preview-history-body b[style*="background-color"],
-.opp-preview-history-body b[style*="background:"],
+.opp-preview-history-body b[style*="background"],
+.opp-preview-history-body font[style*="background"],
 .opp-preview-history-body--html mark,
 .opp-preview-history-body--html span[style*="background-color"],
-.opp-preview-history-body--html span[style*="background:"],
+.opp-preview-history-body--html span[style*="background"],
 .opp-preview-history-body--html b[style*="background-color"],
-.opp-preview-history-body--html b[style*="background:"],
+.opp-preview-history-body--html b[style*="background"],
+.opp-preview-history-body--html font[style*="background"],
 .opp-preview-history-body--plain mark,
 .opp-preview-history-body--plain span[style*="background-color"],
-.opp-preview-history-body--plain span[style*="background:"],
+.opp-preview-history-body--plain span[style*="background"],
 .opp-preview-history-body--plain b[style*="background-color"],
-.opp-preview-history-body--plain b[style*="background:"],
+.opp-preview-history-body--plain b[style*="background"],
+.opp-preview-history-body--plain font[style*="background"],
 .opp-preview-note-detail mark,
 .opp-preview-note-detail span[style*="background-color"],
-.opp-preview-note-detail span[style*="background:"],
+.opp-preview-note-detail span[style*="background"],
 .opp-preview-note-detail b[style*="background-color"],
-.opp-preview-note-detail b[style*="background:"] {
+.opp-preview-note-detail b[style*="background"],
+.opp-preview-note-detail font[style*="background"] {
   background-color: rgba(34, 197, 94, 0.65) !important;
   color: #000 !important;
   padding: 0 2px;
@@ -4361,7 +4365,7 @@ body {
 }
 
 .modal-card-opp-preview {
-  width: min(720px, 96vw);
+  width: min(828px, 96vw);
   max-height: 92vh;
   display: flex;
   flex-direction: column;
@@ -4606,7 +4610,7 @@ body {
 }
 
 .opp-preview-section {
-  margin-bottom: 1.15rem;
+  margin-bottom: 0.75rem;
 }
 
 .opp-preview-tabs {
@@ -4655,10 +4659,11 @@ body {
   padding: 0.15rem 0.55rem;
   border-radius: 10px;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1.5px solid rgba(128, 128, 128, 0.4);
   color: var(--text);
   line-height: 1.4;
   width: fit-content;
+  margin: 0.1rem 0;
 }
 
 .field-value-tag.tag-amber {
@@ -4666,35 +4671,116 @@ body {
   border-color: var(--warn);
   background: rgba(240, 180, 41, 0.12);
 }
+.field-value-tag--bool {
+  font-weight: 700;
+  font-size: 0.7rem;
+  padding: 0.05rem 0.35rem;
+  line-height: 1.2;
+  border-radius: 6px;
+}
+.field-value-tag--yes {
+  color: var(--success);
+  border-color: var(--success);
+  background: rgba(34, 197, 94, 0.12);
+}
+.field-value-tag--no {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+.opp-preview-field--tags {
+  border: none !important;
+  background: none !important;
+  box-shadow: none !important;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+  align-items: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+.opp-preview-field--tags dt {
+  flex: 0 0 auto;
+}
+.opp-preview-field--tags dd {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.35rem;
+  overflow-x: auto;
+  justify-content: flex-start;
+  flex: 0 1 auto;
+}
 
 .opp-preview-fields {
   display: grid;
   gap: 0.5rem 1rem;
   margin: 0;
 }
+.opp-preview-fields-deal {
+  grid-template-columns: 1fr 1fr;
+}
+.opp-preview-fields-user {
+  grid-template-columns: repeat(6, 1fr);
+}
+.opp-preview-fields-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem 1rem;
+  margin: 0;
+}
 
 .opp-preview-field {
-  display: grid;
-  grid-template-columns: minmax(7rem, 34%) 1fr;
+  display: flex;
+  flex-wrap: wrap;
   gap: 0.35rem 0.75rem;
+  align-items: flex-start;
   padding: 0.5rem 0.7rem;
   font-size: 0.84rem;
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  min-width: 0;
+}
+.opp-preview-field--full {
+  grid-column: span 2;
+}
+.opp-preview-field--half {
+  grid-column: span 3;
+}
+.opp-preview-field--third {
+  grid-column: span 2;
+}
+.opp-preview-field-spacer {
+  grid-column: span 6;
+  height: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  pointer-events: none;
+}
+.opp-preview-field.opp-preview-field--overdue {
+  background: rgba(220, 38, 38, 0.25);
+  border-color: var(--danger);
 }
 
 .opp-preview-field dt {
   margin: 0;
   font-weight: 600;
   color: var(--muted);
+  flex: 0 0 auto;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .opp-preview-field dd {
   margin: 0;
   color: var(--text);
-  word-break: break-word;
+  flex: 1 1 auto;
+  min-width: auto;
+  overflow-wrap: break-word;
 }
 
 .opp-preview-description {

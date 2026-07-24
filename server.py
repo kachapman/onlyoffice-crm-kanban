@@ -1337,14 +1337,13 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                                             "author": self._extract_event_author(ev),
                                         })
                                 elif notes_category_id:
-                                    if cat_id == notes_category_id and content:
+                                    if cat_id == notes_category_id and content and len(events) < 3:
                                         events.append({
                                             "content": content[:500],
                                             "created": created,
                                             "categoryName": cat_name,
                                             "author": self._extract_event_author(ev),
                                         })
-                                        break
                                 else:
                                     if content and len(events) < 5:
                                         events.append({
@@ -1360,7 +1359,7 @@ class KanbanHandler(SimpleHTTPRequestHandler):
                         "stage": stage,
                         "amount": amount,
                         "currency": currency,
-                        "latestUpdate": events[0] if events else None,
+                        "latestUpdates": events[:3] if events else [],
                     }
                     # Standard CRM fields for employee Project Info
                     if is_employee:

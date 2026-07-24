@@ -14888,6 +14888,17 @@ function sanitizeHistoryHtml(html) {
       // remove any background or bg-color, including white/light variants and !important
       style = style.replace(/background(-color)?\s*:\s*[^;]*(white|#fff|#ffffff|rgb\(255\s*,\s*255\s*,\s*255\)|rgba\(255\s*,\s*255\s*,\s*255[^)]*\))[^;]*;?/gi, "");
       style = style.replace(/background\s*:\s*[^;]*(white|#fff|#ffffff)[^;]*;?/gi, "");
+      // Normalize any remaining non-white background highlights to standard green tint
+      if (/(?:background|background-color)\s*:/i.test(style)) {
+        style = style.replace(/background(-color)?\s*:\s*[^;]*/gi, function(m) {
+          var val = m.split(":")[1].trim();
+          if (/^(none|transparent|initial|inherit)$/i.test(val)) return m;
+          return "background-color: rgba(34, 197, 94, 0.65)";
+        });
+        if (!(/color\s*:/i.test(style))) {
+          style += "; color: #000";
+        }
+      }
       if (style.trim()) {
         el.setAttribute("style", style);
       } else {
@@ -15579,7 +15590,7 @@ function renderHistoryNoteBody(container, ev) {
     container.innerHTML = sanitizeHistoryHtml(raw);
     return;
   }
-  container.textContent = raw;
+  container.textContent = decodeHtmlEntities(raw);
 }
 
 async function fetchMailMessage(messageId) {
@@ -15991,7 +16002,11 @@ function buildOpportunityPreviewStandardFields(opp, tags) {
   push("Responsible", formatResponsibleLabel(opp));
 
   push("Value", formatMoney(opp));
-  push("Expected close", formatPreviewDueDate(opportunityDueDateRaw(opp)));
+  var dueRaw = opportunityDueDateRaw(opp);
+  var dueDate = parseCrmDateOnly(dueRaw);
+  var isOverdue = dueDate && !Number.isNaN(dueDate.getTime()) && dueDate.getTime() <= Date.now();
+  push("Follow-Up Due", formatPreviewDueDate(dueRaw));
+  if (isOverdue && rows.length > 0) rows[rows.length - 1].overdue = true;
   // Actual close hidden per user request (showActualClose field removed from preview)
   push("Created", formatPreviewDateTime(opp.createOn ?? opp.created ?? opp.Created));
   push("Tags", tags.length ? tags.join(", ") : "");
@@ -16156,6 +16171,39 @@ function renderPreviewFieldGrid(parent, rows) {
     dl.appendChild(row);
   }
   parent.appendChild(dl);
+}
+
+function renderPreviewFieldRow(dl, item, spanClass) {
+  var row = document.createElement("div");
+  row.className = "opp-preview-field";
+  if (spanClass) row.classList.add(spanClass);
+  if (item.overdue) row.classList.add("opp-preview-field--overdue");
+  var dt = document.createElement("dt");
+  dt.textContent = item.label;
+  var dd = document.createElement("dd");
+  if (item.value === "Yes" || item.value === "No") {
+    var tag = document.createElement("span");
+    var isYes = item.value === "Yes";
+    tag.className = "field-value-tag field-value-tag--bool" + (isYes ? " field-value-tag--yes" : " field-value-tag--no");
+    tag.textContent = isYes ? "✓" : "✕";
+    dd.appendChild(tag);
+  } else if (item.label === "Tags") {
+    row.classList.add("opp-preview-field--tags");
+    var tags = item.value.split(",").map(function (t) { return t.trim(); }).filter(Boolean);
+    var AMBER_TAGS = new Set(["High Priority", "Needs Reconciliation", "Ready for carrier invoice", "Needs Rebuttal"]);
+    for (var j = 0; j < tags.length; j++) {
+      var tag = document.createElement("span");
+      tag.className = "field-value-tag" + (AMBER_TAGS.has(tags[j]) ? " tag-amber" : "");
+      tag.textContent = tags[j];
+      dd.appendChild(tag);
+      dd.appendChild(document.createTextNode(" "));
+    }
+  } else {
+    dd.textContent = item.value;
+  }
+  row.appendChild(dt);
+  row.appendChild(dd);
+  dl.appendChild(row);
 }
 
 /** Make phone numbers (tel:) and emails (mailto:) clickable inside preview modals (and similar content). */
@@ -18546,20 +18594,52 @@ function renderOpportunityPreviewContent(container, data) {
   if (!container) return;
   container.innerHTML = "";
 
-  const { opp, customFieldValues, history, tags, documents } = data;
-  const standardRows = buildOpportunityPreviewStandardFields(opp, tags);
-  const userRows = buildOpportunityPreviewUserFields(opp, customFieldValues);
-  const description = String(opp.description ?? opp.Description ?? "").trim();
+  var { opp, customFieldValues, history, tags, documents } = data;
+  var standardRows = buildOpportunityPreviewStandardFields(opp, tags);
+  var userRows = buildOpportunityPreviewUserFields(opp, customFieldValues);
+  var description = String(opp.description ?? opp.Description ?? "").trim();
+
+  // Split out special fields
+  var stageRow = null;
+  var tagsRow = null;
+  var otherStandardRows = [];
+  for (var si = 0; si < standardRows.length; si++) {
+    var sr = standardRows[si];
+    if (sr.label === "Stage") { stageRow = sr; continue; }
+    if (sr.label === "Tags") { tagsRow = sr; continue; }
+    otherStandardRows.push(sr);
+  }
+
+  // Extract Supplement Request from user fields
+  var supplementRow = null;
+  var remainingUserRows = [];
+  for (var ui = 0; ui < userRows.length; ui++) {
+    var ur = userRows[ui];
+    if (/supplement\s*request/i.test(ur.label)) { supplementRow = ur; continue; }
+    remainingUserRows.push(ur);
+  }
+
+  // Extract 3 document-related fields from remaining user rows
+  var docFieldRows = [];
+  var otherUserRows = [];
+  for (var ui = 0; ui < remainingUserRows.length; ui++) {
+    var ur = remainingUserRows[ui];
+    if (/\b(measurement\s*report|insurance\s*documents|inspection\s*photos)\b/i.test(ur.label)) {
+      docFieldRows.push(ur);
+    } else {
+      otherUserRows.push(ur);
+    }
+  }
 
   // Tabs at top
-  const tabs = document.createElement("div");
+  var tabs = document.createElement("div");
   tabs.className = "opp-preview-tabs";
-  const tabDetails = document.createElement("button");
+  var tabDetails = document.createElement("button");
   tabDetails.type = "button";
   tabDetails.className = "opp-preview-tab active";
   tabDetails.textContent = "Details";
   tabDetails.dataset.tab = "details";
-  const tabDocs = document.createElement("button");
+  var tabDocs = document.createElement("button");
   tabDocs.type = "button";
   tabDocs.className = "opp-preview-tab";
   tabDocs.textContent = "Documents";
@@ -18569,33 +18649,68 @@ function renderOpportunityPreviewContent(container, data) {
   container.appendChild(tabs);
 
   // Details content
-  const detailsContent = document.createElement("div");
+  var detailsContent = document.createElement("div");
   detailsContent.className = "opp-preview-tab-content";
   detailsContent.dataset.tabContent = "details";
 
-  appendPreviewSection(detailsContent, "Deal fields", (section) => {
-    renderPreviewFieldGrid(section, standardRows);
-  });
-
-  appendPreviewSection(detailsContent, "Description", (section) => {
+  // Description section (at top)
+  appendPreviewSection(detailsContent, "Description", function(section) {
     if (!description) {
-      const p = document.createElement("p");
+      var p = document.createElement("p");
       p.className = "opp-preview-empty";
       p.textContent = "No description";
       section.appendChild(p);
       return;
     }
-    const p = document.createElement("p");
+    var p = document.createElement("p");
     p.className = "opp-preview-description";
     p.textContent = description;
     section.appendChild(p);
   });
 
-  appendPreviewSection(detailsContent, "User fields", (section) => {
-    renderPreviewFieldGrid(section, userRows);
+  // Deal fields section
+  appendPreviewSection(detailsContent, "Deal fields", function(section) {
+    var hasContent = stageRow || tagsRow || supplementRow || otherStandardRows.length;
+    if (!hasContent) {
+      var p = document.createElement("p");
+      p.className = "opp-preview-empty";
+      p.textContent = "None";
+      section.appendChild(p);
+      return;
+    }
+    var dealGrid = document.createElement("dl");
+    dealGrid.className = "opp-preview-fields opp-preview-fields-deal";
+    if (stageRow) renderPreviewFieldRow(dealGrid, stageRow, "opp-preview-field--full");
+    if (tagsRow) renderPreviewFieldRow(dealGrid, tagsRow, "opp-preview-field--full");
+    if (supplementRow) renderPreviewFieldRow(dealGrid, supplementRow, "opp-preview-field--full");
+    for (var i = 0; i < otherStandardRows.length; i++) {
+      renderPreviewFieldRow(dealGrid, otherStandardRows[i]);
+    }
+    section.appendChild(dealGrid);
   });
 
-  appendPreviewSection(detailsContent, "History & notes", (section) => {
+  // User fields section (no title)
+  if (otherUserRows.length || docFieldRows.length) {
+    var uSection = document.createElement("section");
+    uSection.className = "opp-preview-section";
+    var userGrid = document.createElement("dl");
+    userGrid.className = "opp-preview-fields opp-preview-fields-user";
+    for (var i = 0; i < otherUserRows.length; i++) {
+      renderPreviewFieldRow(userGrid, otherUserRows[i], "opp-preview-field--half");
+    }
+    if (otherUserRows.length && docFieldRows.length) {
+      var spacer = document.createElement("div");
+      spacer.className = "opp-preview-field opp-preview-field-spacer";
+      userGrid.appendChild(spacer);
+    }
+    for (var i = 0; i < docFieldRows.length; i++) {
+      renderPreviewFieldRow(userGrid, docFieldRows[i], "opp-preview-field--third");
+    }
+    uSection.appendChild(userGrid);
+    detailsContent.appendChild(uSection);
+  }
+
+  appendPreviewSection(detailsContent, "History & notes", function(section) {
     if (!history.length) {
       const p = document.createElement("p");
       p.className = "opp-preview-empty";
